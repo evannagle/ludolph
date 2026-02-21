@@ -14,7 +14,25 @@ cargo build
 
 - `production` — Stable releases
 - `develop` — Integration branch (PRs target here)
-- `feature/*` — Your work branches
+
+### Branch Naming
+
+```
+<type>/<short-description>
+```
+
+| Prefix | Use for |
+|--------|---------|
+| `feature/` | New functionality |
+| `fix/` | Bug fixes |
+| `docs/` | Documentation |
+| `refactor/` | Code restructuring |
+| `chore/` | Maintenance, deps |
+
+**Examples:**
+- `feature/conversation-memory`
+- `fix/empty-vault-crash`
+- `docs/install-guide`
 
 ## Making Changes
 
