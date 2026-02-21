@@ -81,8 +81,6 @@ cargo build --release --target aarch64-unknown-linux-gnu
 
 [Ludolph van Ceulen](https://en.wikipedia.org/wiki/Ludolph_van_Ceulen) (1540–1610), the mathematician who spent 25 years calculating pi to 35 decimal places. He had the digits engraved on his tombstone.
 
-That kind of patient dedication to getting things right is what your notes deserve.
-
 ## License
 
 MIT
