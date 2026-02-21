@@ -21,4 +21,5 @@ Thumbs.db
 *.log
 
 # Claude Code
-.claude/
+.claude/*
+!.claude/skills/
