@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ludolph</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0d1117;
+      color: #c9d1d9;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+    .container { max-width: 600px; text-align: center; }
+    h1 { font-size: 3rem; margin-bottom: 0.5rem; color: #f0f6fc; }
+    .tagline { font-size: 1.25rem; color: #8b949e; margin-bottom: 2rem; }
+    .description { line-height: 1.6; margin-bottom: 2rem; }
+    pre {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 1rem;
+      overflow-x: auto;
+      text-align: left;
+      margin-bottom: 2rem;
+    }
+    code { color: #79c0ff; }
+    .links { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+    a {
+      color: #58a6ff;
+      text-decoration: none;
+      padding: 0.5rem 1rem;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      transition: border-color 0.2s;
+    }
+    a:hover { border-color: #58a6ff; }
+    footer { margin-top: 3rem; color: #484f58; font-size: 0.875rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Ludolph</h1>
+    <p class="tagline">A real brain for your second brain.</p>
+    <p class="description">
+      Talk to your Obsidian vault from anywhere, anytime.
+      A sandboxed Telegram bot that gives Claude read-only access to your notes.
+    </p>
+    <pre><code>curl -sSL https://ludolph.dev/install | bash</code></pre>
+    <div class="links">
+      <a href="https://github.com/evannagle/ludolph">GitHub</a>
+      <a href="https://github.com/evannagle/ludolph#readme">Documentation</a>
+    </div>
+    <footer>
+      Named after <a href="https://en.wikipedia.org/wiki/Ludolph_van_Ceulen">Ludolph van Ceulen</a>,
+      who spent 25 years calculating pi to 35 decimal places.
+    </footer>
+  </div>
+</body>
+</html>
