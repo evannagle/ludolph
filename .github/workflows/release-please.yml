@@ -1,15 +1,29 @@
-name: Release
+name: Release Please
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - production
 
-env:
-  CARGO_TERM_COLOR: always
+permissions:
+  contents: write
+  pull-requests: write
 
 jobs:
-  build:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          release-type: rust
+
+  build-release:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
     strategy:
       matrix:
         include:
@@ -28,7 +42,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
@@ -42,31 +56,10 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Rename binary
-        run: |
-          mv target/${{ matrix.target }}/release/lu lu-${{ matrix.target }}
+        run: mv target/${{ matrix.target }}/release/lu lu-${{ matrix.target }}
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: lu-${{ matrix.target }}
-          path: lu-${{ matrix.target }}
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Create release
+      - name: Upload to release
         uses: softprops/action-gh-release@v1
         with:
-          files: artifacts/*/lu-*
-          generate_release_notes: true
+          tag_name: ${{ needs.release-please.outputs.tag_name }}
+          files: lu-${{ matrix.target }}

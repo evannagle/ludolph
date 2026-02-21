@@ -29,6 +29,9 @@ walkdir = "2"
 ignore = "0.4"
 regex = "1"
 
+[dev-dependencies]
+cargo-husky = { version = "1", default-features = false, features = ["prepush-hook", "run-cargo-check", "run-cargo-clippy", "run-cargo-fmt", "run-cargo-test"] }
+
 [lints.rust]
 unsafe_code = "forbid"
 
