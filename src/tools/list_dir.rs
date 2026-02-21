@@ -1,6 +1,7 @@
 use serde_json::{json, Value};
 use std::path::Path;
-use super::{Tool, safe_resolve};
+
+use super::{safe_resolve, Tool};
 
 pub fn definition() -> Tool {
     Tool {
@@ -28,21 +29,21 @@ pub fn execute(input: &Value, vault_path: &Path) -> String {
     let dir_path = if path.is_empty() || path == "." {
         vault_path.to_path_buf()
     } else {
-        match safe_resolve(vault_path, path) {
-            Some(p) => p,
-            None => return format!("Error: Access denied - path '{}' is outside the vault", path),
-        }
+        let Some(resolved) = safe_resolve(vault_path, path) else {
+            return format!("Error: Access denied - path '{path}' is outside the vault");
+        };
+        resolved
     };
 
     match std::fs::read_dir(&dir_path) {
         Ok(entries) => {
             let mut items: Vec<String> = entries
-                .filter_map(|e| e.ok())
+                .filter_map(Result::ok)
                 .map(|e| {
                     let name = e.file_name().to_string_lossy().to_string();
                     let file_type = e.file_type().ok();
-                    if file_type.map(|ft| ft.is_dir()).unwrap_or(false) {
-                        format!("{}/", name)
+                    if file_type.is_some_and(|ft| ft.is_dir()) {
+                        format!("{name}/")
                     } else {
                         name
                     }
@@ -52,6 +53,6 @@ pub fn execute(input: &Value, vault_path: &Path) -> String {
             items.sort();
             items.join("\n")
         }
-        Err(e) => format!("Error listing directory: {}", e),
+        Err(e) => format!("Error listing directory: {e}"),
     }
 }

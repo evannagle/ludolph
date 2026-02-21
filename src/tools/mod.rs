@@ -1,5 +1,5 @@
-mod read_file;
 mod list_dir;
+mod read_file;
 mod search;
 
 use serde_json::Value;
@@ -25,18 +25,22 @@ pub async fn execute_tool(name: &str, input: &Value) -> String {
         "read_file" => read_file::execute(input, &vault_path),
         "list_dir" => list_dir::execute(input, &vault_path),
         "search" => search::execute(input, &vault_path),
-        _ => format!("Unknown tool: {}", name),
+        _ => format!("Unknown tool: {name}"),
     }
 }
 
 fn get_vault_path() -> std::path::PathBuf {
-    directories::BaseDirs::new()
-        .map(|d| d.home_dir().join("ludolph/vault"))
-        .unwrap_or_else(|| std::path::PathBuf::from("./vault"))
+    directories::BaseDirs::new().map_or_else(
+        || std::path::PathBuf::from("./vault"),
+        |d| d.home_dir().join("ludolph/vault"),
+    )
 }
 
 /// Resolve a path safely within the vault, preventing directory traversal
-pub fn safe_resolve(vault_path: &std::path::Path, relative_path: &str) -> Option<std::path::PathBuf> {
+pub fn safe_resolve(
+    vault_path: &std::path::Path,
+    relative_path: &str,
+) -> Option<std::path::PathBuf> {
     // Reject paths with ..
     if relative_path.contains("..") {
         return None;

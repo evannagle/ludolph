@@ -28,9 +28,8 @@ pub fn definition() -> Tool {
 }
 
 pub fn execute(input: &Value, vault_path: &Path) -> String {
-    let query = match input.get("query").and_then(|v| v.as_str()) {
-        Some(q) => q,
-        None => return "Error: 'query' parameter is required".to_string(),
+    let Some(query) = input.get("query").and_then(|v| v.as_str()) else {
+        return "Error: 'query' parameter is required".to_string();
     };
 
     let pattern = match RegexBuilder::new(query).case_insensitive(true).build() {
@@ -66,7 +65,7 @@ pub fn execute(input: &Value, vault_path: &Path) -> String {
         let path = entry.path();
 
         // Only search markdown files
-        if path.extension().map_or(false, |e| e == "md") {
+        if path.extension().is_some_and(|e| e == "md") {
             search_file(path, vault_path, &pattern, &mut results);
         }
     }
@@ -78,10 +77,14 @@ pub fn execute(input: &Value, vault_path: &Path) -> String {
     }
 }
 
-fn search_file(file_path: &Path, vault_root: &Path, pattern: &regex::Regex, results: &mut Vec<String>) {
-    let contents = match std::fs::read_to_string(file_path) {
-        Ok(c) => c,
-        Err(_) => return,
+fn search_file(
+    file_path: &Path,
+    vault_root: &Path,
+    pattern: &regex::Regex,
+    results: &mut Vec<String>,
+) {
+    let Ok(contents) = std::fs::read_to_string(file_path) else {
+        return;
     };
 
     let relative_path = file_path
@@ -96,7 +99,7 @@ fn search_file(file_path: &Path, vault_root: &Path, pattern: &regex::Regex, resu
             } else {
                 line.to_string()
             };
-            results.push(format!("{}:{}: {}", relative_path, line_num + 1, preview));
+            results.push(format!("{relative_path}:{}: {preview}", line_num + 1));
         }
     }
 }

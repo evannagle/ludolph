@@ -1,7 +1,8 @@
-mod cli;
 mod bot;
 mod claude;
+mod cli;
 mod tools;
+mod ui;
 
 use anyhow::Result;
 use clap::Parser;
@@ -15,11 +16,12 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Some(Command::Status) => cli::status().await?,
-        Some(Command::Logs) => cli::logs().await?,
+        Some(Command::Logs) => cli::logs()?,
         Some(Command::Restart) => cli::restart().await?,
         Some(Command::Update) => cli::update().await?,
         Some(Command::Uninstall) => cli::uninstall().await?,
-        Some(Command::Config) => cli::config().await?,
+        Some(Command::Config) => cli::config()?,
+        Some(Command::Setup) => cli::setup().await?,
         None => bot::run().await?,
     }
 

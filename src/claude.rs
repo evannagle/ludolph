@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+
 use crate::tools::execute_tool;
 
 #[derive(Clone)]
@@ -43,7 +44,11 @@ enum ContentBlock {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "tool_use")]
-    ToolUse { id: String, name: String, input: serde_json::Value },
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
 }
 
 impl Claude {
@@ -70,7 +75,7 @@ impl Claude {
 
         config["claude"]["api_key"]
             .as_str()
-            .map(|s| s.to_string())
+            .map(ToString::to_string)
             .ok_or_else(|| anyhow::anyhow!("api_key not found in config"))
     }
 
@@ -86,14 +91,18 @@ impl Claude {
                 model: self.model.clone(),
                 max_tokens: 4096,
                 messages: messages.clone(),
-                tools: tools.iter().map(|t| ToolDefinition {
-                    name: t.name.clone(),
-                    description: t.description.clone(),
-                    input_schema: t.input_schema.clone(),
-                }).collect(),
+                tools: tools
+                    .iter()
+                    .map(|t| ToolDefinition {
+                        name: t.name.clone(),
+                        description: t.description.clone(),
+                        input_schema: t.input_schema.clone(),
+                    })
+                    .collect(),
             };
 
-            let response: ChatResponse = self.client
+            let response: ChatResponse = self
+                .client
                 .post("https://api.anthropic.com/v1/messages")
                 .header("x-api-key", &self.api_key)
                 .header("anthropic-version", "2023-06-01")
@@ -112,7 +121,7 @@ impl Claude {
             for block in response.content {
                 match block {
                     ContentBlock::Text { text } => {
-                        final_text = text.clone();
+                        final_text.clone_from(&text);
                         assistant_content.push(serde_json::json!({
                             "type": "text",
                             "text": text

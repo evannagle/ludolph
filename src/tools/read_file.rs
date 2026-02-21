@@ -1,6 +1,7 @@
 use serde_json::{json, Value};
 use std::path::Path;
-use super::{Tool, safe_resolve};
+
+use super::{safe_resolve, Tool};
 
 pub fn definition() -> Tool {
     Tool {
@@ -20,18 +21,16 @@ pub fn definition() -> Tool {
 }
 
 pub fn execute(input: &Value, vault_path: &Path) -> String {
-    let path = match input.get("path").and_then(|v| v.as_str()) {
-        Some(p) => p,
-        None => return "Error: 'path' parameter is required".to_string(),
+    let Some(path) = input.get("path").and_then(|v| v.as_str()) else {
+        return "Error: 'path' parameter is required".to_string();
     };
 
-    let full_path = match safe_resolve(vault_path, path) {
-        Some(p) => p,
-        None => return format!("Error: Access denied - path '{}' is outside the vault", path),
+    let Some(full_path) = safe_resolve(vault_path, path) else {
+        return format!("Error: Access denied - path '{path}' is outside the vault");
     };
 
     match std::fs::read_to_string(&full_path) {
         Ok(contents) => contents,
-        Err(e) => format!("Error reading file: {}", e),
+        Err(e) => format!("Error reading file: {e}"),
     }
 }
