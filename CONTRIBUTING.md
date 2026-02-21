@@ -21,18 +21,28 @@ cargo build
 <type>/<short-description>
 ```
 
-| Prefix | Use for |
-|--------|---------|
-| `feature/` | New functionality |
-| `fix/` | Bug fixes |
-| `docs/` | Documentation |
-| `refactor/` | Code restructuring |
-| `chore/` | Maintenance, deps |
+| Prefix | Use for | Merges to |
+|--------|---------|-----------|
+| `feature/` | New functionality | `develop` |
+| `fix/` | Bug fixes | `develop` |
+| `hotfix/` | Critical production fix | `production` |
+| `docs/` | Documentation | `develop` |
+| `refactor/` | Code restructuring | `develop` |
+| `chore/` | Maintenance, deps | `develop` |
 
 **Examples:**
 - `feature/conversation-memory`
 - `fix/empty-vault-crash`
+- `hotfix/auth-bypass`
 - `docs/install-guide`
+
+### Hotfix Flow
+
+For critical bugs in production:
+
+1. Branch from `production`: `git checkout -b hotfix/critical-bug production`
+2. Fix and open PR targeting `production`
+3. After merge, also merge `production` into `develop`
 
 ## Making Changes
 
