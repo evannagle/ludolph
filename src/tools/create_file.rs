@@ -45,12 +45,11 @@ pub fn execute(input: &Value, vault_path: &Path) -> String {
     }
 
     // Create parent directories if needed
-    if let Some(parent) = full_path.parent() {
-        if !parent.exists() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                return format!("Error creating directories: {e}");
-            }
-        }
+    if let Some(parent) = full_path.parent()
+        && !parent.exists()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        return format!("Error creating directories: {e}");
     }
 
     // Write the file
