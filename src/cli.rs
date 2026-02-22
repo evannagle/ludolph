@@ -248,7 +248,7 @@ fn collect_pi_config(existing: Option<&Config>) -> Result<Option<PiConfig>> {
     println!("  Ludolph runs on your Pi. Set up SSH access first:");
     println!(
         "  {}",
-        style("https://github.com/evannagle/ludolph/blob/production/docs/pi-setup.md").dim()
+        style("https://github.com/evannagle/ludolph/blob/develop/docs/pi-setup.md").dim()
     );
     println!();
 
