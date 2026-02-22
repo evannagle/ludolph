@@ -1,197 +1,24 @@
+//! Setup wizard for initial Ludolph configuration.
+
 use anyhow::Result;
-use clap::{Parser, Subcommand};
 use console::style;
 
-use crate::config::{self, Config, PiConfig};
+use crate::config::{Config, PiConfig};
 use crate::ssh;
-use crate::ui::{self, PiSpinner, StatusLine, Table};
+use crate::ui::{self, PiSpinner, StatusLine};
 
-#[derive(Parser)]
-#[command(name = "lu")]
-#[command(about = "Ludolph - A real brain for your second brain")]
-#[command(version)]
-pub struct Cli {
-    #[command(subcommand)]
-    pub command: Option<Command>,
-}
-
-#[derive(Subcommand)]
-pub enum Command {
-    /// Check if Ludolph is running
-    Status,
-    /// View recent logs
-    Logs,
-    /// Restart the service
-    Restart,
-    /// Update to latest version
-    Update,
-    /// Remove Ludolph
-    Uninstall,
-    /// Open config in editor
-    Config,
-    /// Initial setup wizard
-    Setup,
-    /// Check Pi connectivity
-    Pi,
-}
-
-pub async fn status() -> Result<()> {
-    let spinner = PiSpinner::new("Checking services");
-
-    // Simulate checking services
-    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-
-    spinner.finish();
-
-    let mut table = Table::new(&["Service", "Status", "Uptime"]);
-    table.add_row(&["Telegram Bot", "running", "2d 4h"]);
-    table.add_row(&["Vault Sync", "idle", "-"]);
-    table.print();
-
-    println!();
-    Ok(())
-}
-
-#[allow(clippy::unnecessary_wraps)] // Will have real I/O when implemented
-pub fn logs() -> Result<()> {
-    let log_path = config::config_dir().join("logs/ludolph.log");
-
-    if !log_path.exists() {
-        ui::status::print_error(
-            "No log file found",
-            Some(&format!("Expected at: {}", log_path.display())),
-        );
-        return Ok(());
-    }
-
-    println!();
-    println!("{}", style("Recent logs").bold());
-    println!();
-
-    // TODO: Actually tail the log file
-    println!("  (log tailing not yet implemented)");
-    println!();
-
-    Ok(())
-}
-
-pub async fn restart() -> Result<()> {
-    let spinner = PiSpinner::new("Restarting Ludolph");
-
-    // TODO: Actually restart the service
-    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
-
-    spinner.finish();
-
-    StatusLine::ok("Service restarted").print();
-    println!();
-
-    Ok(())
-}
-
-pub async fn update() -> Result<()> {
-    let spinner = PiSpinner::new("Checking for updates");
-
-    // TODO: Check GitHub releases
-    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-
-    spinner.finish();
-
-    StatusLine::ok("Already on latest version (0.1.0)").print();
-    println!();
-
-    Ok(())
-}
-
-pub async fn uninstall() -> Result<()> {
-    println!();
-    let confirmed = ui::prompt::confirm("Remove Ludolph and all data?")?;
-
-    if !confirmed {
-        println!();
-        println!("  Cancelled.");
-        println!();
-        return Ok(());
-    }
-
-    let spinner = PiSpinner::new("Removing Ludolph");
-
-    // TODO: Stop service, remove files
-    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-
-    spinner.finish();
-
-    StatusLine::ok("Ludolph removed").print();
-    println!();
-
-    Ok(())
-}
-
-pub fn config_cmd() -> Result<()> {
-    let config_path = config::config_path();
-
-    if !config_path.exists() {
-        ui::status::print_error(
-            "No config file found",
-            Some("Run `lu setup` to create one."),
-        );
-        return Ok(());
-    }
-
-    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "nano".to_string());
-
-    std::process::Command::new(editor)
-        .arg(&config_path)
-        .status()?;
-
-    Ok(())
-}
-
-#[allow(clippy::unnecessary_wraps)]
-pub fn pi() -> Result<()> {
-    let Ok(config) = Config::load() else {
-        ui::status::print_error("No config found", Some("Run `lu setup` first."));
-        return Ok(());
-    };
-
-    let Some(pi) = config.pi else {
-        println!();
-        StatusLine::error("No Pi configured").print();
-        ui::status::hint("Run `lu setup` to configure Pi connection");
-        println!();
-        return Ok(());
-    };
-
-    println!();
-    println!("{}", style("Pi Connection").bold());
-    println!();
-
-    ui::status::checking(&format!("Connecting to {}@{}...", pi.user, pi.host));
-
-    match ssh::test_connection(&pi.host, &pi.user) {
-        Ok(()) => {
-            ui::status::ok(&format!("Connected to {}@{}", pi.user, pi.host));
-        }
-        Err(e) => {
-            ui::status::error(&format!("Connection failed: {e}"));
-            ui::status::hint("Check if Pi is online and SSH key auth is set up");
-        }
-    }
-
-    println!();
-    Ok(())
-}
+use super::sync::collect_sync_config;
 
 /// Collected credentials from setup wizard.
-struct Credentials {
-    telegram_token: String,
-    user_id: u64,
-    claude_key: String,
-    vault_path: std::path::PathBuf,
+pub struct Credentials {
+    pub telegram_token: String,
+    pub user_id: u64,
+    pub claude_key: String,
+    pub vault_path: std::path::PathBuf,
 }
 
 /// Collect API credentials and vault path from user.
-fn collect_credentials(existing: Option<&Config>) -> Result<Credentials> {
+pub fn collect_credentials(existing: Option<&Config>) -> Result<Credentials> {
     println!();
     let telegram_token = ui::prompt::prompt_validated(
         "Telegram bot token",
@@ -220,7 +47,7 @@ fn collect_credentials(existing: Option<&Config>) -> Result<Credentials> {
 
     let existing_vault = existing.map(|c| c.vault.path.to_string_lossy().to_string());
 
-    let vault_path = ui::prompt::prompt_validated(
+    let vault_path = ui::prompt::prompt_validated_visible(
         "Path to your Obsidian vault",
         "The folder where your markdown notes live (e.g., ~/Documents/Vault)",
         existing_vault.as_deref(),
@@ -241,7 +68,7 @@ fn collect_credentials(existing: Option<&Config>) -> Result<Credentials> {
 
 /// Collect Pi SSH configuration and verify connectivity.
 /// Returns None if SSH connection fails (setup should abort).
-fn collect_pi_config(existing: Option<&Config>) -> Result<Option<PiConfig>> {
+pub fn collect_pi_config(existing: Option<&Config>) -> Result<Option<PiConfig>> {
     println!();
     ui::status::section("Raspberry Pi");
     println!();
@@ -252,7 +79,7 @@ fn collect_pi_config(existing: Option<&Config>) -> Result<Option<PiConfig>> {
     );
     println!();
 
-    let pi_host = ui::prompt::prompt_validated(
+    let pi_host = ui::prompt::prompt_validated_visible(
         "Pi hostname or IP",
         "Run `ping pi.local` or check your router for the Pi's address",
         existing
@@ -333,6 +160,9 @@ pub async fn setup() -> Result<()> {
         return Ok(()); // SSH failed, user instructed to fix and re-run
     };
 
+    // Collect sync config (optional)
+    let sync_config = collect_sync_config(&creds.vault_path, &pi_config, None)?;
+
     // Save config
     println!();
     let spinner = PiSpinner::new("Configuring Ludolph");
@@ -342,7 +172,8 @@ pub async fn setup() -> Result<()> {
         creds.claude_key,
         creds.vault_path,
         Some(pi_config),
-    );
+    )
+    .with_sync(sync_config);
     cfg.save()?;
     spinner.finish();
 
@@ -359,6 +190,72 @@ pub async fn setup() -> Result<()> {
             "Run `lu` to start the bot!\n\nCommands:\n  lu            Start the Telegram bot\n  lu status     Check service status\n  lu config     Edit configuration",
         ),
     );
+
+    Ok(())
+}
+
+/// Reconfigure just the API credentials.
+pub fn setup_credentials() -> Result<()> {
+    let existing = Config::load().ok();
+
+    println!();
+    println!("{}", style("Reconfigure Credentials").bold());
+
+    let creds = collect_credentials(existing.as_ref())?;
+
+    // Load existing config or create minimal one
+    let mut config = existing.unwrap_or_else(|| {
+        Config::new(
+            creds.telegram_token.clone(),
+            vec![creds.user_id],
+            creds.claude_key.clone(),
+            creds.vault_path.clone(),
+            None,
+        )
+    });
+
+    // Update credentials
+    config.telegram.bot_token = creds.telegram_token;
+    config.telegram.allowed_users = vec![creds.user_id];
+    config.claude.api_key = creds.claude_key;
+    config.vault.path = creds.vault_path;
+
+    config.save()?;
+
+    println!();
+    ui::status::ok("Credentials updated");
+    println!();
+
+    Ok(())
+}
+
+/// Reconfigure just the Pi SSH connection.
+pub fn setup_pi() -> Result<()> {
+    let existing = Config::load().ok();
+
+    if existing.is_none() {
+        ui::status::print_error(
+            "No config found",
+            Some("Run `lu setup` first to configure credentials."),
+        );
+        return Ok(());
+    }
+
+    let mut config = existing.unwrap();
+
+    println!();
+    println!("{}", style("Reconfigure Pi Connection").bold());
+
+    let Some(pi_config) = collect_pi_config(Some(&config))? else {
+        return Ok(()); // SSH failed
+    };
+
+    config.pi = Some(pi_config);
+    config.save()?;
+
+    println!();
+    ui::status::ok("Pi connection updated");
+    println!();
 
     Ok(())
 }

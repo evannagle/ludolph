@@ -7,6 +7,7 @@ use dialoguer::Input;
 /// Prompt for input with validation and optional existing value.
 ///
 /// If `existing` is Some, shows a masked hint and allows Enter to keep it.
+/// Use `mask: true` for sensitive values (API keys), `false` for paths.
 pub fn prompt_validated<F>(
     label: &str,
     help: &str,
@@ -16,15 +17,45 @@ pub fn prompt_validated<F>(
 where
     F: Fn(&str) -> std::result::Result<(), &'static str> + Clone,
 {
+    prompt_validated_inner(label, help, existing, validator, true)
+}
+
+/// Prompt for input without masking the existing value.
+pub fn prompt_validated_visible<F>(
+    label: &str,
+    help: &str,
+    existing: Option<&str>,
+    validator: F,
+) -> Result<String>
+where
+    F: Fn(&str) -> std::result::Result<(), &'static str> + Clone,
+{
+    prompt_validated_inner(label, help, existing, validator, false)
+}
+
+fn prompt_validated_inner<F>(
+    label: &str,
+    help: &str,
+    existing: Option<&str>,
+    validator: F,
+    mask: bool,
+) -> Result<String>
+where
+    F: Fn(&str) -> std::result::Result<(), &'static str> + Clone,
+{
     println!();
     println!("{} {}", style("π").bold(), label);
     println!("  {}", style(help).dim());
 
     if let Some(val) = existing {
-        let masked = mask_value(val);
+        let display = if mask {
+            mask_value(val)
+        } else {
+            val.to_string()
+        };
         println!(
             "  {}",
-            style(format!("Current: {masked} (Enter to keep)")).dim()
+            style(format!("Current: {display} (Enter to keep)")).dim()
         );
     }
 
@@ -178,7 +209,10 @@ pub fn prompt_with_default(label: &str, default: &str, existing: Option<&str>) -
     println!("{} {}", style("π").bold(), label);
 
     let effective_default = existing.unwrap_or(default);
-    println!("  {}", style(format!("[{effective_default}]")).dim());
+    println!(
+        "  {}",
+        style(format!("Default: {effective_default} (Enter to keep)")).dim()
+    );
 
     let value: String = Input::<String>::new()
         .with_prompt("  ")
