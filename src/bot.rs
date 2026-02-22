@@ -35,9 +35,12 @@ async fn get_bot_username(token: &str) -> Result<String> {
 pub async fn run() -> Result<()> {
     let config = Config::load()?;
 
+    // Fetch bot info first (needed for header)
+    let bot_username = get_bot_username(&config.telegram.bot_token).await?;
+
     // Header
     println!();
-    println!("{}", style("Ludolph").bold());
+    println!("{}", style(&bot_username).bold());
     println!();
 
     // Validate vault
@@ -47,8 +50,7 @@ pub async fn run() -> Result<()> {
     }
     StatusLine::ok(format!("Vault: {}", config.vault.path.display())).print();
 
-    // Validate Telegram
-    let bot_username = get_bot_username(&config.telegram.bot_token).await?;
+    // Telegram validated (already fetched username above)
     StatusLine::ok(format!("Telegram: @{bot_username}")).print();
 
     // Ready
