@@ -1,6 +1,6 @@
 //! Status indicators for CLI output.
 //!
-//! Provides `[•ok]` and `[•!!]` status prefixes.
+//! Provides `[•ok]`, `[•!!]`, and `[•--]` status prefixes.
 
 use console::style;
 
@@ -11,6 +11,9 @@ pub enum Status {
     Ok,
     /// Error - red `[•!!]`
     Error,
+    /// Skipped - dim `[•--]`
+    #[allow(dead_code)]
+    Skip,
 }
 
 impl Status {
@@ -20,6 +23,7 @@ impl Status {
         match self {
             Self::Ok => format!("[{}]", style("•ok").green()),
             Self::Error => format!("[{}]", style("•!!").red()),
+            Self::Skip => format!("[{}]", style("•--").dim()),
         }
     }
 }
@@ -56,6 +60,13 @@ impl StatusLine {
     #[must_use]
     pub fn error(message: impl Into<String>) -> Self {
         Self::new(Status::Error, message)
+    }
+
+    /// Create a skipped status line.
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn skip(message: impl Into<String>) -> Self {
+        Self::new(Status::Skip, message)
     }
 
     /// Print the status line with proper indentation.
@@ -126,6 +137,7 @@ mod tests {
         // Just verify no panics - actual styling is hard to test
         let _ = Status::Ok.render();
         let _ = Status::Error.render();
+        let _ = Status::Skip.render();
     }
 
     #[test]
@@ -135,5 +147,8 @@ mod tests {
 
         let err = StatusLine::error("Test");
         assert_eq!(err.status, Status::Error);
+
+        let skip = StatusLine::skip("Test");
+        assert_eq!(skip.status, Status::Skip);
     }
 }
