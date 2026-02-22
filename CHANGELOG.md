@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.0](https://github.com/evannagle/ludolph/compare/v0.1.0...v0.2.0) (2026-02-22)
+
+
+### Features
+
+* idempotent installer with clear steps and options ([82ade79](https://github.com/evannagle/ludolph/commit/82ade793bb3d75c8063eae00982772498c415168))
+* streamlined one-liner install with auto Pi detection ([047c56b](https://github.com/evannagle/ludolph/commit/047c56bd78326b3cf614cae73511edcd5ee808d9))
+
 ## 0.1.0 (2026-02-22)
 
 
