@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/evannagle/ludolph/compare/v0.2.0...v0.2.1) (2026-02-22)
+
+
+### Bug Fixes
+
+* collapse nested if in create_file ([31359e0](https://github.com/evannagle/ludolph/commit/31359e05090acf3883d586897fac237684a9f7d5))
+* use rustls for teloxide to enable ARM cross-compile ([ac2e2a6](https://github.com/evannagle/ludolph/commit/ac2e2a614e4acefb67aa92def46094caf28556a2))
+
 ## [0.2.0](https://github.com/evannagle/ludolph/compare/v0.1.0...v0.2.0) (2026-02-22)
 
 
