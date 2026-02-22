@@ -5,7 +5,7 @@ mod setup;
 
 use clap::{Parser, Subcommand};
 
-pub use commands::{config_cmd, pi};
+pub use commands::{check, config_cmd, pi};
 pub use setup::{setup, setup_credentials, setup_pi};
 
 #[derive(Parser)]
@@ -19,6 +19,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Health check
+    Check,
     /// Open config in editor
     Config,
     /// Initial setup wizard (or run specific step)

@@ -12,7 +12,6 @@ pub enum Status {
     /// Error - red `[•!!]`
     Error,
     /// Skipped - dim `[•--]`
-    #[allow(dead_code)]
     Skip,
 }
 
@@ -64,7 +63,6 @@ impl StatusLine {
 
     /// Create a skipped status line.
     #[must_use]
-    #[allow(dead_code)]
     pub fn skip(message: impl Into<String>) -> Self {
         Self::new(Status::Skip, message)
     }

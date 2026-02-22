@@ -1,11 +1,60 @@
 //! CLI commands.
 
+use std::process::ExitCode;
+
 use anyhow::Result;
 use console::style;
+use walkdir::WalkDir;
 
 use crate::config::{self, Config};
 use crate::ssh;
 use crate::ui::{self, Spinner, StatusLine};
+
+/// Run health checks and return appropriate exit code.
+pub fn check() -> ExitCode {
+    // Print version
+    println!();
+    println!("lu {}", env!("CARGO_PKG_VERSION"));
+    println!();
+
+    // CLI check (always passes if we got here)
+    StatusLine::ok("CLI").print();
+
+    // Config check
+    let config = Config::load().map_or_else(
+        |_| {
+            StatusLine::skip("Config (not found)").print();
+            None
+        },
+        |cfg| {
+            StatusLine::ok("Config loaded").print();
+            Some(cfg)
+        },
+    );
+
+    // Vault check
+    match config.as_ref().map(|c| &c.vault.path) {
+        Some(path) if path.exists() => {
+            let count = WalkDir::new(path)
+                .into_iter()
+                .filter_map(Result::ok)
+                .filter(|e| e.file_type().is_file())
+                .count();
+            StatusLine::ok(format!("Vault accessible ({count} files)")).print();
+        }
+        Some(path) => {
+            StatusLine::error(format!("Vault not found: {}", path.display())).print();
+            println!();
+            return ExitCode::FAILURE;
+        }
+        None => {
+            StatusLine::skip("Vault (not configured)").print();
+        }
+    }
+
+    println!();
+    ExitCode::SUCCESS
+}
 
 pub fn config_cmd() -> Result<()> {
     let config_path = config::config_path();

@@ -6,29 +6,53 @@ mod ssh;
 mod tools;
 mod ui;
 
+use std::process::ExitCode;
+
 use anyhow::Result;
 use clap::Parser;
 use cli::{Cli, Command};
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    // Only enable tracing if RUST_LOG is set
+async fn main() -> ExitCode {
     if std::env::var("RUST_LOG").is_ok() {
         tracing_subscriber::fmt::init();
     }
 
     let cli = Cli::parse();
 
-    match cli.command {
-        Some(Command::Config) => cli::config_cmd()?,
-        Some(Command::Setup { step }) => match step {
-            Some(cli::SetupStep::Credentials) => cli::setup_credentials().await?,
-            Some(cli::SetupStep::Pi) => cli::setup_pi()?,
-            None => cli::setup().await?,
-        },
-        Some(Command::Pi) => cli::pi()?,
-        None => bot::run().await?,
-    }
+    let result = run(cli).await;
 
-    Ok(())
+    match result {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run(cli: Cli) -> Result<ExitCode> {
+    match cli.command {
+        Some(Command::Check) => Ok(cli::check()),
+        Some(Command::Config) => {
+            cli::config_cmd()?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(Command::Setup { step }) => {
+            match step {
+                Some(cli::SetupStep::Credentials) => cli::setup_credentials().await?,
+                Some(cli::SetupStep::Pi) => cli::setup_pi()?,
+                None => cli::setup().await?,
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(Command::Pi) => {
+            cli::pi()?;
+            Ok(ExitCode::SUCCESS)
+        }
+        None => {
+            bot::run().await?;
+            Ok(ExitCode::SUCCESS)
+        }
+    }
 }
