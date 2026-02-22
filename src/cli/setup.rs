@@ -4,6 +4,18 @@ use anyhow::Result;
 use console::style;
 
 use crate::config::{Config, PiConfig};
+
+/// Detect if we're running on a Raspberry Pi (or similar ARM Linux device).
+const fn is_running_on_pi() -> bool {
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    {
+        true
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
+    {
+        false
+    }
+}
 use crate::ssh;
 use crate::ui::prompt::PromptConfig;
 use crate::ui::{self, Spinner, StatusLine};
@@ -203,10 +215,17 @@ pub async fn setup() -> Result<()> {
     // Collect credentials (now async for API validation)
     let creds = collect_credentials(existing.as_ref()).await?;
 
-    // Collect Pi config (required)
-    let Some(pi_config) = collect_pi_config(existing.as_ref())? else {
-        return Ok(()); // SSH failed, user instructed to fix and re-run
+    // Collect Pi config only if NOT running on a Pi
+    let pi_config = if is_running_on_pi() {
+        None
+    } else {
+        collect_pi_config(existing.as_ref())?
     };
+
+    // If Pi config collection failed (SSH error), abort
+    if !is_running_on_pi() && pi_config.is_none() {
+        return Ok(());
+    }
 
     // Save config
     println!();
@@ -216,7 +235,7 @@ pub async fn setup() -> Result<()> {
         vec![creds.user_id],
         creds.claude_key,
         creds.vault_path,
-        Some(pi_config),
+        pi_config,
     );
     cfg.save()?;
     spinner.finish();
