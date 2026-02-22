@@ -57,14 +57,12 @@ pub fn safe_resolve(
     }
 
     // For non-existent files, verify the parent is within vault
-    if let Some(parent) = full_path.parent() {
-        if let Ok(parent_canonical) = parent.canonicalize() {
-            if let Ok(vault_canonical) = vault_path.canonicalize() {
-                if parent_canonical.starts_with(&vault_canonical) {
-                    return Some(full_path);
-                }
-            }
-        }
+    if let Some(parent) = full_path.parent()
+        && let Ok(parent_canonical) = parent.canonicalize()
+        && let Ok(vault_canonical) = vault_path.canonicalize()
+        && parent_canonical.starts_with(&vault_canonical)
+    {
+        return Some(full_path);
     }
 
     None

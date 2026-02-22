@@ -105,10 +105,10 @@ where
         .interact_text()?;
 
     // Return existing value if input was empty
-    if value.is_empty() {
-        if let Some(existing_val) = existing {
-            return Ok(existing_val.to_string());
-        }
+    if value.is_empty()
+        && let Some(existing_val) = existing
+    {
+        return Ok(existing_val.to_string());
     }
 
     Ok(value)
