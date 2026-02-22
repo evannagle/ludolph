@@ -48,12 +48,11 @@ pub fn safe_resolve(
     let full_path = vault_path.join(clean_path);
 
     // Canonicalize and verify it's still within vault
-    if let Ok(canonical) = full_path.canonicalize() {
-        if let Ok(vault_canonical) = vault_path.canonicalize() {
-            if canonical.starts_with(&vault_canonical) {
-                return Some(canonical);
-            }
-        }
+    if let Ok(canonical) = full_path.canonicalize()
+        && let Ok(vault_canonical) = vault_path.canonicalize()
+        && canonical.starts_with(&vault_canonical)
+    {
+        return Some(canonical);
     }
 
     // For non-existent files, verify the parent is within vault
