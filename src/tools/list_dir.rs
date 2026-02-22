@@ -1,7 +1,7 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 
-use super::{safe_resolve, Tool};
+use super::{Tool, safe_resolve};
 
 pub fn definition() -> Tool {
     Tool {
@@ -21,10 +21,7 @@ pub fn definition() -> Tool {
 }
 
 pub fn execute(input: &Value, vault_path: &Path) -> String {
-    let path = input
-        .get("path")
-        .and_then(|v| v.as_str())
-        .unwrap_or(".");
+    let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
     let dir_path = if path.is_empty() || path == "." {
         vault_path.to_path_buf()

@@ -1,6 +1,8 @@
 mod bot;
 mod claude;
 mod cli;
+mod config;
+mod ssh;
 mod tools;
 mod ui;
 
@@ -20,8 +22,9 @@ async fn main() -> Result<()> {
         Some(Command::Restart) => cli::restart().await?,
         Some(Command::Update) => cli::update().await?,
         Some(Command::Uninstall) => cli::uninstall().await?,
-        Some(Command::Config) => cli::config()?,
+        Some(Command::Config) => cli::config_cmd()?,
         Some(Command::Setup) => cli::setup().await?,
+        Some(Command::Pi) => cli::pi()?,
         None => bot::run().await?,
     }
 

@@ -1,7 +1,7 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 
-use super::{safe_resolve, Tool};
+use super::{Tool, safe_resolve};
 
 pub fn definition() -> Tool {
     Tool {

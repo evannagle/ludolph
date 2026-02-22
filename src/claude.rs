@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::config::Config;
 use crate::tools::execute_tool;
 
 #[derive(Clone)]
@@ -52,31 +53,14 @@ enum ContentBlock {
 }
 
 impl Claude {
-    pub fn new() -> Result<Self> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY")
-            .or_else(|_| Self::load_from_config())
-            .map_err(|_| anyhow::anyhow!("ANTHROPIC_API_KEY not set"))?;
-
-        Ok(Self {
+    /// Create a Claude client from config.
+    #[must_use]
+    pub fn from_config(config: &Config) -> Self {
+        Self {
             client: reqwest::Client::new(),
-            api_key,
-            model: "claude-sonnet-4-20250514".to_string(),
-        })
-    }
-
-    fn load_from_config() -> Result<String> {
-        let config_path = directories::BaseDirs::new()
-            .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?
-            .home_dir()
-            .join("ludolph/config.toml");
-
-        let config_str = std::fs::read_to_string(config_path)?;
-        let config: toml::Value = toml::from_str(&config_str)?;
-
-        config["claude"]["api_key"]
-            .as_str()
-            .map(ToString::to_string)
-            .ok_or_else(|| anyhow::anyhow!("api_key not found in config"))
+            api_key: config.claude.api_key.clone(),
+            model: config.claude.model.clone(),
+        }
     }
 
     pub async fn chat(&self, user_message: &str) -> Result<String> {

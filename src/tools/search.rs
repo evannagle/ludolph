@@ -1,15 +1,16 @@
 use ignore::WalkBuilder;
 use regex::RegexBuilder;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 
-use super::{safe_resolve, Tool};
+use super::{Tool, safe_resolve};
 
 pub fn definition() -> Tool {
     Tool {
         name: "search".to_string(),
-        description: "Search for text in vault files. Returns matching file paths and line numbers."
-            .to_string(),
+        description:
+            "Search for text in vault files. Returns matching file paths and line numbers."
+                .to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {

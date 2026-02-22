@@ -7,7 +7,6 @@ mod spinner;
 pub mod status;
 mod table;
 
-pub use prompt::prompt_with_help;
 pub use spinner::PiSpinner;
 pub use status::StatusLine;
 pub use table::Table;

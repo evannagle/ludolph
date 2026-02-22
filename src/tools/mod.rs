@@ -1,3 +1,5 @@
+mod append_file;
+mod create_file;
 mod list_dir;
 mod read_file;
 mod search;
@@ -15,6 +17,8 @@ pub fn get_tool_definitions() -> Vec<Tool> {
         read_file::definition(),
         list_dir::definition(),
         search::definition(),
+        append_file::definition(),
+        create_file::definition(),
     ]
 }
 
@@ -25,6 +29,8 @@ pub async fn execute_tool(name: &str, input: &Value) -> String {
         "read_file" => read_file::execute(input, &vault_path),
         "list_dir" => list_dir::execute(input, &vault_path),
         "search" => search::execute(input, &vault_path),
+        "append_file" => append_file::execute(input, &vault_path),
+        "create_file" => create_file::execute(input, &vault_path),
         _ => format!("Unknown tool: {name}"),
     }
 }

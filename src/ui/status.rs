@@ -92,6 +92,35 @@ pub fn print_success(title: &str, details: Option<&str>) {
     }
 }
 
+/// Print a section header with horizontal rules.
+pub fn section(title: &str) {
+    let width = 47;
+    let rule = "─".repeat(width);
+    println!("{rule}");
+    println!("  {}", style(title).bold());
+    println!("{rule}");
+}
+
+/// Print a checking status (in progress).
+pub fn checking(message: &str) {
+    println!("  [{}] {}", style("•??").yellow(), message);
+}
+
+/// Print a hint/help message.
+pub fn hint(message: &str) {
+    println!("  {}", style(message).dim());
+}
+
+/// Print an ok status (shorthand for `StatusLine::ok().print()`).
+pub fn ok(message: &str) {
+    StatusLine::ok(message).print();
+}
+
+/// Print an error status (shorthand for `StatusLine::error().print()`).
+pub fn error(message: &str) {
+    StatusLine::error(message).print();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
