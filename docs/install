@@ -3,26 +3,44 @@ set -euo pipefail
 
 # Ludolph installer
 # Usage: curl -sSL https://ludolph.dev/install | bash
+#
+# Options (via environment variables):
+#   LUDOLPH_DIR     Install directory (default: ~/.ludolph)
+#   LUDOLPH_VERSION Specific version to install (default: latest)
+#   LUDOLPH_SKIP_SETUP Skip running setup wizard after install
 
 REPO="evannagle/ludolph"
-INSTALL_DIR="$HOME/.ludolph/bin"
+INSTALL_DIR="${LUDOLPH_DIR:-$HOME/.ludolph}/bin"
+VERSION="${LUDOLPH_VERSION:-}"
 
 # Colors
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 DIM='\033[0;90m'
+CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
 ok() { printf "  ${GREEN}[•ok]${NC} %s\n" "$1"; }
 err() { printf "  ${RED}[•!!]${NC} %s\n" "$1"; }
 info() { printf "  ${DIM}%s${NC}\n" "$1"; }
+step() { printf "\n${BOLD}%s${NC}\n\n" "$1"; }
+
+# -----------------------------------------------------------------------------
+# Header
+# -----------------------------------------------------------------------------
 
 echo
-printf "${BOLD}Installing Ludolph${NC}\n"
+printf "${BOLD}Ludolph Installer${NC}\n"
+info "A real brain for your second brain"
 echo
 
-# Detect OS and architecture
+# -----------------------------------------------------------------------------
+# Step 1: Detect platform
+# -----------------------------------------------------------------------------
+
+step "Detecting platform"
+
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
 
@@ -31,6 +49,7 @@ case "$ARCH" in
     aarch64|arm64) ARCH="aarch64" ;;
     *)
         err "Unsupported architecture: $ARCH"
+        info "Supported: x86_64, aarch64/arm64"
         exit 1
         ;;
 esac
@@ -40,38 +59,77 @@ case "$OS" in
     darwin) TARGET="${ARCH}-apple-darwin" ;;
     *)
         err "Unsupported OS: $OS"
+        info "Supported: linux, darwin (macOS)"
         exit 1
         ;;
 esac
 
-ok "Detected $OS/$ARCH"
+ok "Platform: $OS/$ARCH"
 
-# Get latest release
-LATEST=$(curl -sSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | grep '"tag_name"' | cut -d'"' -f4 || true)
-if [ -z "$LATEST" ]; then
-    err "No release found"
-    info "Build from source: cargo install --git https://github.com/$REPO"
-    exit 1
+# -----------------------------------------------------------------------------
+# Step 2: Resolve version
+# -----------------------------------------------------------------------------
+
+step "Resolving version"
+
+if [ -n "$VERSION" ]; then
+    ok "Using specified version: $VERSION"
+else
+    VERSION=$(curl -sSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | grep '"tag_name"' | cut -d'"' -f4 || true)
+    if [ -z "$VERSION" ]; then
+        err "Could not fetch latest version"
+        info "Set LUDOLPH_VERSION to install a specific version"
+        info "Or build from source: cargo install --git https://github.com/$REPO"
+        exit 1
+    fi
+    ok "Latest version: $VERSION"
 fi
 
-ok "Version $LATEST"
+# -----------------------------------------------------------------------------
+# Step 3: Check existing installation
+# -----------------------------------------------------------------------------
 
-# Create install directory
+step "Checking installation"
+
 mkdir -p "$INSTALL_DIR"
 
-# Download binary
-DOWNLOAD_URL="https://github.com/$REPO/releases/download/$LATEST/lu-$TARGET"
+if [ -f "$INSTALL_DIR/lu" ]; then
+    EXISTING_VERSION=$("$INSTALL_DIR/lu" --version 2>/dev/null | awk '{print $2}' || echo "unknown")
+    if [ "$EXISTING_VERSION" = "${VERSION#v}" ]; then
+        ok "Already installed: lu $EXISTING_VERSION"
+        info "Reinstalling..."
+    else
+        ok "Upgrading: lu $EXISTING_VERSION -> $VERSION"
+    fi
+else
+    ok "Fresh install to $INSTALL_DIR"
+fi
 
-if ! curl -sSL "$DOWNLOAD_URL" -o "$INSTALL_DIR/lu" 2>/dev/null; then
+# -----------------------------------------------------------------------------
+# Step 4: Download binary
+# -----------------------------------------------------------------------------
+
+step "Downloading binary"
+
+DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/lu-$TARGET"
+info "From: $DOWNLOAD_URL"
+
+if ! curl -fsSL "$DOWNLOAD_URL" -o "$INSTALL_DIR/lu" 2>/dev/null; then
     err "Download failed"
-    info "Build from source: cargo install --git https://github.com/$REPO"
+    info "Check that version $VERSION exists for $TARGET"
+    info "Or build from source: cargo install --git https://github.com/$REPO"
     exit 1
 fi
 
 chmod +x "$INSTALL_DIR/lu"
-ok "Downloaded to ~/.ludolph/bin/lu"
+ok "Downloaded lu $VERSION"
 
-# Add to PATH
+# -----------------------------------------------------------------------------
+# Step 5: Configure PATH
+# -----------------------------------------------------------------------------
+
+step "Configuring PATH"
+
 SHELL_RC=""
 if [ -f "$HOME/.zshrc" ]; then
     SHELL_RC="$HOME/.zshrc"
@@ -79,16 +137,44 @@ elif [ -f "$HOME/.bashrc" ]; then
     SHELL_RC="$HOME/.bashrc"
 fi
 
+PATH_ENTRY='export PATH="$HOME/.ludolph/bin:$PATH"'
+
 if [ -n "$SHELL_RC" ]; then
-    if ! grep -q '.ludolph/bin' "$SHELL_RC" 2>/dev/null; then
-        echo 'export PATH="$HOME/.ludolph/bin:$PATH"' >> "$SHELL_RC"
+    if grep -q '.ludolph/bin' "$SHELL_RC" 2>/dev/null; then
+        ok "PATH already configured in $(basename "$SHELL_RC")"
+    else
+        echo "$PATH_ENTRY" >> "$SHELL_RC"
         ok "Added to PATH in $(basename "$SHELL_RC")"
     fi
+else
+    info "Add to your shell config: $PATH_ENTRY"
 fi
 
 export PATH="$INSTALL_DIR:$PATH"
 
-echo
+# -----------------------------------------------------------------------------
+# Step 6: Verify installation
+# -----------------------------------------------------------------------------
 
-# Run setup wizard
-exec "$INSTALL_DIR/lu" setup
+step "Verifying installation"
+
+if "$INSTALL_DIR/lu" --version >/dev/null 2>&1; then
+    INSTALLED_VERSION=$("$INSTALL_DIR/lu" --version | awk '{print $2}')
+    ok "Installed: lu $INSTALLED_VERSION"
+else
+    err "Installation verification failed"
+    exit 1
+fi
+
+# -----------------------------------------------------------------------------
+# Step 7: Run setup (unless skipped)
+# -----------------------------------------------------------------------------
+
+if [ "${LUDOLPH_SKIP_SETUP:-}" = "1" ]; then
+    echo
+    ok "Installation complete (setup skipped)"
+    info "Run 'lu setup' to configure"
+    echo
+else
+    exec "$INSTALL_DIR/lu" setup
+fi
