@@ -7,8 +7,7 @@ build:
 # Build and install to ~/.local/bin
 install: build
 	@mkdir -p ~/.local/bin
-	@rm -f ~/.local/bin/lu
-	cp target/release/lu ~/.local/bin/lu
+	/bin/cp -f target/release/lu ~/.local/bin/lu
 	@echo "Installed: ~/.local/bin/lu"
 
 # Run tests

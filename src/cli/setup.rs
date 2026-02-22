@@ -5,9 +5,8 @@ use console::style;
 
 use crate::config::{Config, PiConfig};
 use crate::ssh;
-use crate::ui::{self, PiSpinner, StatusLine};
-
-use super::sync::collect_sync_config;
+use crate::ui::prompt::PromptConfig;
+use crate::ui::{self, Spinner, StatusLine};
 
 /// Collected credentials from setup wizard.
 pub struct Credentials {
@@ -18,38 +17,81 @@ pub struct Credentials {
 }
 
 /// Collect API credentials and vault path from user.
-pub fn collect_credentials(existing: Option<&Config>) -> Result<Credentials> {
-    println!();
-    let telegram_token = ui::prompt::prompt_validated(
+pub async fn collect_credentials(existing: Option<&Config>) -> Result<Credentials> {
+    // Telegram bot token
+    let telegram_config = PromptConfig::new(
         "Telegram bot token",
-        "Open Telegram, message @BotFather, send /newbot, copy the token",
+        "Ludolph receives messages through Telegram's Bot API.",
+    )
+    .with_url("https://t.me/botfather");
+
+    let telegram_token = ui::prompt::prompt_validated(
+        &telegram_config,
         existing.map(|c| c.telegram.bot_token.as_str()),
         ui::prompt::validate_telegram_token,
     )?;
+
+    // Validate token against Telegram API
+    let existing_token = existing.map_or("", |c| c.telegram.bot_token.as_str());
+    if telegram_token != existing_token {
+        let spinner = Spinner::new("Validating token...");
+        match ui::prompt::validate_telegram_token_api(&telegram_token).await {
+            Ok(()) => spinner.finish(),
+            Err(e) => {
+                spinner.finish_error();
+                anyhow::bail!("Token validation failed: {e}");
+            }
+        }
+    }
+
+    // Telegram user ID
+    let user_id_config =
+        PromptConfig::new("Your Telegram user ID", "Only you can talk to this bot.")
+            .with_url("https://t.me/userinfobot");
 
     let existing_user_id = existing
         .and_then(|c| c.telegram.allowed_users.first())
         .map(ToString::to_string);
 
     let telegram_user_id = ui::prompt::prompt_validated(
-        "Your Telegram user ID",
-        "Message @userinfobot on Telegram - it will reply with your numeric ID",
+        &user_id_config,
         existing_user_id.as_deref(),
         ui::prompt::validate_telegram_user_id,
     )?;
 
+    // Claude API key
+    let claude_config = PromptConfig::new("Claude API key", "Powers the AI responses.")
+        .with_url("https://console.anthropic.com/settings/keys");
+
     let claude_key = ui::prompt::prompt_validated(
-        "Claude API key",
-        "Visit console.anthropic.com/settings/keys, create key, copy it",
+        &claude_config,
         existing.map(|c| c.claude.api_key.as_str()),
         ui::prompt::validate_claude_key,
     )?;
 
+    // Validate Claude key against API
+    let existing_key = existing.map_or("", |c| c.claude.api_key.as_str());
+    if claude_key != existing_key {
+        let spinner = Spinner::new("Validating API key...");
+        match ui::prompt::validate_claude_key_api(&claude_key).await {
+            Ok(()) => spinner.finish(),
+            Err(e) => {
+                spinner.finish_error();
+                anyhow::bail!("API key validation failed: {e}");
+            }
+        }
+    }
+
+    // Vault path
+    let vault_config = PromptConfig::new(
+        "Path to your Obsidian vault",
+        "The folder where your markdown notes live.",
+    );
+
     let existing_vault = existing.map(|c| c.vault.path.to_string_lossy().to_string());
 
     let vault_path = ui::prompt::prompt_validated_visible(
-        "Path to your Obsidian vault",
-        "The folder where your markdown notes live (e.g., ~/Documents/Vault)",
+        &vault_config,
         existing_vault.as_deref(),
         ui::prompt::validate_vault_path,
     )?;
@@ -75,13 +117,17 @@ pub fn collect_pi_config(existing: Option<&Config>) -> Result<Option<PiConfig>> 
     println!("  Ludolph runs on your Pi. Set up SSH access first:");
     println!(
         "  {}",
-        style("https://github.com/evannagle/ludolph/blob/develop/docs/pi-setup.md").dim()
+        style("https://github.com/evannagle/ludolph/blob/develop/docs/pi-setup.md").cyan()
     );
     println!();
 
-    let pi_host = ui::prompt::prompt_validated_visible(
+    let pi_host_config = PromptConfig::new(
         "Pi hostname or IP",
-        "Run `ping pi.local` or check your router for the Pi's address",
+        "The network address of your Raspberry Pi.",
+    );
+
+    let pi_host = ui::prompt::prompt_validated_visible(
+        &pi_host_config,
         existing
             .and_then(|c| c.pi.as_ref())
             .map(|p| p.host.as_str()),
@@ -97,18 +143,20 @@ pub fn collect_pi_config(existing: Option<&Config>) -> Result<Option<PiConfig>> 
     )?;
 
     println!();
-    ui::status::checking("Testing SSH connection...");
+    let spinner = Spinner::new(&format!("Connecting to {pi_user}@{pi_host}..."));
 
     match ssh::test_connection(&pi_host, &pi_user) {
         Ok(()) => {
-            ui::status::ok(&format!("Connected to {pi_user}@{pi_host}"));
+            spinner.finish();
             Ok(Some(PiConfig {
                 host: pi_host,
                 user: pi_user,
             }))
         }
         Err(e) => {
-            ui::status::error(&format!("SSH failed: {e}"));
+            spinner.finish_error();
+            println!();
+            println!("  SSH failed: {e}");
             println!();
             println!("  SSH key authentication is required. Run:");
             println!(
@@ -146,34 +194,30 @@ pub async fn setup() -> Result<()> {
     println!();
 
     // System check
-    let spinner = PiSpinner::new("Checking system");
+    let spinner = Spinner::new("Checking system");
     tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     spinner.finish();
     StatusLine::ok("System compatible").print();
     StatusLine::ok("Network connected").print();
 
-    // Collect credentials
-    let creds = collect_credentials(existing.as_ref())?;
+    // Collect credentials (now async for API validation)
+    let creds = collect_credentials(existing.as_ref()).await?;
 
     // Collect Pi config (required)
     let Some(pi_config) = collect_pi_config(existing.as_ref())? else {
         return Ok(()); // SSH failed, user instructed to fix and re-run
     };
 
-    // Collect sync config (optional)
-    let sync_config = collect_sync_config(&creds.vault_path, &pi_config, None)?;
-
     // Save config
     println!();
-    let spinner = PiSpinner::new("Configuring Ludolph");
+    let spinner = Spinner::new("Configuring Ludolph");
     let cfg = Config::new(
         creds.telegram_token,
         vec![creds.user_id],
         creds.claude_key,
         creds.vault_path,
         Some(pi_config),
-    )
-    .with_sync(sync_config);
+    );
     cfg.save()?;
     spinner.finish();
 
@@ -187,7 +231,7 @@ pub async fn setup() -> Result<()> {
     ui::status::print_success(
         "Setup complete",
         Some(
-            "Run `lu` to start the bot!\n\nCommands:\n  lu            Start the Telegram bot\n  lu status     Check service status\n  lu config     Edit configuration",
+            "Commands:\n  lu            Start the Telegram bot\n  lu status     Check service status",
         ),
     );
 
@@ -195,13 +239,13 @@ pub async fn setup() -> Result<()> {
 }
 
 /// Reconfigure just the API credentials.
-pub fn setup_credentials() -> Result<()> {
+pub async fn setup_credentials() -> Result<()> {
     let existing = Config::load().ok();
 
     println!();
     println!("{}", style("Reconfigure Credentials").bold());
 
-    let creds = collect_credentials(existing.as_ref())?;
+    let creds = collect_credentials(existing.as_ref()).await?;
 
     // Load existing config or create minimal one
     let mut config = existing.unwrap_or_else(|| {

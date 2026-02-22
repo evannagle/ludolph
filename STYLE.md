@@ -8,7 +8,7 @@
 - **Minimalist** — No clutter, every element earns its place
 - **Consistent** — Same patterns throughout
 - **Informative** — User always knows what's happening
-- **Branded** — Pi (π) theming where appropriate
+- **Branded** — π prefix for prompts
 
 ---
 
@@ -27,16 +27,16 @@
 
 ## Step Headers
 
-Bold header with inline pi-spinner, consistent newlines:
+Spinner shows while working, then status indicator when done:
 
 ```
                                         ← blank line before
-Checking system [31415]                 ← bold header + spinner
-                                        ← blank line after header
+[*  ] Checking system                   ← ponging ball spinner
+                                        ← (animation: [*  ] [ * ] [  *] [ * ])
+
+[•ok] Checking system                   ← spinner replaced with status
   [•ok] Network connected
   [•ok] 8GB free space
-
-Checking system ✓                       ← spinner replaced with ✓
                                         ← blank line after section
 ```
 
@@ -56,27 +56,20 @@ Alignment: 2-space indent, consistent column for descriptions.
 
 ---
 
-## Pi Spinner
+## Spinner
 
-Sliding window through pi digits (3.14159265358979...).
-Starts with zeros, pi digits shift in from right.
+Ponging ball animation.
 **Speed: 200ms per frame.**
 
 ```
-[00000]
-[00003]
-[00031]
-[00314]
-[03141]
-[31415]
-[14159]
-[41592]
-[15926]
-[59265]
-...repeats from [31415]
+[*  ]
+[ * ]
+[  *]
+[ * ]
+...repeats
 ```
 
-Implementation: Store first ~50 digits of pi, cycle through with 5-char window.
+Implementation: 4-frame animation, ball bounces left to right and back.
 
 ---
 
@@ -195,11 +188,11 @@ Setup complete ✓
 ### Spinner
 
 ```rust
-use crate::ui::PiSpinner;
+use crate::ui::Spinner;
 
-let spinner = PiSpinner::new("Checking system");
+let spinner = Spinner::new("Checking system");
 // ... do work ...
-spinner.finish(); // Shows "Checking system ✓"
+spinner.finish(); // Shows "[•ok] Checking system"
 ```
 
 ### Status Lines

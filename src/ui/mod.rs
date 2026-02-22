@@ -5,8 +5,6 @@
 pub mod prompt;
 mod spinner;
 pub mod status;
-mod table;
 
-pub use spinner::PiSpinner;
+pub use spinner::Spinner;
 pub use status::StatusLine;
-pub use table::Table;

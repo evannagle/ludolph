@@ -1,84 +1,79 @@
-//! Pi-themed spinner that cycles through digits of pi.
+//! Simple ponging ball spinner.
 
+use std::io::{self, Write};
 use std::time::Duration;
 
 use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
 
-/// First 50 digits of pi (after the decimal point).
-const PI_DIGITS: &str = "14159265358979323846264338327950288419716939937510";
-
-/// A spinner that displays sliding windows of pi digits.
+/// A spinner that displays a bouncing ball animation.
 ///
-/// The spinner shows 5 digits at a time, starting with zeros
-/// and gradually revealing pi digits from the right:
+/// The ball pongs back and forth:
 /// ```text
-/// [00000] → [00003] → [00031] → [00314] → [03141] → [31415] → [14159] → ...
+/// [*  ] → [ * ] → [  *] → [ * ] → repeat
 /// ```
-pub struct PiSpinner {
+pub struct Spinner {
     bar: ProgressBar,
-    message: String,
 }
 
-impl PiSpinner {
-    /// Create a new pi spinner with the given header message.
+impl Spinner {
+    /// Create a new spinner with the given message.
     #[must_use]
     pub fn new(message: &str) -> Self {
         let bar = ProgressBar::new_spinner();
 
-        // Generate tick strings: sliding window through pi digits
-        let tick_strings = Self::generate_tick_strings();
+        // Ponging ball animation
+        let tick_strings = ["*  ", " * ", "  *", " * "];
 
         bar.set_style(
             ProgressStyle::default_spinner()
-                .tick_strings(&tick_strings.iter().map(String::as_str).collect::<Vec<_>>())
-                .template("{msg} [{spinner}]")
+                .tick_strings(&tick_strings)
+                .template("[{spinner}] {msg}")
                 .expect("valid template"),
         );
 
         bar.enable_steady_tick(Duration::from_millis(200));
-        bar.set_message(format!("{}", style(message).bold()));
+        bar.set_message(message.to_string());
 
-        Self {
-            bar,
-            message: message.to_string(),
-        }
+        Self { bar }
     }
 
-    /// Generate the sliding window tick strings.
-    fn generate_tick_strings() -> Vec<String> {
-        let mut strings = Vec::new();
-
-        // Start with zeros, pi digits shift in from right
-        // [00000] → [00003] → [00031] → [00314] → [03141] → [31415]
-        let intro = "00003";
-        for i in 0..=5 {
-            let zeros = "0".repeat(5 - i);
-            let pi_part = if i == 0 {
-                String::new()
-            } else {
-                intro[..i].to_string()
-            };
-            strings.push(format!("{zeros}{pi_part}"));
-        }
-
-        // Then cycle through pi digits with 5-char window
-        let full_pi = format!("3{PI_DIGITS}");
-        for i in 0..PI_DIGITS.len().saturating_sub(4) {
-            strings.push(full_pi[i..i + 5].to_string());
-        }
-
-        strings
-    }
-
-    /// Complete the spinner, replacing it with a checkmark.
+    /// Complete the spinner with a checkmark on the same line.
     pub fn finish(&self) {
         self.bar.finish_and_clear();
-        println!("\n{} {}\n", style(&self.message).bold(), style("✓").green());
+        let _ = writeln!(
+            io::stdout(),
+            "{} {}",
+            style("[•ok]").green(),
+            self.bar.message()
+        );
+    }
+
+    /// Complete the spinner with an error indicator on the same line.
+    pub fn finish_error(&self) {
+        self.bar.finish_and_clear();
+        let _ = writeln!(
+            io::stdout(),
+            "{} {}",
+            style("[•!!]").red(),
+            self.bar.message()
+        );
+    }
+
+    /// Clear the spinner without printing anything.
+    #[allow(dead_code)]
+    pub fn clear(&self) {
+        self.bar.finish_and_clear();
+    }
+
+    /// Update the spinner message.
+    #[allow(dead_code)]
+    pub fn set_message(&self, message: &str) {
+        self.bar.set_message(message.to_string());
     }
 }
 
-impl Drop for PiSpinner {
+impl Drop for Spinner {
     fn drop(&mut self) {
         if !self.bar.is_finished() {
             self.bar.finish_and_clear();
@@ -91,22 +86,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tick_strings_start_with_zeros() {
-        let strings = PiSpinner::generate_tick_strings();
-        assert_eq!(strings[0], "00000");
+    fn spinner_creates_without_panic() {
+        let spinner = Spinner::new("Testing");
+        spinner.clear();
     }
 
     #[test]
-    fn tick_strings_reach_pi_start() {
-        let strings = PiSpinner::generate_tick_strings();
-        assert!(strings.contains(&"31415".to_string()));
+    fn spinner_finish_without_panic() {
+        let spinner = Spinner::new("Testing");
+        spinner.finish();
     }
 
     #[test]
-    fn tick_strings_all_five_chars() {
-        let strings = PiSpinner::generate_tick_strings();
-        for s in &strings {
-            assert_eq!(s.len(), 5, "Expected 5 chars, got: {s}");
-        }
+    fn spinner_finish_error_without_panic() {
+        let spinner = Spinner::new("Testing");
+        spinner.finish_error();
     }
 }

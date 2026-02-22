@@ -127,7 +127,7 @@ If using Tailscale SSH, you'll connect without password prompts.
 When prompted for "Pi hostname or IP", enter your Tailscale hostname:
 ```
 π Pi hostname or IP
-  : raspberrypi
+  > raspberrypi
 ```
 
 ## 4. Verify Connection
@@ -143,8 +143,8 @@ Should show:
 ```
 Pi Connection
 
-  [•??] Connecting to pi@pi.local...
-  [•ok] Connected to pi@pi.local
+[*  ] Connecting to pi@pi.local...
+[•ok] Connecting to pi@pi.local...
 ```
 
 ## Troubleshooting

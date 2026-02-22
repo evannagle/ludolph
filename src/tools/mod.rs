@@ -22,24 +22,15 @@ pub fn get_tool_definitions() -> Vec<Tool> {
     ]
 }
 
-pub async fn execute_tool(name: &str, input: &Value) -> String {
-    let vault_path = get_vault_path();
-
+pub async fn execute_tool(name: &str, input: &Value, vault_path: &std::path::Path) -> String {
     match name {
-        "read_file" => read_file::execute(input, &vault_path),
-        "list_dir" => list_dir::execute(input, &vault_path),
-        "search" => search::execute(input, &vault_path),
-        "append_file" => append_file::execute(input, &vault_path),
-        "create_file" => create_file::execute(input, &vault_path),
+        "read_file" => read_file::execute(input, vault_path),
+        "list_dir" => list_dir::execute(input, vault_path),
+        "search" => search::execute(input, vault_path),
+        "append_file" => append_file::execute(input, vault_path),
+        "create_file" => create_file::execute(input, vault_path),
         _ => format!("Unknown tool: {name}"),
     }
-}
-
-fn get_vault_path() -> std::path::PathBuf {
-    directories::BaseDirs::new().map_or_else(
-        || std::path::PathBuf::from("./vault"),
-        |d| d.home_dir().join("ludolph/vault"),
-    )
 }
 
 /// Resolve a path safely within the vault, preventing directory traversal

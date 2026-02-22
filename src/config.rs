@@ -14,8 +14,6 @@ pub struct Config {
     pub vault: VaultConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pi: Option<PiConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sync: Option<SyncConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,48 +32,15 @@ pub struct ClaudeConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultConfig {
-    /// Path to the vault directory (may be subdir of repo).
+    /// Path to the vault directory.
     #[serde(default = "default_vault_path")]
     pub path: PathBuf,
-    /// Git repo root (if vault is a subdirectory). Defaults to vault path.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub repo_root: Option<PathBuf>,
-}
-
-impl VaultConfig {
-    /// Get the repo root (defaults to vault path if not set).
-    #[must_use]
-    #[allow(dead_code)] // Used by future sync operations
-    pub fn repo_root(&self) -> &std::path::Path {
-        self.repo_root.as_ref().unwrap_or(&self.path)
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PiConfig {
     pub host: String,
     pub user: String,
-}
-
-/// Sync configuration for Syncthing-based vault sync.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SyncConfig {
-    /// Whether sync is enabled.
-    #[serde(default)]
-    pub enabled: bool,
-    /// Mac's Syncthing device ID.
-    pub mac_device_id: String,
-    /// Pi's Syncthing device ID.
-    pub pi_device_id: String,
-    /// Syncthing folder ID.
-    pub folder_id: String,
-    /// Where to clone the full repo on Pi (e.g., "~/Noggin").
-    pub pi_repo_path: String,
-    /// Vault path on Pi for Syncthing (e.g., "~/Noggin/noggin").
-    pub pi_vault_path: String,
-    /// Optional symlink for convenience (e.g., "~/noggin" -> `pi_vault_path`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pi_symlink: Option<String>,
 }
 
 fn default_model() -> String {
@@ -90,7 +55,6 @@ impl Default for VaultConfig {
     fn default() -> Self {
         Self {
             path: default_vault_path(),
-            repo_root: None,
         }
     }
 }
@@ -141,28 +105,17 @@ impl Config {
                 api_key: claude_api_key,
                 model: default_model(),
             },
-            vault: VaultConfig {
-                path: vault_path,
-                repo_root: None,
-            },
+            vault: VaultConfig { path: vault_path },
             pi,
-            sync: None,
         }
-    }
-
-    /// Set sync configuration.
-    #[must_use]
-    pub fn with_sync(mut self, sync: Option<SyncConfig>) -> Self {
-        self.sync = sync;
-        self
     }
 }
 
-/// Get the Ludolph config directory (~/.ludolph or ~/ludolph).
+/// Get the Ludolph config directory (~/.ludolph).
 pub fn config_dir() -> PathBuf {
     directories::BaseDirs::new().map_or_else(
-        || PathBuf::from("./ludolph"),
-        |d| d.home_dir().join("ludolph"),
+        || PathBuf::from("./.ludolph"),
+        |d| d.home_dir().join(".ludolph"),
     )
 }
 

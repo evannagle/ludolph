@@ -1,23 +1,65 @@
+//! Telegram bot handler.
+
 use std::collections::HashSet;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use console::style;
 use teloxide::prelude::*;
 
 use crate::claude::Claude;
 use crate::config::Config;
+use crate::ui::StatusLine;
+
+/// Fetch bot info from Telegram API.
+async fn get_bot_username(token: &str) -> Result<String> {
+    let url = format!("https://api.telegram.org/bot{token}/getMe");
+    let response: serde_json::Value = reqwest::get(&url)
+        .await
+        .context("Failed to connect to Telegram")?
+        .json()
+        .await
+        .context("Failed to parse Telegram response")?;
+
+    if response.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+        anyhow::bail!("Telegram API error");
+    }
+
+    response
+        .get("result")
+        .and_then(|r| r.get("username"))
+        .and_then(serde_json::Value::as_str)
+        .map(String::from)
+        .context("Missing username in response")
+}
 
 pub async fn run() -> Result<()> {
     let config = Config::load()?;
 
-    tracing::info!("Starting Ludolph bot...");
+    // Header
+    println!();
+    println!("{}", style("Ludolph").bold());
+    println!();
 
+    // Validate vault
+    if !config.vault.path.exists() {
+        StatusLine::error(format!("Vault not found: {}", config.vault.path.display())).print();
+        anyhow::bail!("Vault directory does not exist");
+    }
+    StatusLine::ok(format!("Vault: {}", config.vault.path.display())).print();
+
+    // Validate Telegram
+    let bot_username = get_bot_username(&config.telegram.bot_token).await?;
+    StatusLine::ok(format!("Telegram: @{bot_username}")).print();
+
+    // Ready
+    println!();
+    println!("  Listening... {}", style("(Ctrl+C to stop)").dim());
+    println!();
+
+    // Run bot
     let bot = Bot::new(&config.telegram.bot_token);
     let claude = Claude::from_config(&config);
     let allowed_users: HashSet<u64> = config.telegram.allowed_users.into_iter().collect();
-
-    if allowed_users.is_empty() {
-        tracing::warn!("No allowed users configured - bot will ignore all messages");
-    }
 
     Box::pin(teloxide::repl(bot, move |bot: Bot, msg: Message| {
         let claude = claude.clone();
@@ -28,11 +70,9 @@ pub async fn run() -> Result<()> {
 
             if let Some(id) = user_id {
                 if !allowed_users.contains(&id) {
-                    tracing::debug!("Ignoring message from unauthorized user: {id}");
                     return Ok(());
                 }
             } else {
-                tracing::debug!("Ignoring message with no user ID");
                 return Ok(());
             }
 
@@ -48,6 +88,11 @@ pub async fn run() -> Result<()> {
         }
     }))
     .await;
+
+    // Clean exit message
+    println!();
+    println!("  Stopped.");
+    println!();
 
     Ok(())
 }
