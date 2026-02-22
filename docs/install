@@ -7,7 +7,19 @@ set -euo pipefail
 REPO="evannagle/ludolph"
 INSTALL_DIR="$HOME/.ludolph/bin"
 
-echo "Installing Ludolph..."
+# Colors
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+DIM='\033[0;90m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+ok() { printf "  ${GREEN}[•ok]${NC} %s\n" "$1"; }
+err() { printf "  ${RED}[•!!]${NC} %s\n" "$1"; }
+info() { printf "  ${DIM}%s${NC}\n" "$1"; }
+
+echo
+printf "${BOLD}Installing Ludolph${NC}\n"
 echo
 
 # Detect OS and architecture
@@ -17,41 +29,47 @@ ARCH="$(uname -m)"
 case "$ARCH" in
     x86_64) ARCH="x86_64" ;;
     aarch64|arm64) ARCH="aarch64" ;;
-    *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
+    *)
+        err "Unsupported architecture: $ARCH"
+        exit 1
+        ;;
 esac
 
 case "$OS" in
     linux) TARGET="${ARCH}-unknown-linux-gnu" ;;
     darwin) TARGET="${ARCH}-apple-darwin" ;;
-    *) echo "Unsupported OS: $OS"; exit 1 ;;
+    *)
+        err "Unsupported OS: $OS"
+        exit 1
+        ;;
 esac
 
+ok "Detected $OS/$ARCH"
+
 # Get latest release
-LATEST=$(curl -sSL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
+LATEST=$(curl -sSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | grep '"tag_name"' | cut -d'"' -f4 || true)
 if [ -z "$LATEST" ]; then
-    echo "No release found. Build from source:"
-    echo "  cargo install --git https://github.com/$REPO"
+    err "No release found"
+    info "Build from source: cargo install --git https://github.com/$REPO"
     exit 1
 fi
 
-echo "Detected: $OS $ARCH"
-echo "Version: $LATEST"
-echo
+ok "Version $LATEST"
 
 # Create install directory
 mkdir -p "$INSTALL_DIR"
 
 # Download binary
 DOWNLOAD_URL="https://github.com/$REPO/releases/download/$LATEST/lu-$TARGET"
-echo "Downloading..."
 
-if ! curl -sSL "$DOWNLOAD_URL" -o "$INSTALL_DIR/lu"; then
-    echo "Download failed."
-    echo "Build from source: cargo install --git https://github.com/$REPO"
+if ! curl -sSL "$DOWNLOAD_URL" -o "$INSTALL_DIR/lu" 2>/dev/null; then
+    err "Download failed"
+    info "Build from source: cargo install --git https://github.com/$REPO"
     exit 1
 fi
 
 chmod +x "$INSTALL_DIR/lu"
+ok "Downloaded to ~/.ludolph/bin/lu"
 
 # Add to PATH
 SHELL_RC=""
@@ -64,12 +82,12 @@ fi
 if [ -n "$SHELL_RC" ]; then
     if ! grep -q '.ludolph/bin' "$SHELL_RC" 2>/dev/null; then
         echo 'export PATH="$HOME/.ludolph/bin:$PATH"' >> "$SHELL_RC"
+        ok "Added to PATH in $(basename "$SHELL_RC")"
     fi
 fi
 
 export PATH="$INSTALL_DIR:$PATH"
 
-echo "Installed to $INSTALL_DIR/lu"
 echo
 
 # Run setup wizard
