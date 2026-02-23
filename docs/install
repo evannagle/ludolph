@@ -270,16 +270,24 @@ if confirm "Scan for sensitive files? (API keys, passwords, etc.)"; then
 
     if [ ${#PRIVACY_FILES[@]} -gt 0 ]; then
         echo
-        warn "Found potentially sensitive files:"
+        err "Found ${#PRIVACY_FILES[@]} potentially sensitive file(s):"
         echo
+
+        EXCLUDED_FILES=()
         for f in "${PRIVACY_FILES[@]}"; do
-            printf "    ${YELLOW}%s${NC}\n" "$f"
+            printf "    ${RED}%s${NC}\n" "$f"
+            if confirm "    Exclude this file?"; then
+                EXCLUDED_FILES+=("$f")
+            fi
+            echo
         done
-        echo
-        if confirm "Exclude these from sync?"; then
+
+        if [ ${#EXCLUDED_FILES[@]} -gt 0 ]; then
+            ok "Will exclude ${#EXCLUDED_FILES[@]} file(s)"
+            PRIVACY_FILES=("${EXCLUDED_FILES[@]}")
             EXCLUDE_PRIVACY=true
-            ok "Will exclude these files"
         else
+            ok "No files excluded"
             EXCLUDE_PRIVACY=false
         fi
     else
