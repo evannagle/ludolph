@@ -33,7 +33,13 @@ err() { printf "  ${RED}[•!!]${NC} %s\n" "$1"; }
 warn() { printf "  ${YELLOW}[•--]${NC} %s\n" "$1"; }
 info() { printf "  ${DIM}%s${NC}\n" "$1"; }
 step() { printf "\n${BOLD}%s${NC}\n\n" "$1"; }
-prompt_char() { printf "${CYAN}π${NC} "; }
+# Trim whitespace from string
+trim() {
+    local var="$1"
+    var="${var#"${var%%[![:space:]]*}"}"  # trim leading
+    var="${var%"${var##*[![:space:]]}"}"  # trim trailing
+    echo "$var"
+}
 
 # Ask yes/no question, default to yes
 confirm() {
@@ -70,8 +76,11 @@ prompt_input() {
     else
         printf "  %s\n" "$label"
     fi
-    prompt_char
+    printf "  > "
     read -r result
+
+    # Trim whitespace
+    result=$(trim "$result")
 
     if [ -z "$result" ] && [ -n "$default" ]; then
         result="$default"
@@ -85,9 +94,10 @@ prompt_secret() {
     local result
 
     printf "  %s\n" "$label"
-    prompt_char
+    printf "  > "
     read -rs result
     echo
+    result=$(trim "$result")
     echo "$result"
 }
 
@@ -192,10 +202,19 @@ fi
 # Expand tilde
 VAULT_PATH="${VAULT_PATH/#\~/$HOME}"
 
-# Validate vault exists
+# Validate vault exists or offer to create
 if [ ! -d "$VAULT_PATH" ]; then
-    err "Folder not found: $VAULT_PATH"
-    exit 1
+    echo
+    warn "Folder not found: $VAULT_PATH"
+    echo
+    if confirm "Create this folder?"; then
+        mkdir -p "$VAULT_PATH"
+        mkdir -p "$VAULT_PATH/.obsidian"
+        ok "Created vault folder"
+    else
+        err "Vault folder is required"
+        exit 1
+    fi
 fi
 
 ok "Vault: $VAULT_PATH"
