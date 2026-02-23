@@ -67,7 +67,7 @@ cargo test
 Use the SSH alias `pi` (configured via `lu setup`):
 
 ```bash
-ssh pi "cd ~/ludolph && git pull origin develop && cargo build --release"
+ssh pi "source ~/.cargo/env && cd ~/ludolph && git pull origin develop && cargo build --release"
 ```
 
 Note: ARM release builds can take 10-20 minutes.
@@ -75,7 +75,7 @@ Note: ARM release builds can take 10-20 minutes.
 If build succeeds, verify binary:
 
 ```bash
-ssh pi "~/ludolph/target/release/lu check"
+ssh pi "source ~/.cargo/env && ~/ludolph/target/release/lu check"
 ```
 
 If either fails, abort with error output.
