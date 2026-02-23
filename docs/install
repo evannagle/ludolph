@@ -594,12 +594,26 @@ fi
 
 section "Step 7: Setting Up Real-Time Sync"
 
-info "Syncthing keeps your vault in sync between Mac and Pi."
-info "Changes on either side sync automatically."
+info "Your vault needs to stay in sync between Mac and Pi."
+info "Syncthing provides real-time bidirectional sync."
 echo
 
+SETUP_SYNCTHING=true
+
+if confirm "Set up Syncthing for automatic sync?"; then
+    echo
+else
+    SETUP_SYNCTHING=false
+    echo
+    ok "Skipping Syncthing setup"
+    echo
+    info "You'll need to sync your vault manually or use your own method."
+    info "Common options: iCloud, Dropbox, rsync, or existing Syncthing."
+    echo
+fi
+
 # Install on Mac
-if $IS_MAC; then
+if $SETUP_SYNCTHING && $IS_MAC; then
     spinner_start "Installing Syncthing on Mac..."
 
     if command -v brew &>/dev/null; then
@@ -629,7 +643,7 @@ if $IS_MAC; then
 fi
 
 # Install on Pi
-if ! $IS_PI; then
+if $SETUP_SYNCTHING && ! $IS_PI; then
     spinner_start "Installing Syncthing on Pi..."
     ssh "$PI_USER@$PI_HOST" bash -s <<'EOF'
 set -e
@@ -644,6 +658,8 @@ fi
 # =============================================================================
 # Configure Syncthing
 # =============================================================================
+
+if $SETUP_SYNCTHING; then
 
 spinner_start "Configuring Syncthing..."
 
@@ -841,6 +857,8 @@ EOF
 fi
 
 spinner_stop "ok" "Syncthing running on both devices"
+
+fi  # end SETUP_SYNCTHING
 
 # =============================================================================
 # API Credentials
