@@ -32,7 +32,8 @@ step() { printf "\n${BOLD}%s${NC}\n\n" "$1"; }
 
 echo
 printf "${BOLD}Ludolph Installer${NC}\n"
-info "A real brain for your second brain"
+info "A real brain for your second brain."
+info "Your vault is the context. Talk to it, anywhere, anytime."
 echo
 
 # -----------------------------------------------------------------------------
