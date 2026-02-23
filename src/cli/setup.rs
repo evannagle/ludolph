@@ -96,8 +96,8 @@ pub async fn collect_credentials(existing: Option<&Config>) -> Result<Credential
 
     // Vault path
     let vault_config = PromptConfig::new(
-        "Path to your Obsidian vault",
-        "The folder where your markdown notes live.",
+        "Path to your Obsidian vault (on this machine)",
+        "Local folder with your notes. Sync from desktop if needed.",
     );
 
     let existing_vault = existing.map(|c| c.vault.path.to_string_lossy().to_string());
