@@ -3,17 +3,6 @@ set -euo pipefail
 
 # Ludolph Mac-First Installer
 # Usage: curl -sSL https://ludolph.dev/install | bash
-#
-# This installer runs on your Mac and:
-# 1. Finds your Obsidian vault
-# 2. Sets up automatic backups through GitHub
-# 3. Deploys Ludolph to your Raspberry Pi
-# 4. Configures two-way sync between Mac and Pi
-#
-# Options (via environment variables):
-#   LUDOLPH_DIR         Install directory (default: ~/.ludolph)
-#   LUDOLPH_VERSION     Specific version to install (default: latest)
-#   LUDOLPH_SKIP_SYNC   Skip vault sync setup (just install binary)
 
 REPO="evannagle/ludolph"
 LOCAL_DIR="${LUDOLPH_DIR:-$HOME/.ludolph}"
@@ -28,24 +17,35 @@ YELLOW='\033[0;33m'
 BOLD='\033[1m'
 NC='\033[0m'
 
+# Output helpers
 ok() { printf "  ${GREEN}[•ok]${NC} %s\n" "$1"; }
 err() { printf "  ${RED}[•!!]${NC} %s\n" "$1"; }
 warn() { printf "  ${YELLOW}[•--]${NC} %s\n" "$1"; }
 info() { printf "  ${DIM}%s${NC}\n" "$1"; }
-step() { printf "\n${BOLD}%s${NC}\n\n" "$1"; }
-# Trim whitespace from string
-trim() {
-    local var="$1"
-    var="${var#"${var%%[![:space:]]*}"}"  # trim leading
-    var="${var%"${var##*[![:space:]]}"}"  # trim trailing
-    echo "$var"
+
+# Section header with blank lines
+section() {
+    echo
+    printf "${BOLD}%s${NC}\n" "$1"
+    echo
 }
 
-# Ask yes/no question, default to yes
+# Horizontal rule
+rule() {
+    printf "  ${DIM}────────────────────────────────────────${NC}\n"
+}
+
+# Wait for user to press Enter
+pause() {
+    printf "\n  ${DIM}Press Enter to continue...${NC}"
+    read -r
+    echo
+}
+
+# Ask yes/no, returns 0 for yes
 confirm() {
-    local prompt="$1"
     local response
-    printf "  %s ${DIM}[Y/n]${NC} " "$prompt"
+    printf "  %s ${DIM}[Y/n]${NC} " "$1"
     read -r response
     case "$response" in
         [nN]*) return 1 ;;
@@ -53,68 +53,76 @@ confirm() {
     esac
 }
 
-# Ask yes/no question, default to no
-confirm_no() {
+# Prompt for text input
+ask() {
     local prompt="$1"
-    local response
-    printf "  %s ${DIM}[y/N]${NC} " "$prompt"
-    read -r response
-    case "$response" in
-        [yY]*) return 0 ;;
-        *) return 1 ;;
-    esac
-}
-
-# Prompt for input with optional default
-prompt_input() {
-    local label="$1"
     local default="${2:-}"
     local result
 
     if [ -n "$default" ]; then
-        printf "  %s ${DIM}[%s]${NC}\n" "$label" "$default"
+        printf "  %s\n" "$prompt" >&2
+        printf "  ${DIM}Default: %s${NC}\n" "$default" >&2
     else
-        printf "  %s\n" "$label"
+        printf "  %s\n" "$prompt" >&2
     fi
-    printf "  > "
+    printf "  > " >&2
     read -r result
 
     # Trim whitespace
-    result=$(trim "$result")
+    result="${result#"${result%%[![:space:]]*}"}"
+    result="${result%"${result##*[![:space:]]}"}"
 
-    if [ -z "$result" ] && [ -n "$default" ]; then
-        result="$default"
-    fi
-    echo "$result"
+    [ -z "$result" ] && result="$default"
+    printf '%s' "$result"
 }
 
-# Prompt for sensitive input (hidden)
-prompt_secret() {
-    local label="$1"
-    local result
+# Prompt for secret input (hidden)
+ask_secret() {
+    local prompt="$1"
 
-    printf "  %s\n" "$label"
-    printf "  > "
+    printf "  %s\n" "$prompt" >&2
+    printf "  > " >&2
     read -rs result
-    echo
-    result=$(trim "$result")
-    echo "$result"
+    echo >&2
+
+    # Trim whitespace
+    result="${result#"${result%%[![:space:]]*}"}"
+    result="${result%"${result##*[![:space:]]}"}"
+
+    printf '%s' "$result"
 }
 
 # =============================================================================
-# Header
+# Welcome
 # =============================================================================
 
+clear
 echo
 printf "${BOLD}Ludolph Installer${NC}\n"
+echo
 info "A real brain for your second brain."
+info "Talk to your vault, from anywhere, anytime."
+echo
+rule
+echo
+info "This installer will:"
+info "  1. Find your Obsidian vault"
+info "  2. Set up sync to your Raspberry Pi"
+info "  3. Configure the Telegram bot"
 echo
 
+if ! confirm "Ready to begin?"; then
+    echo
+    info "Run this installer again when you're ready."
+    echo
+    exit 0
+fi
+
 # =============================================================================
-# Step 1: Platform Detection
+# Platform Detection
 # =============================================================================
 
-step "Checking your system"
+section "Step 1: Checking Your System"
 
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
@@ -124,12 +132,10 @@ case "$ARCH" in
     aarch64|arm64) ARCH="aarch64" ;;
     *)
         err "Unsupported architecture: $ARCH"
-        info "Supported: x86_64, aarch64/arm64"
         exit 1
         ;;
 esac
 
-# Determine if we're on Mac vs Pi
 IS_MAC=false
 IS_PI=false
 
@@ -137,172 +143,144 @@ case "$OS" in
     darwin)
         IS_MAC=true
         TARGET="${ARCH}-apple-darwin"
-        ok "Running on Mac"
+        ok "macOS detected"
         ;;
     linux)
         TARGET="${ARCH}-unknown-linux-gnu"
         if [ "$ARCH" = "aarch64" ]; then
             IS_PI=true
-            ok "Running on Raspberry Pi (or ARM Linux)"
+            ok "Raspberry Pi detected"
         else
-            ok "Running on Linux"
+            ok "Linux detected"
         fi
         ;;
     *)
         err "Unsupported OS: $OS"
-        info "Supported: macOS, Linux"
         exit 1
         ;;
 esac
 
 # =============================================================================
-# Step 2: Find Vault
+# Find Vault
 # =============================================================================
 
-step "Finding your vault"
+section "Step 2: Finding Your Vault"
 
-# Try to auto-detect common vault locations
+info "Looking for Obsidian vaults..."
+echo
+
 VAULT_PATH=""
 VAULT_CANDIDATES=(
     "$HOME/Documents/Obsidian"
-    "$HOME/Documents/vault"
     "$HOME/Obsidian"
+    "$HOME/Documents/vault"
     "$HOME/vault"
     "$HOME/Documents/Notes"
     "$HOME/Notes"
+    "$HOME/Vaults"
 )
 
+# Check for vaults with .obsidian folder
 for candidate in "${VAULT_CANDIDATES[@]}"; do
-    if [ -d "$candidate" ]; then
-        # Check if it looks like an Obsidian vault
-        if [ -d "$candidate/.obsidian" ]; then
-            VAULT_PATH="$candidate"
-            break
-        fi
+    if [ -d "$candidate/.obsidian" ]; then
+        VAULT_PATH="$candidate"
+        break
+    fi
+done
+
+# Also check inside common parent folders
+for parent in "$HOME/Vaults" "$HOME/Documents/Vaults" "$HOME/Documents/Obsidian"; do
+    if [ -d "$parent" ]; then
+        while IFS= read -r -d '' vault; do
+            if [ -d "$vault/.obsidian" ]; then
+                VAULT_PATH="$vault"
+                break 2
+            fi
+        done < <(find "$parent" -maxdepth 2 -type d -name ".obsidian" -print0 2>/dev/null)
     fi
 done
 
 if [ -n "$VAULT_PATH" ]; then
-    info "Found what looks like your vault:"
+    ok "Found vault: $VAULT_PATH"
     echo
-    printf "    ${CYAN}%s${NC}\n" "$VAULT_PATH"
-    echo
-    if ! confirm "Is this correct?"; then
+    if ! confirm "Use this vault?"; then
         VAULT_PATH=""
     fi
 fi
 
 if [ -z "$VAULT_PATH" ]; then
-    echo "  Where's your Obsidian vault?"
-    info "(The folder with all your notes)"
     echo
-    VAULT_PATH=$(prompt_input "" "$HOME/Documents/Obsidian")
+    VAULT_PATH=$(ask "Enter the path to your Obsidian vault:" "$HOME/vault")
 fi
 
 # Expand tilde
 VAULT_PATH="${VAULT_PATH/#\~/$HOME}"
 
-# Validate vault exists or offer to create
+# Validate or create
 if [ ! -d "$VAULT_PATH" ]; then
     echo
-    warn "Folder not found: $VAULT_PATH"
-    echo
-    if confirm "Create this folder?"; then
-        mkdir -p "$VAULT_PATH"
+    warn "Folder does not exist: $VAULT_PATH"
+    if confirm "Create it?"; then
         mkdir -p "$VAULT_PATH/.obsidian"
         ok "Created vault folder"
     else
-        err "Vault folder is required"
+        err "Cannot continue without a vault folder"
         exit 1
     fi
+else
+    ok "Vault confirmed: $VAULT_PATH"
 fi
 
-ok "Vault: $VAULT_PATH"
-
 # =============================================================================
-# Step 3: Privacy Check (opt-in)
+# Privacy Check
 # =============================================================================
 
-step "Privacy check"
+section "Step 3: Privacy Check"
 
-echo "  Before syncing your vault to your Pi, would you like us"
-echo "  to check for private information that should stay on"
-echo "  this computer?"
-echo
-info "This looks for things like API keys, passwords, or"
-info "sensitive files that probably shouldn't leave your Mac."
+info "Your vault will be synced to your Pi via GitHub."
+info "This step checks for files you might want to exclude."
 echo
 
-PRIVACY_ISSUES=()
-PRIVACY_FILES=()
-
-if confirm "Check for private info?"; then
+if confirm "Scan for sensitive files? (API keys, passwords, etc.)"; then
     echo
-    info "Scanning for sensitive patterns..."
+    info "Scanning..."
 
-    # Patterns to look for
-    # API keys
-    API_KEY_PATTERN='(sk-[a-zA-Z0-9]{20,}|api[_-]?key\s*[:=]\s*["\047]?[a-zA-Z0-9_-]{20,})'
-    # Passwords in config
-    PASSWORD_PATTERN='(password|passwd|pwd)\s*[:=]\s*["\047]?[^\s"\047]{4,}'
-    # Tokens
-    TOKEN_PATTERN='(token|secret|credential)\s*[:=]\s*["\047]?[a-zA-Z0-9_-]{10,}'
+    PRIVACY_FILES=()
 
-    # Sensitive filenames
-    SENSITIVE_FILES=(".env" "credentials" "secrets" ".secret" "api_key" "apikey")
-
-    # Check for sensitive files by name
+    # Check for sensitive filenames
     while IFS= read -r -d '' file; do
-        filename=$(basename "$file")
-        filename_lower=$(echo "$filename" | tr '[:upper:]' '[:lower:]')
+        filename=$(basename "$file" | tr '[:upper:]' '[:lower:]')
+        case "$filename" in
+            .env*|*credential*|*secret*|*password*|*apikey*|*api_key*)
+                rel="${file#$VAULT_PATH/}"
+                PRIVACY_FILES+=("$rel")
+                ;;
+        esac
+    done < <(find "$VAULT_PATH" -type f \( -name "*.md" -o -name "*.txt" -o -name ".env*" -o -name "*.json" \) -print0 2>/dev/null || true)
 
-        for pattern in "${SENSITIVE_FILES[@]}"; do
-            if [[ "$filename_lower" == *"$pattern"* ]]; then
-                rel_path="${file#$VAULT_PATH/}"
-                if [[ ! " ${PRIVACY_FILES[*]} " =~ " ${rel_path} " ]]; then
-                    PRIVACY_FILES+=("$rel_path")
-                    case "$pattern" in
-                        .env) PRIVACY_ISSUES+=("$rel_path - environment file with secrets") ;;
-                        credentials*) PRIVACY_ISSUES+=("$rel_path - looks like credentials") ;;
-                        secrets*) PRIVACY_ISSUES+=("$rel_path - may contain secrets") ;;
-                        *) PRIVACY_ISSUES+=("$rel_path - sensitive filename") ;;
-                    esac
-                fi
-                break
-            fi
-        done
-    done < <(find "$VAULT_PATH" -type f -name "*.md" -o -name "*.txt" -o -name "*.env*" -o -name "*.json" -o -name "*.yaml" -o -name "*.yml" -print0 2>/dev/null || true)
-
-    # Check file contents for patterns (limit to text files under 1MB)
+    # Check file contents for API key patterns
     while IFS= read -r -d '' file; do
-        if [ -f "$file" ] && [ "$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null)" -lt 1048576 ]; then
-            # Check for API key pattern
-            if grep -qEi "$API_KEY_PATTERN" "$file" 2>/dev/null; then
-                rel_path="${file#$VAULT_PATH/}"
-                if [[ ! " ${PRIVACY_FILES[*]} " =~ " ${rel_path} " ]]; then
-                    PRIVACY_FILES+=("$rel_path")
-                    PRIVACY_ISSUES+=("$rel_path - looks like it has API keys")
-                fi
+        if [ -f "$file" ] && [ "$(wc -c < "$file" 2>/dev/null)" -lt 1000000 ]; then
+            if grep -qE 'sk-[a-zA-Z0-9]{20,}' "$file" 2>/dev/null; then
+                rel="${file#$VAULT_PATH/}"
+                [[ ! " ${PRIVACY_FILES[*]} " =~ " ${rel} " ]] && PRIVACY_FILES+=("$rel")
             fi
         fi
-    done < <(find "$VAULT_PATH" -type f \( -name "*.md" -o -name "*.txt" -o -name "*.json" -o -name "*.yaml" -o -name "*.yml" \) -print0 2>/dev/null || true)
+    done < <(find "$VAULT_PATH" -type f -name "*.md" -print0 2>/dev/null || true)
 
-    if [ ${#PRIVACY_ISSUES[@]} -gt 0 ]; then
+    if [ ${#PRIVACY_FILES[@]} -gt 0 ]; then
         echo
-        warn "Found some things you might want to keep private:"
+        warn "Found potentially sensitive files:"
         echo
-        for issue in "${PRIVACY_ISSUES[@]}"; do
-            printf "    ${YELLOW}%s${NC}\n" "$issue"
+        for f in "${PRIVACY_FILES[@]}"; do
+            printf "    ${YELLOW}%s${NC}\n" "$f"
         done
         echo
-
-        if confirm "Exclude these from syncing?"; then
-            # We'll add to .gitignore later after git is set up
+        if confirm "Exclude these from sync?"; then
             EXCLUDE_PRIVACY=true
-            ok "Will exclude these files from sync"
+            ok "Will exclude these files"
         else
             EXCLUDE_PRIVACY=false
-            ok "Will sync everything"
         fi
     else
         ok "No obvious sensitive files found"
@@ -315,372 +293,274 @@ else
 fi
 
 # =============================================================================
-# Step 4: Git/Sync Setup
+# Git Setup
 # =============================================================================
 
-step "Setting up sync"
+section "Step 4: Setting Up Sync"
 
-echo "  To keep your vault in sync between your Mac and Pi,"
-echo "  we'll set up automatic backups through GitHub."
-echo
-info "This also gives you version history - you can undo"
-info "any changes Ludolph makes to your notes."
+info "Ludolph syncs your vault to your Pi using Git + GitHub."
+info "This gives you:"
+info "  - Automatic backup"
+info "  - Version history (undo any changes)"
+info "  - Sync between Mac and Pi"
 echo
 
 cd "$VAULT_PATH"
 
-# Check if already a git repo
 IS_GIT_REPO=false
 HAS_REMOTE=false
 REMOTE_URL=""
 
 if [ -d ".git" ]; then
     IS_GIT_REPO=true
-    ok "Vault is already tracked with version history"
-
-    # Check for remote
     REMOTE_URL=$(git remote get-url origin 2>/dev/null || true)
-    if [ -n "$REMOTE_URL" ]; then
-        HAS_REMOTE=true
-        ok "Already backed up to: $REMOTE_URL"
-    fi
+    [ -n "$REMOTE_URL" ] && HAS_REMOTE=true
 fi
 
 if $HAS_REMOTE; then
-    # Already set up, just verify we can access it
-    info "Verifying access to GitHub..."
+    ok "Already connected to GitHub: $REMOTE_URL"
+    echo
+    info "Verifying access..."
     if git ls-remote origin &>/dev/null; then
         ok "GitHub access confirmed"
     else
-        err "Can't access the GitHub repository"
-        info "Check your SSH keys or access permissions"
+        err "Cannot access repository. Check your SSH keys."
         exit 1
     fi
 else
-    # Need to set up git/GitHub
-    echo "  Let's back up your vault to GitHub."
-    echo
-
-    if ! confirm "Set up GitHub backup?"; then
-        echo
-        info "You can set this up manually later."
-        info "Run: git init && git remote add origin <your-repo-url>"
-        err "Sync setup skipped - can't proceed without it"
+    if ! confirm "Set up GitHub sync?"; then
+        err "GitHub sync is required for Ludolph to work"
         exit 1
     fi
 
+    echo
+
     # Initialize git if needed
     if ! $IS_GIT_REPO; then
-        echo
-        info "Setting up version history..."
+        info "Initializing version control..."
         git init -q
-        ok "Version history initialized"
+        ok "Git initialized"
     fi
 
-    # Create default .gitignore
-    GITIGNORE_CONTENT="# Obsidian workspace (changes constantly)
+    # Create .gitignore
+    GITIGNORE="# Obsidian workspace
 .obsidian/workspace.json
 .obsidian/workspace-mobile.json
 .obsidian/workspace.json.bak
-
-# Trash
 .trash/
-
-# System files
 .DS_Store
-Thumbs.db
 "
-
-    # Add privacy exclusions if requested
     if [ "$EXCLUDE_PRIVACY" = true ] && [ ${#PRIVACY_FILES[@]} -gt 0 ]; then
-        GITIGNORE_CONTENT+="
-# Private files (excluded by installer)
+        GITIGNORE+="
+# Excluded by Ludolph installer
 "
-        for file in "${PRIVACY_FILES[@]}"; do
-            GITIGNORE_CONTENT+="$file
+        for f in "${PRIVACY_FILES[@]}"; do
+            GITIGNORE+="$f
 "
         done
     fi
 
-    # Write .gitignore if it doesn't exist or is minimal
-    if [ ! -f ".gitignore" ] || [ "$(wc -l < .gitignore)" -lt 5 ]; then
-        echo "$GITIGNORE_CONTENT" > .gitignore
-        ok "Created .gitignore"
-    else
-        # Append privacy exclusions to existing .gitignore
-        if [ "$EXCLUDE_PRIVACY" = true ] && [ ${#PRIVACY_FILES[@]} -gt 0 ]; then
-            echo "" >> .gitignore
-            echo "# Private files (excluded by Ludolph installer)" >> .gitignore
-            for file in "${PRIVACY_FILES[@]}"; do
-                echo "$file" >> .gitignore
-            done
-            ok "Added privacy exclusions to .gitignore"
-        fi
-    fi
+    echo "$GITIGNORE" > .gitignore
+    ok "Created .gitignore"
 
-    # Try using gh CLI first
+    # Try gh CLI
     if command -v gh &>/dev/null; then
         echo
-        info "Using GitHub CLI to create repository..."
-
-        # Get vault folder name for repo name
-        VAULT_NAME=$(basename "$VAULT_PATH")
-        REPO_NAME="${VAULT_NAME// /-}"
-        REPO_NAME=$(echo "$REPO_NAME" | tr '[:upper:]' '[:lower:]')
+        VAULT_NAME=$(basename "$VAULT_PATH" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
+        REPO_NAME=$(ask "Repository name:" "$VAULT_NAME")
 
         echo
-        REPO_NAME=$(prompt_input "Repository name" "$REPO_NAME")
-
-        echo
-        info "Creating private repository on GitHub..."
-
+        info "Creating private repository..."
         if gh repo create "$REPO_NAME" --private --source=. --remote=origin 2>/dev/null; then
-            ok "Created private repository: $REPO_NAME"
+            ok "Created: github.com/$(gh api user -q .login)/$REPO_NAME"
             HAS_REMOTE=true
-            REMOTE_URL=$(git remote get-url origin 2>/dev/null || true)
         else
-            warn "Couldn't create repository automatically"
+            warn "Could not create automatically"
             info "You may need to run: gh auth login"
         fi
     fi
 
-    # Manual setup if gh didn't work
+    # Manual fallback
     if ! $HAS_REMOTE; then
         echo
-        echo "  Let's set up GitHub manually:"
+        info "Create a new private repository at github.com/new"
+        info "Then paste the SSH URL (git@github.com:...)"
         echo
-        echo "  1. Go to ${CYAN}github.com/new${NC}"
-        echo "  2. Name it something like ${CYAN}my-vault${NC}"
-        echo "  3. Make sure ${BOLD}Private${NC} is selected"
-        echo "  4. Click ${CYAN}Create repository${NC}"
-        echo "  5. Copy the SSH URL (starts with git@github.com)"
-        echo
-
-        REMOTE_URL=$(prompt_input "Paste the URL here" "")
+        REMOTE_URL=$(ask "Repository URL:")
 
         if [ -z "$REMOTE_URL" ]; then
-            err "No repository URL provided"
+            err "Repository URL required"
             exit 1
         fi
 
         git remote add origin "$REMOTE_URL" 2>/dev/null || git remote set-url origin "$REMOTE_URL"
-        ok "Connected to: $REMOTE_URL"
+        ok "Remote configured"
         HAS_REMOTE=true
     fi
 
     # Initial commit and push
     echo
-    info "Uploading your vault to GitHub..."
-
+    info "Pushing to GitHub..."
     git add -A
-    git commit -m "Initial commit from Ludolph installer" -q 2>/dev/null || true
+    git commit -m "Initial commit" -q 2>/dev/null || true
+    BRANCH=$(git branch --show-current 2>/dev/null || echo "main")
 
-    # Get default branch name
-    DEFAULT_BRANCH=$(git branch --show-current 2>/dev/null || echo "main")
-
-    if git push -u origin "$DEFAULT_BRANCH" 2>/dev/null; then
-        ok "Vault backed up to GitHub"
+    if git push -u origin "$BRANCH" 2>/dev/null; then
+        ok "Vault pushed to GitHub"
     else
-        err "Couldn't push to GitHub"
-        info "Check your SSH keys: ssh -T git@github.com"
-        info "Or set up a personal access token"
+        err "Push failed. Check your SSH keys: ssh -T git@github.com"
         exit 1
     fi
 fi
 
 # =============================================================================
-# Step 5: Connect to Pi
+# Connect to Pi
 # =============================================================================
 
-step "Connecting to your Pi"
+section "Step 5: Connecting to Your Pi"
 
 if $IS_PI; then
-    # We're running ON the Pi, skip SSH
-    ok "Already on Pi - skipping remote setup"
+    ok "Running on Pi - no remote connection needed"
     PI_HOST="localhost"
     PI_USER="$USER"
 else
-    echo "  What's your Pi's address?"
-    info "(The hostname or IP you use to connect)"
+    info "Make sure your Pi is:"
+    info "  - Powered on and connected to the network"
+    info "  - SSH enabled"
+    info "  - Accessible via Tailscale (recommended) or local network"
     echo
 
-    # Try to detect Pi on network
+    # Try to detect Pi
     PI_DETECTED=""
-    for host in "raspberrypi.local" "pi.local"; do
-        if ping -c 1 -W 1 "$host" &>/dev/null; then
+    for host in "pi" "raspberrypi" "pi.local" "raspberrypi.local"; do
+        if ping -c 1 -W 1 "$host" &>/dev/null 2>&1; then
             PI_DETECTED="$host"
             break
         fi
     done
 
-    PI_HOST=$(prompt_input "" "${PI_DETECTED:-pi.local}")
-    PI_USER=$(prompt_input "SSH username" "pi")
+    PI_HOST=$(ask "Pi hostname or IP:" "${PI_DETECTED:-pi.local}")
+    PI_USER=$(ask "SSH username:" "pi")
 
     echo
-    info "Testing connection to $PI_USER@$PI_HOST..."
+    info "Testing SSH connection..."
 
-    if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "$PI_USER@$PI_HOST" "echo connected" &>/dev/null; then
-        err "Couldn't connect to $PI_USER@$PI_HOST"
+    if ssh -o ConnectTimeout=5 -o BatchMode=yes "$PI_USER@$PI_HOST" "echo ok" &>/dev/null; then
+        ok "Connected to $PI_USER@$PI_HOST"
+    else
         echo
-        echo "  Make sure:"
-        echo "    1. Your Pi is powered on and connected to the network"
-        echo "    2. SSH is enabled on the Pi"
-        echo "    3. You have SSH key access set up"
+        err "Could not connect to $PI_USER@$PI_HOST"
         echo
-        echo "  To set up SSH keys, run:"
-        printf "    ${CYAN}ssh-copy-id %s@%s${NC}\n" "$PI_USER" "$PI_HOST"
+        info "Troubleshooting:"
+        info "  1. Verify Pi is on: ping $PI_HOST"
+        info "  2. Set up SSH keys: ssh-copy-id $PI_USER@$PI_HOST"
+        info "  3. Test manually: ssh $PI_USER@$PI_HOST"
         echo
-        echo "  If using Tailscale, make sure it's running on both devices."
         exit 1
     fi
-
-    ok "Connected to $PI_USER@$PI_HOST"
 fi
 
 # =============================================================================
-# Step 6: Deploy to Pi
+# Deploy to Pi
 # =============================================================================
 
-step "Setting up your Pi"
+section "Step 6: Installing on Pi"
 
-# Resolve version
+# Get version
 if [ -z "$VERSION" ]; then
+    info "Fetching latest version..."
     VERSION=$(curl -sSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | grep '"tag_name"' | cut -d'"' -f4 || true)
     if [ -z "$VERSION" ]; then
-        err "Couldn't fetch latest version"
+        err "Could not fetch version"
         exit 1
     fi
 fi
+ok "Version: $VERSION"
 
 if $IS_PI; then
-    # Local installation (on Pi)
+    # Local install
     PI_INSTALL_DIR="$LOCAL_DIR/bin"
     PI_VAULT_PATH="$VAULT_PATH"
 
     mkdir -p "$PI_INSTALL_DIR"
-
-    info "Downloading Ludolph $VERSION..."
+    info "Downloading..."
     DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/lu-$TARGET"
-
-    if ! curl -fsSL "$DOWNLOAD_URL" -o "$PI_INSTALL_DIR/lu" 2>/dev/null; then
-        err "Download failed"
-        exit 1
-    fi
+    curl -fsSL "$DOWNLOAD_URL" -o "$PI_INSTALL_DIR/lu" 2>/dev/null
     chmod +x "$PI_INSTALL_DIR/lu"
-    ok "Installed Ludolph"
-
+    ok "Installed lu binary"
 else
-    # Remote installation (from Mac to Pi)
+    # Remote install
     PI_TARGET="aarch64-unknown-linux-gnu"
     PI_DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/lu-$PI_TARGET"
-    PI_INSTALL_DIR="\$HOME/.ludolph/bin"
-    PI_VAULT_PATH="\$HOME/vault"
+    REMOTE_URL=$(git remote get-url origin 2>/dev/null || true)
 
     info "Installing Ludolph on Pi..."
-
-    ssh "$PI_USER@$PI_HOST" bash -s << REMOTE_INSTALL
+    ssh "$PI_USER@$PI_HOST" bash -s <<EOF
 set -e
 mkdir -p ~/.ludolph/bin
 curl -fsSL "$PI_DOWNLOAD_URL" -o ~/.ludolph/bin/lu 2>/dev/null
 chmod +x ~/.ludolph/bin/lu
+grep -q '.ludolph/bin' ~/.bashrc 2>/dev/null || echo 'export PATH="\$HOME/.ludolph/bin:\$PATH"' >> ~/.bashrc
+grep -q '.ludolph/bin' ~/.profile 2>/dev/null || echo 'export PATH="\$HOME/.ludolph/bin:\$PATH"' >> ~/.profile
+EOF
+    ok "Installed lu binary"
 
-# Add to PATH if not already
-if ! grep -q '.ludolph/bin' ~/.bashrc 2>/dev/null; then
-    echo 'export PATH="\$HOME/.ludolph/bin:\$PATH"' >> ~/.bashrc
-fi
-if ! grep -q '.ludolph/bin' ~/.profile 2>/dev/null; then
-    echo 'export PATH="\$HOME/.ludolph/bin:\$PATH"' >> ~/.profile
-fi
-REMOTE_INSTALL
-
-    ok "Installed Ludolph"
-
-    # Clone vault to Pi
-    info "Syncing your vault to Pi..."
-
-    REMOTE_URL_ESCAPED="${REMOTE_URL//\"/\\\"}"
-
-    ssh "$PI_USER@$PI_HOST" bash -s << REMOTE_CLONE
+    info "Cloning vault to Pi..."
+    ssh "$PI_USER@$PI_HOST" bash -s <<EOF
 set -e
 if [ -d ~/vault ]; then
-    cd ~/vault
-    git pull origin 2>/dev/null || true
+    cd ~/vault && git pull origin 2>/dev/null || true
 else
-    git clone "$REMOTE_URL_ESCAPED" ~/vault 2>/dev/null
+    git clone "$REMOTE_URL" ~/vault 2>/dev/null
 fi
-REMOTE_CLONE
+EOF
+    ok "Vault synced"
 
-    ok "Synced your vault"
-
-    # Set up sync cron job
-    info "Setting up automatic sync..."
-
-    ssh "$PI_USER@$PI_HOST" bash -s << REMOTE_CRON
-set -e
-# Remove any existing ludolph sync job
-(crontab -l 2>/dev/null | grep -v 'ludolph vault sync' || true) | crontab -
-
-# Add new sync job (every 5 minutes)
-(crontab -l 2>/dev/null || true; echo "*/5 * * * * cd ~/vault && git pull origin 2>/dev/null # ludolph vault sync") | crontab -
-REMOTE_CRON
-
-    ok "Automatic sync enabled (every 5 minutes)"
+    info "Setting up auto-sync (every 5 minutes)..."
+    ssh "$PI_USER@$PI_HOST" bash -s <<'EOF'
+(crontab -l 2>/dev/null | grep -v 'ludolph sync' || true) | crontab -
+(crontab -l 2>/dev/null || true; echo "*/5 * * * * cd ~/vault && git pull origin 2>/dev/null # ludolph sync") | crontab -
+EOF
+    ok "Auto-sync enabled"
 
     PI_VAULT_PATH="~/vault"
 fi
 
 # =============================================================================
-# Step 7: API Credentials
+# API Credentials
 # =============================================================================
 
-step "Almost there!"
+section "Step 7: API Keys"
 
-echo "  Just need two API keys to power your bot."
+info "Ludolph needs two API keys to work:"
+echo
+info "  1. Telegram Bot Token - creates your bot"
+info "     Get one from @BotFather: t.me/BotFather"
+echo
+info "  2. Claude API Key - powers the AI"
+info "     Get one from: console.anthropic.com"
 echo
 
-# Telegram token
-echo "  1. ${BOLD}Telegram Bot Token${NC}"
-info "   Create one at t.me/BotFather (takes 2 minutes)"
-echo
-TELEGRAM_TOKEN=$(prompt_secret "")
+pause
 
-if [ -z "$TELEGRAM_TOKEN" ]; then
-    err "Telegram token is required"
-    exit 1
-fi
+TELEGRAM_TOKEN=$(ask_secret "Telegram Bot Token:")
+[ -z "$TELEGRAM_TOKEN" ] && { err "Token required"; exit 1; }
 
 echo
-# Telegram user ID
-echo "  2. ${BOLD}Your Telegram User ID${NC}"
-info "   Get it from t.me/userinfobot"
-echo
-TELEGRAM_USER_ID=$(prompt_input "")
-
-if [ -z "$TELEGRAM_USER_ID" ]; then
-    err "User ID is required"
-    exit 1
-fi
+TELEGRAM_USER_ID=$(ask "Your Telegram User ID (get from @userinfobot):")
+[ -z "$TELEGRAM_USER_ID" ] && { err "User ID required"; exit 1; }
 
 echo
-# Claude API key
-echo "  3. ${BOLD}Claude API Key${NC}"
-info "   Get one at console.anthropic.com"
-echo
-CLAUDE_API_KEY=$(prompt_secret "")
-
-if [ -z "$CLAUDE_API_KEY" ]; then
-    err "Claude API key is required"
-    exit 1
-fi
+CLAUDE_API_KEY=$(ask_secret "Claude API Key:")
+[ -z "$CLAUDE_API_KEY" ] && { err "API key required"; exit 1; }
 
 # =============================================================================
-# Step 8: Configure and Start
+# Configure and Start
 # =============================================================================
 
-step "Configuring Ludolph"
+section "Step 8: Starting Ludolph"
 
-# Create config
-CONFIG_CONTENT="[telegram]
+CONFIG="[telegram]
 bot_token = \"$TELEGRAM_TOKEN\"
 allowed_users = [$TELEGRAM_USER_ID]
 
@@ -693,28 +573,27 @@ path = \"$PI_VAULT_PATH\"
 "
 
 if $IS_PI; then
-    # Local config (running directly on Pi)
     mkdir -p "$LOCAL_DIR"
-    echo "$CONFIG_CONTENT" > "$LOCAL_DIR/config.toml"
+    echo "$CONFIG" > "$LOCAL_DIR/config.toml"
     ok "Configuration saved"
-else
-    # Remote config
-    CONFIG_ESCAPED="${CONFIG_CONTENT//\"/\\\"}"
-    CONFIG_ESCAPED="${CONFIG_ESCAPED//$'\n'/\\n}"
 
-    ssh "$PI_USER@$PI_HOST" bash -s << REMOTE_CONFIG
-set -e
+    info "Starting bot..."
+    nohup "$LOCAL_DIR/bin/lu" > "$LOCAL_DIR/ludolph.log" 2>&1 &
+    sleep 2
+    pgrep -f 'ludolph/bin/lu' >/dev/null && ok "Bot is running" || warn "Check ~/.ludolph/ludolph.log"
+else
+    info "Saving configuration..."
+    ssh "$PI_USER@$PI_HOST" bash -s <<EOF
 mkdir -p ~/.ludolph
 cat > ~/.ludolph/config.toml << 'CONFIGEOF'
-$CONFIG_CONTENT
+$CONFIG
 CONFIGEOF
-REMOTE_CONFIG
-
+EOF
     ok "Configuration saved on Pi"
 
-    # Also save local config for Mac-side tools
+    # Save local config too
     mkdir -p "$LOCAL_DIR"
-    cat > "$LOCAL_DIR/config.toml" << LOCALCONFIG
+    cat > "$LOCAL_DIR/config.toml" <<EOF
 [telegram]
 bot_token = "$TELEGRAM_TOKEN"
 allowed_users = [$TELEGRAM_USER_ID]
@@ -729,62 +608,42 @@ path = "$VAULT_PATH"
 [pi]
 host = "$PI_HOST"
 user = "$PI_USER"
-LOCALCONFIG
-fi
+EOF
 
-# Start the bot
-echo
-info "Starting your bot..."
-
-if $IS_PI; then
-    # Start locally
-    nohup "$PI_INSTALL_DIR/lu" > "$LOCAL_DIR/ludolph.log" 2>&1 &
-    sleep 2
-
-    if pgrep -f "ludolph/bin/lu" >/dev/null; then
-        ok "Bot is running"
-    else
-        warn "Bot may not have started - check ~/.ludolph/ludolph.log"
-    fi
-else
-    # Start on Pi
-    ssh "$PI_USER@$PI_HOST" bash -s << REMOTE_START
-set -e
-# Kill any existing instance
+    info "Starting bot on Pi..."
+    ssh "$PI_USER@$PI_HOST" bash -s <<'EOF'
 pkill -f 'ludolph/bin/lu' 2>/dev/null || true
-
-# Start the bot
-export PATH="\$HOME/.ludolph/bin:\$PATH"
+export PATH="$HOME/.ludolph/bin:$PATH"
 nohup ~/.ludolph/bin/lu > ~/.ludolph/ludolph.log 2>&1 &
-
 sleep 2
-if pgrep -f 'ludolph/bin/lu' >/dev/null; then
-    echo "started"
-fi
-REMOTE_START
-
-    ok "Bot is running on Pi"
+pgrep -f 'ludolph/bin/lu' >/dev/null && echo "running"
+EOF
+    ok "Bot is running"
 fi
 
 # =============================================================================
-# Done!
+# Done
 # =============================================================================
 
-step "You're all set!"
+section "Setup Complete!"
 
-# Get bot username from token
+# Get bot username
 BOT_INFO=$(curl -s "https://api.telegram.org/bot$TELEGRAM_TOKEN/getMe" 2>/dev/null || true)
 BOT_USERNAME=$(echo "$BOT_INFO" | grep -o '"username":"[^"]*"' | cut -d'"' -f4 || echo "your bot")
 
-echo "  Open Telegram and message ${CYAN}@$BOT_USERNAME${NC}"
-echo "  Your vault is ready to talk."
 echo
-info "Useful commands:"
+printf "  Open Telegram and message ${CYAN}@%s${NC}\n" "$BOT_USERNAME"
+echo
+info "Your vault is ready to talk."
+echo
+rule
+echo
+info "Helpful commands:"
 if $IS_PI; then
-    info "  lu          - Restart the bot"
-    info "  lu status   - Check bot status"
+    info "  lu          Start the bot"
+    info "  lu status   Check bot status"
 else
-    info "  ssh $PI_USER@$PI_HOST '~/.ludolph/bin/lu'  - Restart the bot"
+    info "  ssh $PI_USER@$PI_HOST   Connect to your Pi"
 fi
-info "  git commit  - In your vault, save changes to sync"
+info "  git commit  Save vault changes (in your vault folder)"
 echo
