@@ -70,7 +70,7 @@ Use the SSH alias `pi` (configured via `lu setup`):
 ssh pi "source ~/.cargo/env && cd ~/ludolph && git pull origin develop && cargo build --release"
 ```
 
-Note: ARM release builds can take 10-20 minutes.
+Note: First build on Pi takes 10-20 minutes (compiling all dependencies). Incremental builds are much faster.
 
 If build succeeds, verify binary:
 
