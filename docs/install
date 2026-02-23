@@ -338,11 +338,10 @@ fi
 
 section "Step 4: Setting Up Sync"
 
-info "Ludolph syncs your vault to your Pi using Git + GitHub."
-info "This gives you:"
-info "  - Automatic backup"
-info "  - Version history (undo any changes)"
-info "  - Sync between Mac and Pi"
+info "Ludolph uses Git + GitHub for two-way sync:"
+info "  - Your edits on Mac → Pi (within minutes)"
+info "  - Claude's edits on Pi → Mac (within minutes)"
+info "  - Full version history (undo any change)"
 echo
 
 cd "$VAULT_PATH"
@@ -350,11 +349,22 @@ cd "$VAULT_PATH"
 IS_GIT_REPO=false
 HAS_REMOTE=false
 REMOTE_URL=""
+GIT_ROOT=""
+VAULT_SUBDIR=""
 
-if [ -d ".git" ]; then
+# Check if we're inside a git repo (even if not at root)
+if git rev-parse --is-inside-work-tree &>/dev/null; then
     IS_GIT_REPO=true
+    GIT_ROOT=$(git rev-parse --show-toplevel)
     REMOTE_URL=$(git remote get-url origin 2>/dev/null || true)
     [ -n "$REMOTE_URL" ] && HAS_REMOTE=true
+
+    # Check if vault is a subdirectory of the repo
+    if [ "$GIT_ROOT" != "$VAULT_PATH" ]; then
+        VAULT_SUBDIR="${VAULT_PATH#$GIT_ROOT/}"
+        ok "Vault is inside git repo: $GIT_ROOT"
+        info "Vault subdirectory: $VAULT_SUBDIR"
+    fi
 fi
 
 if $HAS_REMOTE; then
@@ -379,10 +389,14 @@ else
     if ! $IS_GIT_REPO; then
         info "Initializing version control..."
         git init -q
+        GIT_ROOT="$VAULT_PATH"
         ok "Git initialized"
     fi
 
-    # Create .gitignore
+    # Create .gitignore (at git root or vault path)
+    GITIGNORE_PATH="$VAULT_PATH/.gitignore"
+    [ -n "$VAULT_SUBDIR" ] && GITIGNORE_PATH="$GIT_ROOT/.gitignore"
+
     GITIGNORE="# Obsidian workspace
 .obsidian/workspace.json
 .obsidian/workspace-mobile.json
@@ -395,13 +409,23 @@ else
 # Excluded by Ludolph installer
 "
         for f in "${PRIVACY_FILES[@]}"; do
+            # Prefix with vault subdir if needed
+            [ -n "$VAULT_SUBDIR" ] && f="$VAULT_SUBDIR/$f"
             GITIGNORE+="$f
 "
         done
     fi
 
-    echo "$GITIGNORE" > .gitignore
-    ok "Created .gitignore"
+    # Append to existing .gitignore or create new
+    if [ -f "$GITIGNORE_PATH" ]; then
+        echo "" >> "$GITIGNORE_PATH"
+        echo "# Added by Ludolph installer" >> "$GITIGNORE_PATH"
+        echo "$GITIGNORE" >> "$GITIGNORE_PATH"
+        ok "Updated .gitignore"
+    else
+        echo "$GITIGNORE" > "$GITIGNORE_PATH"
+        ok "Created .gitignore"
+    fi
 
     # Try gh CLI
     if command -v gh &>/dev/null; then
@@ -545,25 +569,32 @@ grep -q '.ludolph/bin' ~/.profile 2>/dev/null || echo 'export PATH="\$HOME/.ludo
 EOF
     ok "Installed lu binary"
 
-    info "Cloning vault to Pi..."
+    # Clone repo to Pi
+    info "Cloning repository to Pi..."
+    PI_REPO_DIR="repo"
+    [ -n "$VAULT_SUBDIR" ] && PI_VAULT_PATH="~/repo/$VAULT_SUBDIR" || PI_VAULT_PATH="~/repo"
+
     ssh "$PI_USER@$PI_HOST" bash -s <<EOF
 set -e
-if [ -d ~/vault ]; then
-    cd ~/vault && git pull origin 2>/dev/null || true
+if [ -d ~/repo ]; then
+    cd ~/repo && git pull origin 2>/dev/null || true
 else
-    git clone "$REMOTE_URL" ~/vault 2>/dev/null
+    git clone "$REMOTE_URL" ~/repo 2>/dev/null
 fi
+# Configure git for commits
+git config --global user.email "ludolph@pi.local" 2>/dev/null || true
+git config --global user.name "Ludolph" 2>/dev/null || true
 EOF
-    ok "Vault synced"
+    ok "Repository synced"
 
-    info "Setting up auto-sync (every 5 minutes)..."
+    # Set up bidirectional sync
+    info "Setting up auto-sync..."
     ssh "$PI_USER@$PI_HOST" bash -s <<'EOF'
 (crontab -l 2>/dev/null | grep -v 'ludolph sync' || true) | crontab -
-(crontab -l 2>/dev/null || true; echo "*/5 * * * * cd ~/vault && git pull origin 2>/dev/null # ludolph sync") | crontab -
+# Pull changes from Mac, then push any local changes
+(crontab -l 2>/dev/null || true; echo "*/5 * * * * cd ~/repo && git pull origin 2>/dev/null && git add -A && git diff --quiet --cached || git commit -m 'Auto-sync from Pi' && git push origin 2>/dev/null # ludolph sync") | crontab -
 EOF
-    ok "Auto-sync enabled"
-
-    PI_VAULT_PATH="~/vault"
+    ok "Bidirectional sync enabled (every 5 minutes)"
 fi
 
 # =============================================================================
