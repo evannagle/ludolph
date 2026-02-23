@@ -275,8 +275,8 @@ if confirm "Scan for sensitive files? (API keys, passwords, etc.)"; then
 
         EXCLUDED_FILES=()
         for f in "${PRIVACY_FILES[@]}"; do
-            printf "    ${RED}%s${NC}\n" "$f"
-            if confirm "    Exclude this file?"; then
+            printf "    ${RED}• %s${NC}\n" "$f"
+            if confirm "      Exclude this file?"; then
                 EXCLUDED_FILES+=("$f")
             fi
             echo
