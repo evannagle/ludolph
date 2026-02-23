@@ -557,7 +557,7 @@ else
     PI_DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/lu-$PI_TARGET"
     REMOTE_URL=$(git remote get-url origin 2>/dev/null || true)
 
-    info "Installing Ludolph on Pi..."
+    spinner_start "Installing Ludolph on Pi..."
     ssh "$PI_USER@$PI_HOST" bash -s <<EOF
 set -e
 mkdir -p ~/.ludolph/bin
@@ -566,13 +566,12 @@ chmod +x ~/.ludolph/bin/lu
 grep -q '.ludolph/bin' ~/.bashrc 2>/dev/null || echo 'export PATH="\$HOME/.ludolph/bin:\$PATH"' >> ~/.bashrc
 grep -q '.ludolph/bin' ~/.profile 2>/dev/null || echo 'export PATH="\$HOME/.ludolph/bin:\$PATH"' >> ~/.profile
 EOF
-    ok "Installed lu binary"
+    spinner_stop "ok" "Installed lu binary"
 
     # Clone repo to Pi
-    info "Cloning repository to Pi..."
-    PI_REPO_DIR="repo"
     [ -n "$VAULT_SUBDIR" ] && PI_VAULT_PATH="~/repo/$VAULT_SUBDIR" || PI_VAULT_PATH="~/repo"
 
+    spinner_start "Syncing repository to Pi..."
     ssh "$PI_USER@$PI_HOST" bash -s <<EOF
 set -e
 if [ -d ~/repo ]; then
@@ -584,16 +583,16 @@ fi
 git config --global user.email "ludolph@pi.local" 2>/dev/null || true
 git config --global user.name "Ludolph" 2>/dev/null || true
 EOF
-    ok "Repository synced"
+    spinner_stop "ok" "Repository synced"
 
     # Set up bidirectional sync
-    info "Setting up auto-sync..."
+    spinner_start "Setting up auto-sync..."
     ssh "$PI_USER@$PI_HOST" bash -s <<'EOF'
 (crontab -l 2>/dev/null | grep -v 'ludolph sync' || true) | crontab -
 # Pull changes from Mac, then push any local changes
 (crontab -l 2>/dev/null || true; echo "*/5 * * * * cd ~/repo && git pull origin 2>/dev/null && git add -A && git diff --quiet --cached || git commit -m 'Auto-sync from Pi' && git push origin 2>/dev/null # ludolph sync") | crontab -
 EOF
-    ok "Bidirectional sync enabled (every 5 minutes)"
+    spinner_stop "ok" "Auto-sync enabled (every 5 minutes)"
 fi
 
 # =============================================================================
@@ -643,24 +642,27 @@ path = \"$PI_VAULT_PATH\"
 "
 
 if $IS_PI; then
+    spinner_start "Saving configuration..."
     mkdir -p "$LOCAL_DIR"
     echo "$CONFIG" > "$LOCAL_DIR/config.toml"
-    ok "Configuration saved"
+    spinner_stop "ok" "Configuration saved"
 
-    info "Starting bot..."
+    spinner_start "Starting bot..."
     nohup "$LOCAL_DIR/bin/lu" > "$LOCAL_DIR/ludolph.log" 2>&1 &
     sleep 2
-    pgrep -f 'ludolph/bin/lu' >/dev/null && ok "Bot is running" || warn "Check ~/.ludolph/ludolph.log"
+    if pgrep -f 'ludolph/bin/lu' >/dev/null; then
+        spinner_stop "ok" "Bot is running"
+    else
+        spinner_stop "warn" "Check ~/.ludolph/ludolph.log"
+    fi
 else
-    info "Saving configuration..."
+    spinner_start "Saving configuration..."
     ssh "$PI_USER@$PI_HOST" bash -s <<EOF
 mkdir -p ~/.ludolph
 cat > ~/.ludolph/config.toml << 'CONFIGEOF'
 $CONFIG
 CONFIGEOF
 EOF
-    ok "Configuration saved on Pi"
-
     # Save local config too
     mkdir -p "$LOCAL_DIR"
     cat > "$LOCAL_DIR/config.toml" <<EOF
@@ -679,15 +681,22 @@ path = "$VAULT_PATH"
 host = "$PI_HOST"
 user = "$PI_USER"
 EOF
+    spinner_stop "ok" "Configuration saved"
 
-    info "Starting bot on Pi..."
-    ssh "$PI_USER@$PI_HOST" bash -s <<'EOF'
+    spinner_start "Starting bot on Pi..."
+    BOT_STARTED=$(ssh "$PI_USER@$PI_HOST" bash -s <<'EOF'
 pkill -f 'ludolph/bin/lu' 2>/dev/null || true
 export PATH="$HOME/.ludolph/bin:$PATH"
 nohup ~/.ludolph/bin/lu > ~/.ludolph/ludolph.log 2>&1 &
 sleep 2
 pgrep -f 'ludolph/bin/lu' >/dev/null && echo "running"
 EOF
+)
+    if [ "$BOT_STARTED" = "running" ]; then
+        spinner_stop "ok" "Bot is running"
+    else
+        spinner_stop "warn" "Bot may not have started"
+    fi
     ok "Bot is running"
 fi
 
