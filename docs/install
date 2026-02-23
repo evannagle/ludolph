@@ -23,22 +23,18 @@ err() { printf "  ${RED}[•!!]${NC} %s\n" "$1"; }
 warn() { printf "  ${YELLOW}[•--]${NC} %s\n" "$1"; }
 info() { printf "  ${DIM}%s${NC}\n" "$1"; }
 
-# Pi-digit spinner (like the Rust version)
-PI_DIGITS="31415926535897932384626433832795028841971"
-SPINNER_POS=0
+# Bouncing ball spinner (matches Rust version)
 SPINNER_PID=""
 
 spinner_start() {
     local msg="$1"
     (
+        local frames=("*  " " * " "  *" " * ")
+        local i=0
         while true; do
-            for i in $(seq 0 4); do
-                local digits="${PI_DIGITS:$((SPINNER_POS + i)):5}"
-                [ ${#digits} -lt 5 ] && digits="${digits}${PI_DIGITS:0:$((5 - ${#digits}))}"
-                printf "\r  ${DIM}[%s]${NC} %s" "$digits" "$msg"
-                sleep 0.15
-                SPINNER_POS=$(( (SPINNER_POS + 1) % ${#PI_DIGITS} ))
-            done
+            printf "\r  [%s] %s" "${frames[$i]}" "$msg"
+            i=$(( (i + 1) % 4 ))
+            sleep 0.2
         done
     ) &
     SPINNER_PID=$!
