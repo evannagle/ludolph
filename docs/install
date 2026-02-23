@@ -424,20 +424,77 @@ fi
 if ! $IS_PI; then
     section "Step 6: Copying Vault to Pi"
 
-    spinner_start "Copying vault to Pi..."
+    # Show vault info
+    VAULT_SIZE=$(du -sh "$VAULT_PATH" 2>/dev/null | cut -f1)
+    FILE_COUNT=$(find "$VAULT_PATH" -type f 2>/dev/null | wc -l | tr -d ' ')
+    info "Vault: $VAULT_PATH"
+    info "Size: $VAULT_SIZE ($FILE_COUNT files)"
+    echo
 
-    # Create vault directory on Pi
-    ssh "$PI_USER@$PI_HOST" "mkdir -p ~/vault"
+    # Check if vault is in a git repo with a remote
+    cd "$VAULT_PATH"
+    HAS_GIT_REMOTE=false
+    GIT_REMOTE_URL=""
 
-    # rsync vault to Pi
-    rsync -az --delete \
-        --exclude='.obsidian/workspace.json' \
-        --exclude='.obsidian/workspace-mobile.json' \
-        --exclude='.trash' \
-        --exclude='.DS_Store' \
-        "$VAULT_PATH/" "$PI_USER@$PI_HOST:~/vault/"
+    spinner_start "Checking for git repository..."
+    if git rev-parse --is-inside-work-tree &>/dev/null; then
+        GIT_REMOTE_URL=$(git remote get-url origin 2>/dev/null || true)
+        if [ -n "$GIT_REMOTE_URL" ]; then
+            HAS_GIT_REMOTE=true
+            spinner_stop "ok" "Git remote: $GIT_REMOTE_URL"
+        else
+            spinner_stop "ok" "Git repo found (no remote)"
+        fi
+    else
+        spinner_stop "ok" "No git repo (will use rsync)"
+    fi
 
-    spinner_stop "ok" "Vault copied to Pi"
+    if $HAS_GIT_REMOTE; then
+        # Get the subdirectory if vault is not at repo root
+        GIT_ROOT=$(git rev-parse --show-toplevel)
+        if [ "$GIT_ROOT" != "$VAULT_PATH" ]; then
+            VAULT_SUBDIR="${VAULT_PATH#$GIT_ROOT/}"
+            PI_VAULT_PATH="~/repo/$VAULT_SUBDIR"
+            ok "Vault is subdirectory: $VAULT_SUBDIR"
+        else
+            VAULT_SUBDIR=""
+            PI_VAULT_PATH="~/repo"
+        fi
+
+        # Check if repo exists on Pi
+        spinner_start "Checking Pi for existing repo..."
+        PI_HAS_REPO=$(ssh "$PI_USER@$PI_HOST" "[ -d ~/repo/.git ] && echo yes || echo no")
+
+        if [ "$PI_HAS_REPO" = "yes" ]; then
+            spinner_stop "ok" "Repo exists on Pi - will pull updates"
+
+            spinner_start "Pulling latest changes..."
+            ssh "$PI_USER@$PI_HOST" "cd ~/repo && git pull origin" &>/dev/null
+            spinner_stop "ok" "Pulled latest changes"
+        else
+            spinner_stop "ok" "No existing repo - will clone"
+
+            spinner_start "Cloning repository to Pi..."
+            ssh "$PI_USER@$PI_HOST" "git clone '$GIT_REMOTE_URL' ~/repo" &>/dev/null
+            spinner_stop "ok" "Repository cloned"
+        fi
+    else
+        # Fall back to rsync
+        PI_VAULT_PATH="~/vault"
+
+        spinner_start "Creating vault directory on Pi..."
+        ssh "$PI_USER@$PI_HOST" "mkdir -p ~/vault"
+        spinner_stop "ok" "Directory created"
+
+        spinner_start "Copying files to Pi (this may take a while)..."
+        rsync -az --delete \
+            --exclude='.obsidian/workspace.json' \
+            --exclude='.obsidian/workspace-mobile.json' \
+            --exclude='.trash' \
+            --exclude='.DS_Store' \
+            "$VAULT_PATH/" "$PI_USER@$PI_HOST:~/vault/"
+        spinner_stop "ok" "Files copied"
+    fi
 fi
 
 # =============================================================================
