@@ -23,6 +23,43 @@ err() { printf "  ${RED}[•!!]${NC} %s\n" "$1"; }
 warn() { printf "  ${YELLOW}[•--]${NC} %s\n" "$1"; }
 info() { printf "  ${DIM}%s${NC}\n" "$1"; }
 
+# Pi-digit spinner (like the Rust version)
+PI_DIGITS="31415926535897932384626433832795028841971"
+SPINNER_POS=0
+SPINNER_PID=""
+
+spinner_start() {
+    local msg="$1"
+    (
+        while true; do
+            for i in $(seq 0 4); do
+                local digits="${PI_DIGITS:$((SPINNER_POS + i)):5}"
+                [ ${#digits} -lt 5 ] && digits="${digits}${PI_DIGITS:0:$((5 - ${#digits}))}"
+                printf "\r  ${DIM}[%s]${NC} %s" "$digits" "$msg"
+                sleep 0.15
+                SPINNER_POS=$(( (SPINNER_POS + 1) % ${#PI_DIGITS} ))
+            done
+        done
+    ) &
+    SPINNER_PID=$!
+}
+
+spinner_stop() {
+    local status="$1"
+    local msg="$2"
+    [ -n "$SPINNER_PID" ] && kill "$SPINNER_PID" 2>/dev/null
+    wait "$SPINNER_PID" 2>/dev/null || true
+    SPINNER_PID=""
+    printf "\r\033[K"  # Clear line
+    if [ "$status" = "ok" ]; then
+        ok "$msg"
+    elif [ "$status" = "err" ]; then
+        err "$msg"
+    else
+        warn "$msg"
+    fi
+}
+
 # Section header with blank lines
 section() {
     echo
@@ -243,7 +280,7 @@ echo
 
 if confirm "Scan for sensitive files? (API keys, passwords, etc.)"; then
     echo
-    info "Scanning..."
+    spinner_start "Scanning for sensitive files..."
 
     PRIVACY_FILES=()
 
@@ -269,8 +306,7 @@ if confirm "Scan for sensitive files? (API keys, passwords, etc.)"; then
     done < <(find "$VAULT_PATH" -type f -name "*.md" -print0 2>/dev/null || true)
 
     if [ ${#PRIVACY_FILES[@]} -gt 0 ]; then
-        echo
-        err "Found ${#PRIVACY_FILES[@]} potentially sensitive file(s):"
+        spinner_stop "err" "Found ${#PRIVACY_FILES[@]} potentially sensitive file(s):"
         echo
 
         EXCLUDED_FILES=()
@@ -291,7 +327,7 @@ if confirm "Scan for sensitive files? (API keys, passwords, etc.)"; then
             EXCLUDE_PRIVACY=false
         fi
     else
-        ok "No obvious sensitive files found"
+        spinner_stop "ok" "No sensitive files found"
         EXCLUDE_PRIVACY=false
     fi
 else
