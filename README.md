@@ -50,29 +50,42 @@ Grab a [CanaKit Raspberry Pi 5](https://www.canakit.com/raspberry-pi-5.html) or 
 
 Install [Tailscale](https://tailscale.com/) on both the Pi and your main machine so you can reach your Pi from anywhere safely. New to Tailscale? It's free for personal use and takes about [two minutes to set up](https://tailscale.com/kb/1017/install).
 
+On your Pi:
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
 ```
 
-### 3. SSH in and install Ludolph
-
-SSH lets you type commands on your Pi from your own computer. If you've never done it before, don't panic — [it's one command](https://www.raspberrypi.com/documentation/computers/remote-access.html#ssh):
-
+On your Mac:
 ```bash
-ssh pi@your-pi-hostname
+brew install tailscale
 ```
 
-Once you're in, install Ludolph:
+### 3. Run the installer on your Mac
+
+The installer runs on your Mac (where your vault already lives) and handles everything:
 
 ```bash
 curl -sSL https://ludolph.dev/install | bash
 ```
 
-The installer will download the `lu` binary, walk you through `lu setup` to configure your Telegram bot token and Anthropic API key, and validate everything.
+It will:
+- Find your Obsidian vault
+- Optionally scan for sensitive files (API keys, passwords) to exclude
+- Set up automatic backups through GitHub
+- Connect to your Pi and install Ludolph
+- Sync your vault to the Pi
+- Configure the Telegram bot
+
+You'll need two API keys during setup:
+- **Telegram Bot Token** — Create one at [t.me/BotFather](https://t.me/BotFather)
+- **Claude API Key** — Get one at [console.anthropic.com](https://console.anthropic.com)
 
 ### 4. Start talking
 
 Open [Telegram](https://telegram.org/) — a free, cross-platform messaging app that supports bots natively (which is why we use it instead of iMessage or WhatsApp). Message your bot. You're in.
+
+Edit a note on your Mac, and within a few minutes your Pi will have it. Ask Ludolph about your notes from anywhere in the world.
 
 [TODO: ADD DEMO CHAT HERE]
 
