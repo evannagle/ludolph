@@ -29,7 +29,7 @@ SPINNER_PID=""
 spinner_start() {
     local msg="$1"
     (
-        local frames=("*  " " * " "  *" " * ")
+        local frames=("•  " " • " "  •" " • ")
         local i=0
         while true; do
             printf "\r  [%s] %s" "${frames[$i]}" "$msg"
@@ -100,6 +100,7 @@ ask() {
     fi
     printf "  > " >&2
     read -r result
+    echo >&2
 
     # Trim whitespace
     result="${result#"${result%%[![:space:]]*}"}"
@@ -338,10 +339,8 @@ fi
 
 section "Step 4: Setting Up Sync"
 
-info "Ludolph uses Git + GitHub for two-way sync:"
-info "  - Your edits on Mac → Pi (within minutes)"
-info "  - Claude's edits on Pi → Mac (within minutes)"
-info "  - Full version history (undo any change)"
+info "Ludolph uses Git + GitHub for two-way sync."
+info "Your edits sync to Pi, Claude's edits sync back."
 echo
 
 cd "$VAULT_PATH"
@@ -362,19 +361,19 @@ if git rev-parse --is-inside-work-tree &>/dev/null; then
     # Check if vault is a subdirectory of the repo
     if [ "$GIT_ROOT" != "$VAULT_PATH" ]; then
         VAULT_SUBDIR="${VAULT_PATH#$GIT_ROOT/}"
-        ok "Vault is inside git repo: $GIT_ROOT"
-        info "Vault subdirectory: $VAULT_SUBDIR"
+        ok "Git repo: $GIT_ROOT"
+        ok "Vault path: $VAULT_SUBDIR"
     fi
 fi
 
 if $HAS_REMOTE; then
-    ok "Already connected to GitHub: $REMOTE_URL"
-    echo
-    info "Verifying access..."
+    ok "Remote: $REMOTE_URL"
+    spinner_start "Verifying GitHub access..."
     if git ls-remote origin &>/dev/null; then
-        ok "GitHub access confirmed"
+        spinner_stop "ok" "GitHub access confirmed"
     else
-        err "Cannot access repository. Check your SSH keys."
+        spinner_stop "err" "Cannot access repository"
+        info "Check your SSH keys: ssh -T git@github.com"
         exit 1
     fi
 else
@@ -506,14 +505,12 @@ else
     PI_HOST=$(ask "Pi hostname or IP:" "${PI_DETECTED:-pi.local}")
     PI_USER=$(ask "SSH username:" "pi")
 
-    echo
-    info "Testing SSH connection..."
+    spinner_start "Connecting to $PI_USER@$PI_HOST..."
 
     if ssh -o ConnectTimeout=5 -o BatchMode=yes "$PI_USER@$PI_HOST" "echo ok" &>/dev/null; then
-        ok "Connected to $PI_USER@$PI_HOST"
+        spinner_stop "ok" "Connected to $PI_USER@$PI_HOST"
     else
-        echo
-        err "Could not connect to $PI_USER@$PI_HOST"
+        spinner_stop "err" "Could not connect to $PI_USER@$PI_HOST"
         echo
         info "Troubleshooting:"
         info "  1. Verify Pi is on: ping $PI_HOST"
@@ -532,14 +529,16 @@ section "Step 6: Installing on Pi"
 
 # Get version
 if [ -z "$VERSION" ]; then
-    info "Fetching latest version..."
+    spinner_start "Fetching latest version..."
     VERSION=$(curl -sSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | grep '"tag_name"' | cut -d'"' -f4 || true)
     if [ -z "$VERSION" ]; then
-        err "Could not fetch version"
+        spinner_stop "err" "Could not fetch version"
         exit 1
     fi
+    spinner_stop "ok" "Version: $VERSION"
+else
+    ok "Version: $VERSION"
 fi
-ok "Version: $VERSION"
 
 if $IS_PI; then
     # Local install
