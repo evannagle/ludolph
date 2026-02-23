@@ -703,9 +703,9 @@ STIGNORE
     fi
 fi
 
-# Copy .stignore to Pi
+# Copy .stignore to Pi (use correct vault path)
 if ! $IS_PI && [ -f "$VAULT_PATH/.stignore" ]; then
-    scp -q "$VAULT_PATH/.stignore" "$PI_USER@$PI_HOST:~/vault/.stignore"
+    scp -q "$VAULT_PATH/.stignore" "$PI_USER@$PI_HOST:$PI_VAULT_PATH/.stignore"
 fi
 
 spinner_stop "ok" "Sync folder configured"
@@ -766,15 +766,16 @@ if not vault_exists:
 tree.write(config_file)
 PYEOF
 
-    # Configure Pi's Syncthing
-    ssh "$PI_USER@$PI_HOST" python3 - "$MAC_DEVICE_ID" <<'PYEOF'
+    # Configure Pi's Syncthing (pass vault path as argument)
+    # Note: PI_VAULT_PATH uses ~ which expands on Pi via os.path.expanduser
+    ssh "$PI_USER@$PI_HOST" python3 - "$MAC_DEVICE_ID" "$PI_VAULT_PATH" <<'PYEOF'
 import sys
 import xml.etree.ElementTree as ET
 import os
 
 config_file = os.path.expanduser('~/.config/syncthing/config.xml')
 mac_device_id = sys.argv[1]
-vault_path = os.path.expanduser('~/vault')
+vault_path = os.path.expanduser(sys.argv[2])
 
 tree = ET.parse(config_file)
 root = tree.getroot()
