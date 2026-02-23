@@ -7,6 +7,7 @@ set -euo pipefail
 REPO="evannagle/ludolph"
 LOCAL_DIR="${LUDOLPH_DIR:-$HOME/.ludolph}"
 VERSION="${LUDOLPH_VERSION:-}"
+SYNCTHING_VERSION="1.27.2"
 
 # Colors
 GREEN='\033[0;32m'
@@ -23,7 +24,7 @@ err() { printf "  ${RED}[•!!]${NC} %s\n" "$1"; }
 warn() { printf "  ${YELLOW}[•--]${NC} %s\n" "$1"; }
 info() { printf "  ${DIM}%s${NC}\n" "$1"; }
 
-# Bouncing ball spinner (matches Rust version)
+# Bouncing ball spinner
 SPINNER_PID=""
 
 spinner_start() {
@@ -46,7 +47,7 @@ spinner_stop() {
     [ -n "$SPINNER_PID" ] && kill "$SPINNER_PID" 2>/dev/null
     wait "$SPINNER_PID" 2>/dev/null || true
     SPINNER_PID=""
-    printf "\r\033[K"  # Clear line
+    printf "\r\033[K"
     if [ "$status" = "ok" ]; then
         ok "$msg"
     elif [ "$status" = "err" ]; then
@@ -56,7 +57,7 @@ spinner_stop() {
     fi
 }
 
-# Section header with blank lines
+# Section header
 section() {
     echo
     printf "${BOLD}%s${NC}\n" "$1"
@@ -68,14 +69,14 @@ rule() {
     printf "  ${DIM}────────────────────────────────────────${NC}\n"
 }
 
-# Wait for user to press Enter
+# Wait for Enter
 pause() {
     printf "\n  ${DIM}Press Enter to continue...${NC}"
     read -r
     echo
 }
 
-# Ask yes/no, returns 0 for yes
+# Ask yes/no
 confirm() {
     local response
     printf "  %s ${DIM}[Y/n]${NC} " "$1"
@@ -86,7 +87,7 @@ confirm() {
     esac
 }
 
-# Prompt for text input
+# Prompt for input
 ask() {
     local prompt="$1"
     local default="${2:-}"
@@ -102,7 +103,6 @@ ask() {
     read -r result
     echo >&2
 
-    # Trim whitespace
     result="${result#"${result%%[![:space:]]*}"}"
     result="${result%"${result##*[![:space:]]}"}"
 
@@ -110,7 +110,7 @@ ask() {
     printf '%s' "$result"
 }
 
-# Prompt for secret input (hidden)
+# Prompt for secret
 ask_secret() {
     local prompt="$1"
 
@@ -119,7 +119,6 @@ ask_secret() {
     read -rs result
     echo >&2
 
-    # Trim whitespace
     result="${result#"${result%%[![:space:]]*}"}"
     result="${result%"${result##*[![:space:]]}"}"
 
@@ -141,8 +140,9 @@ rule
 echo
 info "This installer will:"
 info "  1. Find your Obsidian vault"
-info "  2. Set up sync to your Raspberry Pi"
-info "  3. Configure the Telegram bot"
+info "  2. Connect to your Raspberry Pi"
+info "  3. Set up real-time sync with Syncthing"
+info "  4. Configure the Telegram bot"
 echo
 
 if ! confirm "Ready to begin?"; then
@@ -227,7 +227,7 @@ for parent in "$HOME/Vaults" "$HOME/Documents/Vaults" "$HOME/Documents/Obsidian"
     if [ -d "$parent" ]; then
         while IFS= read -r -d '' vault; do
             if [ -d "$vault/.obsidian" ]; then
-                VAULT_PATH="$vault"
+                VAULT_PATH="${vault%/.obsidian}"
                 break 2
             fi
         done < <(find "$parent" -maxdepth 2 -type d -name ".obsidian" -print0 2>/dev/null)
@@ -247,10 +247,8 @@ if [ -z "$VAULT_PATH" ]; then
     VAULT_PATH=$(ask "Enter the path to your Obsidian vault:" "$HOME/vault")
 fi
 
-# Expand tilde
 VAULT_PATH="${VAULT_PATH/#\~/$HOME}"
 
-# Validate or create
 if [ ! -d "$VAULT_PATH" ]; then
     echo
     warn "Folder does not exist: $VAULT_PATH"
@@ -271,9 +269,11 @@ fi
 
 section "Step 3: Privacy Check"
 
-info "Your vault will be synced to your Pi via GitHub."
+info "Your vault will be synced to your Pi."
 info "This step checks for files you might want to exclude."
 echo
+
+STIGNORE_ENTRIES=()
 
 if confirm "Scan for sensitive files? (API keys, passwords, etc.)"; then
     echo
@@ -306,181 +306,32 @@ if confirm "Scan for sensitive files? (API keys, passwords, etc.)"; then
         spinner_stop "err" "Found ${#PRIVACY_FILES[@]} potentially sensitive file(s):"
         echo
 
-        EXCLUDED_FILES=()
         for f in "${PRIVACY_FILES[@]}"; do
             printf "    ${RED}• %s${NC}\n" "$f"
             if confirm "      Exclude this file?"; then
-                EXCLUDED_FILES+=("$f")
+                STIGNORE_ENTRIES+=("$f")
             fi
             echo
         done
 
-        if [ ${#EXCLUDED_FILES[@]} -gt 0 ]; then
-            ok "Will exclude ${#EXCLUDED_FILES[@]} file(s)"
-            PRIVACY_FILES=("${EXCLUDED_FILES[@]}")
-            EXCLUDE_PRIVACY=true
+        if [ ${#STIGNORE_ENTRIES[@]} -gt 0 ]; then
+            ok "Will exclude ${#STIGNORE_ENTRIES[@]} file(s) from sync"
         else
             ok "No files excluded"
-            EXCLUDE_PRIVACY=false
         fi
     else
         spinner_stop "ok" "No sensitive files found"
-        EXCLUDE_PRIVACY=false
     fi
 else
     echo
     ok "Skipping privacy scan"
-    EXCLUDE_PRIVACY=false
-fi
-
-# =============================================================================
-# Git Setup
-# =============================================================================
-
-section "Step 4: Setting Up Sync"
-
-info "Ludolph uses Git + GitHub for two-way sync."
-info "Your edits sync to Pi, Claude's edits sync back."
-echo
-
-cd "$VAULT_PATH"
-
-IS_GIT_REPO=false
-HAS_REMOTE=false
-REMOTE_URL=""
-GIT_ROOT=""
-VAULT_SUBDIR=""
-
-# Check if we're inside a git repo (even if not at root)
-if git rev-parse --is-inside-work-tree &>/dev/null; then
-    IS_GIT_REPO=true
-    GIT_ROOT=$(git rev-parse --show-toplevel)
-    REMOTE_URL=$(git remote get-url origin 2>/dev/null || true)
-    [ -n "$REMOTE_URL" ] && HAS_REMOTE=true
-
-    # Check if vault is a subdirectory of the repo
-    if [ "$GIT_ROOT" != "$VAULT_PATH" ]; then
-        VAULT_SUBDIR="${VAULT_PATH#$GIT_ROOT/}"
-        ok "Git repo: $GIT_ROOT"
-        ok "Vault path: $VAULT_SUBDIR"
-    fi
-fi
-
-if $HAS_REMOTE; then
-    ok "Remote: $REMOTE_URL"
-    spinner_start "Verifying GitHub access..."
-    if git ls-remote origin &>/dev/null; then
-        spinner_stop "ok" "GitHub access confirmed"
-    else
-        spinner_stop "err" "Cannot access repository"
-        info "Check your SSH keys: ssh -T git@github.com"
-        exit 1
-    fi
-else
-    if ! confirm "Set up GitHub sync?"; then
-        err "GitHub sync is required for Ludolph to work"
-        exit 1
-    fi
-
-    echo
-
-    # Initialize git if needed
-    if ! $IS_GIT_REPO; then
-        info "Initializing version control..."
-        git init -q
-        GIT_ROOT="$VAULT_PATH"
-        ok "Git initialized"
-    fi
-
-    # Create .gitignore (at git root or vault path)
-    GITIGNORE_PATH="$VAULT_PATH/.gitignore"
-    [ -n "$VAULT_SUBDIR" ] && GITIGNORE_PATH="$GIT_ROOT/.gitignore"
-
-    GITIGNORE="# Obsidian workspace
-.obsidian/workspace.json
-.obsidian/workspace-mobile.json
-.obsidian/workspace.json.bak
-.trash/
-.DS_Store
-"
-    if [ "$EXCLUDE_PRIVACY" = true ] && [ ${#PRIVACY_FILES[@]} -gt 0 ]; then
-        GITIGNORE+="
-# Excluded by Ludolph installer
-"
-        for f in "${PRIVACY_FILES[@]}"; do
-            # Prefix with vault subdir if needed
-            [ -n "$VAULT_SUBDIR" ] && f="$VAULT_SUBDIR/$f"
-            GITIGNORE+="$f
-"
-        done
-    fi
-
-    # Append to existing .gitignore or create new
-    if [ -f "$GITIGNORE_PATH" ]; then
-        echo "" >> "$GITIGNORE_PATH"
-        echo "# Added by Ludolph installer" >> "$GITIGNORE_PATH"
-        echo "$GITIGNORE" >> "$GITIGNORE_PATH"
-        ok "Updated .gitignore"
-    else
-        echo "$GITIGNORE" > "$GITIGNORE_PATH"
-        ok "Created .gitignore"
-    fi
-
-    # Try gh CLI
-    if command -v gh &>/dev/null; then
-        echo
-        VAULT_NAME=$(basename "$VAULT_PATH" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
-        REPO_NAME=$(ask "Repository name:" "$VAULT_NAME")
-
-        echo
-        info "Creating private repository..."
-        if gh repo create "$REPO_NAME" --private --source=. --remote=origin 2>/dev/null; then
-            ok "Created: github.com/$(gh api user -q .login)/$REPO_NAME"
-            HAS_REMOTE=true
-        else
-            warn "Could not create automatically"
-            info "You may need to run: gh auth login"
-        fi
-    fi
-
-    # Manual fallback
-    if ! $HAS_REMOTE; then
-        echo
-        info "Create a new private repository at github.com/new"
-        info "Then paste the SSH URL (git@github.com:...)"
-        echo
-        REMOTE_URL=$(ask "Repository URL:")
-
-        if [ -z "$REMOTE_URL" ]; then
-            err "Repository URL required"
-            exit 1
-        fi
-
-        git remote add origin "$REMOTE_URL" 2>/dev/null || git remote set-url origin "$REMOTE_URL"
-        ok "Remote configured"
-        HAS_REMOTE=true
-    fi
-
-    # Initial commit and push
-    echo
-    info "Pushing to GitHub..."
-    git add -A
-    git commit -m "Initial commit" -q 2>/dev/null || true
-    BRANCH=$(git branch --show-current 2>/dev/null || echo "main")
-
-    if git push -u origin "$BRANCH" 2>/dev/null; then
-        ok "Vault pushed to GitHub"
-    else
-        err "Push failed. Check your SSH keys: ssh -T git@github.com"
-        exit 1
-    fi
 fi
 
 # =============================================================================
 # Connect to Pi
 # =============================================================================
 
-section "Step 5: Connecting to Your Pi"
+section "Step 4: Connecting to Your Pi"
 
 if $IS_PI; then
     ok "Running on Pi - no remote connection needed"
@@ -493,7 +344,6 @@ else
     info "  - Accessible via Tailscale (recommended) or local network"
     echo
 
-    # Try to detect Pi
     PI_DETECTED=""
     for host in "pi" "raspberrypi" "pi.local" "raspberrypi.local"; do
         if ping -c 1 -W 1 "$host" &>/dev/null 2>&1; then
@@ -522,12 +372,11 @@ else
 fi
 
 # =============================================================================
-# Deploy to Pi
+# Install Ludolph on Pi
 # =============================================================================
 
-section "Step 6: Installing on Pi"
+section "Step 5: Installing Ludolph"
 
-# Get version
 if [ -z "$VERSION" ]; then
     spinner_start "Fetching latest version..."
     VERSION=$(curl -sSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | grep '"tag_name"' | cut -d'"' -f4 || true)
@@ -540,22 +389,21 @@ else
     ok "Version: $VERSION"
 fi
 
+PI_VAULT_PATH="\$HOME/vault"
+
 if $IS_PI; then
-    # Local install
     PI_INSTALL_DIR="$LOCAL_DIR/bin"
     PI_VAULT_PATH="$VAULT_PATH"
 
     mkdir -p "$PI_INSTALL_DIR"
-    info "Downloading..."
+    spinner_start "Downloading Ludolph..."
     DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/lu-$TARGET"
     curl -fsSL "$DOWNLOAD_URL" -o "$PI_INSTALL_DIR/lu" 2>/dev/null
     chmod +x "$PI_INSTALL_DIR/lu"
-    ok "Installed lu binary"
+    spinner_stop "ok" "Installed lu binary"
 else
-    # Remote install
     PI_TARGET="aarch64-unknown-linux-gnu"
     PI_DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/lu-$PI_TARGET"
-    REMOTE_URL=$(git remote get-url origin 2>/dev/null || true)
 
     spinner_start "Installing Ludolph on Pi..."
     ssh "$PI_USER@$PI_HOST" bash -s <<EOF
@@ -566,40 +414,290 @@ chmod +x ~/.ludolph/bin/lu
 grep -q '.ludolph/bin' ~/.bashrc 2>/dev/null || echo 'export PATH="\$HOME/.ludolph/bin:\$PATH"' >> ~/.bashrc
 grep -q '.ludolph/bin' ~/.profile 2>/dev/null || echo 'export PATH="\$HOME/.ludolph/bin:\$PATH"' >> ~/.profile
 EOF
-    spinner_stop "ok" "Installed lu binary"
-
-    # Clone repo to Pi
-    [ -n "$VAULT_SUBDIR" ] && PI_VAULT_PATH="~/repo/$VAULT_SUBDIR" || PI_VAULT_PATH="~/repo"
-
-    spinner_start "Syncing repository to Pi..."
-    ssh "$PI_USER@$PI_HOST" bash -s <<EOF
-set -e
-if [ -d ~/repo ]; then
-    cd ~/repo && git pull origin 2>/dev/null || true
-else
-    git clone "$REMOTE_URL" ~/repo 2>/dev/null
+    spinner_stop "ok" "Installed Ludolph on Pi"
 fi
-# Configure git for commits
-git config --global user.email "ludolph@pi.local" 2>/dev/null || true
-git config --global user.name "Ludolph" 2>/dev/null || true
-EOF
-    spinner_stop "ok" "Repository synced"
 
-    # Set up bidirectional sync
-    spinner_start "Setting up auto-sync..."
+# =============================================================================
+# Initial Vault Copy
+# =============================================================================
+
+if ! $IS_PI; then
+    section "Step 6: Copying Vault to Pi"
+
+    spinner_start "Copying vault to Pi..."
+
+    # Create vault directory on Pi
+    ssh "$PI_USER@$PI_HOST" "mkdir -p ~/vault"
+
+    # rsync vault to Pi
+    rsync -az --delete \
+        --exclude='.obsidian/workspace.json' \
+        --exclude='.obsidian/workspace-mobile.json' \
+        --exclude='.trash' \
+        --exclude='.DS_Store' \
+        "$VAULT_PATH/" "$PI_USER@$PI_HOST:~/vault/"
+
+    spinner_stop "ok" "Vault copied to Pi"
+fi
+
+# =============================================================================
+# Install Syncthing
+# =============================================================================
+
+section "Step 7: Setting Up Real-Time Sync"
+
+info "Syncthing keeps your vault in sync between Mac and Pi."
+info "Changes on either side sync automatically."
+echo
+
+# Install on Mac
+if $IS_MAC; then
+    spinner_start "Installing Syncthing on Mac..."
+
+    if command -v brew &>/dev/null; then
+        # Use Homebrew
+        brew install syncthing &>/dev/null || true
+        spinner_stop "ok" "Syncthing installed via Homebrew"
+    else
+        # Direct download
+        mkdir -p "$LOCAL_DIR/bin"
+
+        if [ "$ARCH" = "aarch64" ]; then
+            ST_ARCH="arm64"
+        else
+            ST_ARCH="amd64"
+        fi
+
+        ST_URL="https://github.com/syncthing/syncthing/releases/download/v${SYNCTHING_VERSION}/syncthing-macos-${ST_ARCH}-v${SYNCTHING_VERSION}.zip"
+
+        curl -fsSL "$ST_URL" -o "/tmp/syncthing.zip" 2>/dev/null
+        unzip -q -o "/tmp/syncthing.zip" -d "/tmp/"
+        mv "/tmp/syncthing-macos-${ST_ARCH}-v${SYNCTHING_VERSION}/syncthing" "$LOCAL_DIR/bin/"
+        chmod +x "$LOCAL_DIR/bin/syncthing"
+        rm -rf "/tmp/syncthing.zip" "/tmp/syncthing-macos-${ST_ARCH}-v${SYNCTHING_VERSION}"
+
+        spinner_stop "ok" "Syncthing installed to ~/.ludolph/bin"
+    fi
+fi
+
+# Install on Pi
+if ! $IS_PI; then
+    spinner_start "Installing Syncthing on Pi..."
     ssh "$PI_USER@$PI_HOST" bash -s <<'EOF'
-(crontab -l 2>/dev/null | grep -v 'ludolph sync' || true) | crontab -
-# Pull changes from Mac, then push any local changes
-(crontab -l 2>/dev/null || true; echo "*/5 * * * * cd ~/repo && git pull origin 2>/dev/null && git add -A && git diff --quiet --cached || git commit -m 'Auto-sync from Pi' && git push origin 2>/dev/null # ludolph sync") | crontab -
-EOF
-    spinner_stop "ok" "Auto-sync enabled (every 5 minutes)"
+set -e
+if ! command -v syncthing &>/dev/null; then
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq syncthing >/dev/null 2>&1
 fi
+EOF
+    spinner_stop "ok" "Syncthing installed on Pi"
+fi
+
+# =============================================================================
+# Configure Syncthing
+# =============================================================================
+
+spinner_start "Configuring Syncthing..."
+
+# Generate config and get device IDs
+if $IS_MAC; then
+    # Mac: Generate config if needed
+    if [ ! -d "$HOME/.config/syncthing" ]; then
+        if command -v syncthing &>/dev/null; then
+            syncthing generate --config="$HOME/.config/syncthing" &>/dev/null
+        else
+            "$LOCAL_DIR/bin/syncthing" generate --config="$HOME/.config/syncthing" &>/dev/null
+        fi
+    fi
+
+    if command -v syncthing &>/dev/null; then
+        MAC_DEVICE_ID=$(syncthing --device-id 2>/dev/null)
+    else
+        MAC_DEVICE_ID=$("$LOCAL_DIR/bin/syncthing" --device-id 2>/dev/null)
+    fi
+fi
+
+if ! $IS_PI; then
+    # Pi: Generate config and get device ID
+    PI_DEVICE_ID=$(ssh "$PI_USER@$PI_HOST" bash -s <<'EOF'
+if [ ! -d "$HOME/.config/syncthing" ]; then
+    syncthing generate --config="$HOME/.config/syncthing" &>/dev/null
+fi
+syncthing --device-id 2>/dev/null
+EOF
+)
+fi
+
+spinner_stop "ok" "Generated Syncthing configs"
+
+# Configure the shared folder and devices
+spinner_start "Configuring sync folder..."
+
+if $IS_MAC; then
+    # Create .stignore file for excluded files
+    STIGNORE_FILE="$VAULT_PATH/.stignore"
+    cat > "$STIGNORE_FILE" <<'STIGNORE'
+// Syncthing ignore patterns for Ludolph
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/workspace.json.bak
+.trash
+.DS_Store
+STIGNORE
+
+    # Add user-excluded files
+    if [ ${#STIGNORE_ENTRIES[@]} -gt 0 ]; then
+        echo "" >> "$STIGNORE_FILE"
+        echo "// Files excluded by Ludolph installer" >> "$STIGNORE_FILE"
+        for entry in "${STIGNORE_ENTRIES[@]}"; do
+            echo "$entry" >> "$STIGNORE_FILE"
+        done
+    fi
+fi
+
+# Copy .stignore to Pi
+if ! $IS_PI && [ -f "$VAULT_PATH/.stignore" ]; then
+    scp -q "$VAULT_PATH/.stignore" "$PI_USER@$PI_HOST:~/vault/.stignore"
+fi
+
+spinner_stop "ok" "Sync folder configured"
+
+# Add devices and folder to Syncthing config
+spinner_start "Linking Mac and Pi..."
+
+if $IS_MAC && ! $IS_PI; then
+    # Configure Mac's Syncthing
+    ST_CONFIG="$HOME/.config/syncthing/config.xml"
+
+    # Use Python to modify XML config (available on Mac by default)
+    python3 - "$ST_CONFIG" "$PI_DEVICE_ID" "$VAULT_PATH" <<'PYEOF'
+import sys
+import xml.etree.ElementTree as ET
+
+config_file = sys.argv[1]
+pi_device_id = sys.argv[2]
+vault_path = sys.argv[3]
+
+tree = ET.parse(config_file)
+root = tree.getroot()
+
+# Add Pi as a device if not present
+devices = root.findall('.//device')
+pi_exists = any(d.get('id') == pi_device_id for d in devices)
+if not pi_exists:
+    device = ET.SubElement(root, 'device')
+    device.set('id', pi_device_id)
+    device.set('name', 'Pi')
+    device.set('compression', 'metadata')
+    device.set('introducer', 'false')
+    device.set('skipIntroductionRemovals', 'false')
+    device.set('introducedBy', '')
+    ET.SubElement(device, 'address').text = 'dynamic'
+    ET.SubElement(device, 'autoAcceptFolders').text = 'true'
+
+# Add vault folder if not present
+folders = root.findall('.//folder')
+vault_exists = any(f.get('path') == vault_path for f in folders)
+if not vault_exists:
+    folder = ET.SubElement(root, 'folder')
+    folder.set('id', 'ludolph-vault')
+    folder.set('label', 'Ludolph Vault')
+    folder.set('path', vault_path)
+    folder.set('type', 'sendreceive')
+    folder.set('rescanIntervalS', '60')
+    folder.set('fsWatcherEnabled', 'true')
+    folder.set('fsWatcherDelayS', '1')
+    folder.set('ignorePerms', 'false')
+    folder.set('autoNormalize', 'true')
+
+    # Share with Pi
+    dev_elem = ET.SubElement(folder, 'device')
+    dev_elem.set('id', pi_device_id)
+    dev_elem.set('introducedBy', '')
+
+tree.write(config_file)
+PYEOF
+
+    # Configure Pi's Syncthing
+    ssh "$PI_USER@$PI_HOST" python3 - "$MAC_DEVICE_ID" <<'PYEOF'
+import sys
+import xml.etree.ElementTree as ET
+import os
+
+config_file = os.path.expanduser('~/.config/syncthing/config.xml')
+mac_device_id = sys.argv[1]
+vault_path = os.path.expanduser('~/vault')
+
+tree = ET.parse(config_file)
+root = tree.getroot()
+
+# Add Mac as a device if not present
+devices = root.findall('.//device')
+mac_exists = any(d.get('id') == mac_device_id for d in devices)
+if not mac_exists:
+    device = ET.SubElement(root, 'device')
+    device.set('id', mac_device_id)
+    device.set('name', 'Mac')
+    device.set('compression', 'metadata')
+    device.set('introducer', 'false')
+    device.set('skipIntroductionRemovals', 'false')
+    device.set('introducedBy', '')
+    ET.SubElement(device, 'address').text = 'dynamic'
+    ET.SubElement(device, 'autoAcceptFolders').text = 'true'
+
+# Add vault folder if not present
+folders = root.findall('.//folder')
+vault_exists = any(f.get('path') == vault_path for f in folders)
+if not vault_exists:
+    folder = ET.SubElement(root, 'folder')
+    folder.set('id', 'ludolph-vault')
+    folder.set('label', 'Ludolph Vault')
+    folder.set('path', vault_path)
+    folder.set('type', 'sendreceive')
+    folder.set('rescanIntervalS', '60')
+    folder.set('fsWatcherEnabled', 'true')
+    folder.set('fsWatcherDelayS', '1')
+    folder.set('ignorePerms', 'false')
+    folder.set('autoNormalize', 'true')
+
+    # Share with Mac
+    dev_elem = ET.SubElement(folder, 'device')
+    dev_elem.set('id', mac_device_id)
+    dev_elem.set('introducedBy', '')
+
+tree.write(config_file)
+PYEOF
+fi
+
+spinner_stop "ok" "Mac and Pi linked"
+
+# Start Syncthing services
+spinner_start "Starting Syncthing..."
+
+if $IS_MAC; then
+    # Start Syncthing on Mac (in background)
+    if command -v brew &>/dev/null; then
+        brew services start syncthing &>/dev/null || true
+    else
+        nohup "$LOCAL_DIR/bin/syncthing" --no-browser > "$LOCAL_DIR/syncthing.log" 2>&1 &
+    fi
+fi
+
+if ! $IS_PI; then
+    # Enable and start Syncthing on Pi
+    ssh "$PI_USER@$PI_HOST" bash -s <<'EOF'
+systemctl --user enable syncthing.service 2>/dev/null || true
+systemctl --user start syncthing.service 2>/dev/null || true
+EOF
+fi
+
+spinner_stop "ok" "Syncthing running on both devices"
 
 # =============================================================================
 # API Credentials
 # =============================================================================
 
-section "Step 7: API Keys"
+section "Step 8: API Keys"
 
 info "Ludolph needs two API keys to work:"
 echo
@@ -624,10 +722,10 @@ CLAUDE_API_KEY=$(ask_secret "Claude API Key:")
 [ -z "$CLAUDE_API_KEY" ] && { err "API key required"; exit 1; }
 
 # =============================================================================
-# Configure and Start
+# Configure and Start Bot
 # =============================================================================
 
-section "Step 8: Starting Ludolph"
+section "Step 9: Starting Ludolph"
 
 CONFIG="[telegram]
 bot_token = \"$TELEGRAM_TOKEN\"
@@ -663,7 +761,6 @@ cat > ~/.ludolph/config.toml << 'CONFIGEOF'
 $CONFIG
 CONFIGEOF
 EOF
-    # Save local config too
     mkdir -p "$LOCAL_DIR"
     cat > "$LOCAL_DIR/config.toml" <<EOF
 [telegram]
@@ -697,7 +794,6 @@ EOF
     else
         spinner_stop "warn" "Bot may not have started"
     fi
-    ok "Bot is running"
 fi
 
 # =============================================================================
@@ -706,7 +802,6 @@ fi
 
 section "Setup Complete!"
 
-# Get bot username
 BOT_INFO=$(curl -s "https://api.telegram.org/bot$TELEGRAM_TOKEN/getMe" 2>/dev/null || true)
 BOT_USERNAME=$(echo "$BOT_INFO" | grep -o '"username":"[^"]*"' | cut -d'"' -f4 || echo "your bot")
 
@@ -714,6 +809,7 @@ echo
 printf "  Open Telegram and message ${CYAN}@%s${NC}\n" "$BOT_USERNAME"
 echo
 info "Your vault is ready to talk."
+info "Changes sync automatically between Mac and Pi."
 echo
 rule
 echo
@@ -724,5 +820,4 @@ if $IS_PI; then
 else
     info "  ssh $PI_USER@$PI_HOST   Connect to your Pi"
 fi
-info "  git commit  Save vault changes (in your vault folder)"
 echo
