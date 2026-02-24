@@ -10,16 +10,29 @@ REPO="evannagle/ludolph"
 LOCAL_DIR="${LUDOLPH_DIR:-$HOME/.ludolph}"
 VERSION="${LUDOLPH_VERSION:-}"
 
-# Clean exit on Ctrl+C
-cleanup() {
+# Terminal cleanup - always runs on exit
+CLEANUP_DONE=false
+terminal_cleanup() {
+    $CLEANUP_DONE && return
+    CLEANUP_DONE=true
     [ -n "${SPINNER_PID:-}" ] && kill "$SPINNER_PID" 2>/dev/null
-    printf "\r\033[K"
+    wait "$SPINNER_PID" 2>/dev/null || true
+    SPINNER_PID=""
+    printf "\r\033[K"  # Clear spinner line
+    tput cnorm 2>/dev/null || true  # Restore cursor
+}
+
+# Handle Ctrl+C gracefully
+user_cancel() {
+    terminal_cleanup
     echo
     echo "  Cancelled."
     echo
     exit 1
 }
-trap cleanup INT TERM
+
+trap user_cancel INT TERM
+trap terminal_cleanup EXIT
 
 # Colors
 GREEN='\033[0;32m'
@@ -35,6 +48,17 @@ ok() { printf "  ${GREEN}[•ok]${NC} %s\n" "$1"; }
 err() { printf "  ${RED}[•!!]${NC} %s\n" "$1"; }
 warn() { printf "  ${YELLOW}[•--]${NC} %s\n" "$1"; }
 info() { printf "  ${DIM}%s${NC}\n" "$1"; }
+
+# Error handler - show what failed
+error_handler() {
+    local exit_code=$?
+    local line_no=$1
+    terminal_cleanup
+    echo
+    err "Installation failed at line $line_no (exit code $exit_code)"
+    echo
+}
+trap 'error_handler $LINENO' ERR
 
 # Bouncing ball spinner
 SPINNER_PID=""
@@ -390,16 +414,47 @@ if $IS_PI; then
     mkdir -p "$PI_INSTALL_DIR"
     spinner_start "Downloading Ludolph..."
     DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/lu-$TARGET"
-    curl -fsSL "$DOWNLOAD_URL" -o "$PI_INSTALL_DIR/lu" 2>/dev/null
+    if ! curl -fsSL "$DOWNLOAD_URL" -o "$PI_INSTALL_DIR/lu"; then
+        spinner_stop "err" "Failed to download Ludolph"
+        echo
+        info "URL: $DOWNLOAD_URL"
+        exit 1
+    fi
     chmod +x "$PI_INSTALL_DIR/lu"
     spinner_stop "ok" "Installed lu binary"
 else
     PI_TARGET="aarch64-unknown-linux-gnu"
     PI_DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/lu-$PI_TARGET"
 
+    # Stop any running ludolph service/process first
+    spinner_start "Stopping existing Ludolph..."
+    ssh -n -o ConnectTimeout=10 "$PI_USER@$PI_HOST" "systemctl --user stop ludolph.service 2>/dev/null; pkill -f 'ludolph/bin/lu' 2>/dev/null; sleep 1; echo done" < /dev/null || true
+    spinner_stop "ok" "Stopped existing processes"
+
+    # Download and install
     spinner_start "Installing Ludolph on Pi..."
-    ssh -T "$PI_USER@$PI_HOST" "mkdir -p ~/.ludolph/bin && curl -fsSL '$PI_DOWNLOAD_URL' -o ~/.ludolph/bin/lu 2>/dev/null && chmod +x ~/.ludolph/bin/lu && (grep -q '.ludolph/bin' ~/.bashrc 2>/dev/null || echo 'export PATH=\"\$HOME/.ludolph/bin:\$PATH\"' >> ~/.bashrc) && (grep -q '.ludolph/bin' ~/.profile 2>/dev/null || echo 'export PATH=\"\$HOME/.ludolph/bin:\$PATH\"' >> ~/.profile)" < /dev/null
-    spinner_stop "ok" "Installed Ludolph on Pi"
+    INSTALL_ERR=$(mktemp)
+    if ssh -n -o ConnectTimeout=30 "$PI_USER@$PI_HOST" "mkdir -p ~/.ludolph/bin && curl -fSL '$PI_DOWNLOAD_URL' -o ~/.ludolph/bin/lu && chmod +x ~/.ludolph/bin/lu && (grep -q '.ludolph/bin' ~/.bashrc 2>/dev/null || echo 'export PATH=\"\$HOME/.ludolph/bin:\$PATH\"' >> ~/.bashrc) && (grep -q '.ludolph/bin' ~/.profile 2>/dev/null || echo 'export PATH=\"\$HOME/.ludolph/bin:\$PATH\"' >> ~/.profile)" < /dev/null 2>"$INSTALL_ERR"; then
+        spinner_stop "ok" "Installed Ludolph on Pi"
+        rm -f "$INSTALL_ERR"
+    else
+        spinner_stop "err" "Failed to install Ludolph on Pi"
+        echo
+        if [ -s "$INSTALL_ERR" ]; then
+            while read -r line; do
+                info "  $line"
+            done < "$INSTALL_ERR"
+        else
+            info "Download may have failed. Testing connectivity..."
+            echo
+            ssh -n "$PI_USER@$PI_HOST" "curl -sI '$PI_DOWNLOAD_URL' | head -5" < /dev/null 2>&1 | while read -r line; do
+                info "  $line"
+            done
+        fi
+        rm -f "$INSTALL_ERR"
+        echo
+        exit 1
+    fi
 fi
 
 # =============================================================================
@@ -467,10 +522,24 @@ if ! $IS_PI; then
                 info "Tailscale is installed on Pi but not connected."
                 echo
                 printf "  ${BOLD}Choose an option:${NC}\n"
-                echo "  1) Connect Pi to Tailscale (recommended - encrypted)"
+                echo "  1) Connect Pi to Tailscale now (opens auth URL)"
                 echo "  2) Use local network (unencrypted, home network only)"
+                echo "  3) Connect manually and re-run installer"
                 echo
-                NETWORK_CHOICE=$(ask "Enter 1 or 2:" "1")
+                NETWORK_CHOICE=$(ask "Enter 1, 2, or 3:" "1")
+
+                if [ "$NETWORK_CHOICE" = "3" ]; then
+                    echo
+                    info "To connect your Pi to Tailscale manually:"
+                    echo
+                    info "  ssh $PI_USER@$PI_HOST"
+                    info "  sudo tailscale up"
+                    info "  sudo systemctl enable tailscaled"
+                    echo
+                    info "Then re-run: curl -sSL https://ludolph.dev/install | bash"
+                    echo
+                    exit 0
+                fi
 
                 if [ "$NETWORK_CHOICE" = "1" ]; then
                     echo
@@ -485,7 +554,9 @@ if ! $IS_PI; then
                         "ping -c 1 -W 2 $TAILSCALE_IP >/dev/null 2>&1 && echo yes || echo no" 2>/dev/null || echo "no")
 
                     if [ "$PI_CAN_REACH_TS" = "yes" ]; then
-                        ok "Tailscale connected"
+                        # Enable tailscaled to start on boot
+                        ssh -n "$PI_USER@$PI_HOST" "sudo systemctl enable tailscaled 2>/dev/null" < /dev/null || true
+                        ok "Tailscale connected (enabled on boot)"
                         MAC_IP="$TAILSCALE_IP"
                         USING_TAILSCALE=true
                     else
@@ -499,8 +570,23 @@ if ! $IS_PI; then
                 printf "  ${BOLD}Choose an option:${NC}\n"
                 echo "  1) Install Tailscale on Pi (recommended - encrypted)"
                 echo "  2) Use local network (unencrypted, home network only)"
+                echo "  3) Install manually and re-run installer"
                 echo
-                NETWORK_CHOICE=$(ask "Enter 1 or 2:" "2")
+                NETWORK_CHOICE=$(ask "Enter 1, 2, or 3:" "2")
+
+                if [ "$NETWORK_CHOICE" = "3" ]; then
+                    echo
+                    info "To install Tailscale on your Pi manually:"
+                    echo
+                    info "  ssh $PI_USER@$PI_HOST"
+                    info "  curl -fsSL https://tailscale.com/install.sh | sh"
+                    info "  sudo tailscale up"
+                    info "  sudo systemctl enable tailscaled"
+                    echo
+                    info "Then re-run: curl -sSL https://ludolph.dev/install | bash"
+                    echo
+                    exit 0
+                fi
 
                 if [ "$NETWORK_CHOICE" = "1" ]; then
                     spinner_start "Installing Tailscale on Pi..."
@@ -519,7 +605,9 @@ if ! $IS_PI; then
                         "ping -c 1 -W 2 $TAILSCALE_IP >/dev/null 2>&1 && echo yes || echo no" 2>/dev/null || echo "no")
 
                     if [ "$PI_CAN_REACH_TS" = "yes" ]; then
-                        ok "Tailscale connected"
+                        # Enable tailscaled to start on boot
+                        ssh -n "$PI_USER@$PI_HOST" "sudo systemctl enable tailscaled 2>/dev/null" < /dev/null || true
+                        ok "Tailscale connected (enabled on boot)"
                         MAC_IP="$TAILSCALE_IP"
                         USING_TAILSCALE=true
                     else
@@ -1052,10 +1140,8 @@ user = "$PI_USER"
 EOF
     spinner_stop "ok" "Mac configuration saved"
 
-    spinner_start "Setting up bot service on Pi..."
-
-    # Service file content (defined here to avoid heredoc stdin issues with curl|bash)
-    SERVICE_CONTENT='[Unit]
+    # Service file content - base64 encoded to safely pass through SSH
+    SERVICE_CONTENT_B64=$(printf '%s\n' '[Unit]
 Description=Ludolph Telegram Bot
 After=network-online.target
 Wants=network-online.target
@@ -1069,12 +1155,52 @@ StandardOutput=append:%h/.ludolph/ludolph.log
 StandardError=append:%h/.ludolph/ludolph.log
 
 [Install]
-WantedBy=default.target'
+WantedBy=default.target' | base64)
 
-    # Create systemd service on Pi using inline commands (no heredocs)
-    ssh -T "$PI_USER@$PI_HOST" "pkill -f 'ludolph/bin/lu' 2>/dev/null || true; mkdir -p ~/.config/systemd/user; printf '%s\n' '$SERVICE_CONTENT' > ~/.config/systemd/user/ludolph.service; loginctl enable-linger \$USER 2>/dev/null || true; systemctl --user daemon-reload; systemctl --user enable ludolph.service; systemctl --user restart ludolph.service" < /dev/null
+    # Step 1: Stop any running ludolph process
+    spinner_start "Stopping existing bot..."
+    ssh -n "$PI_USER@$PI_HOST" "pkill -f 'ludolph/bin/lu' 2>/dev/null || true" < /dev/null || true
+    spinner_stop "ok" "Stopped existing bot"
 
-    spinner_stop "ok" "Bot service installed"
+    # Step 2: Create systemd user directory
+    spinner_start "Creating service directory..."
+    if ! ssh -n "$PI_USER@$PI_HOST" "mkdir -p ~/.config/systemd/user" < /dev/null 2>&1; then
+        spinner_stop "err" "Failed to create service directory"
+        exit 1
+    fi
+    spinner_stop "ok" "Created service directory"
+
+    # Step 3: Write service file via base64
+    spinner_start "Writing service file..."
+    if ! ssh -n "$PI_USER@$PI_HOST" "echo '$SERVICE_CONTENT_B64' | base64 -d > ~/.config/systemd/user/ludolph.service" < /dev/null 2>&1; then
+        spinner_stop "err" "Failed to write service file"
+        exit 1
+    fi
+    spinner_stop "ok" "Wrote service file"
+
+    # Step 4: Enable lingering
+    spinner_start "Enabling user lingering..."
+    ssh -n "$PI_USER@$PI_HOST" "loginctl enable-linger \$USER 2>/dev/null || true" < /dev/null || true
+    spinner_stop "ok" "Enabled user lingering"
+
+    # Step 5: Reload and start service
+    spinner_start "Starting bot service..."
+    SERVICE_OUTPUT=$(ssh -n "$PI_USER@$PI_HOST" "systemctl --user daemon-reload && systemctl --user enable ludolph.service && systemctl --user restart ludolph.service" < /dev/null 2>&1) || {
+        spinner_stop "err" "Failed to start bot service"
+        echo
+        if [ -n "$SERVICE_OUTPUT" ]; then
+            echo "$SERVICE_OUTPUT" | while read -r line; do
+                info "  $line"
+            done
+            echo
+        fi
+        info "Try manually:"
+        info "  ssh $PI_USER@$PI_HOST"
+        info "  systemctl --user status ludolph.service"
+        echo
+        exit 1
+    }
+    spinner_stop "ok" "Bot service started"
 
     # Check if service is running
     sleep 2
