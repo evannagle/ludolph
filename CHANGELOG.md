@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/evannagle/ludolph/compare/v0.3.0...v0.4.0) (2026-02-24)
+
+
+### Features
+
+* robust installer with Tailscale fallback, friendly bot messages ([52926e8](https://github.com/evannagle/ludolph/commit/52926e82967aec2e1120d7095f7fc8230511387d))
+
+
+### Bug Fixes
+
+* add -n to SSH test to prevent stdin consumption ([87043a1](https://github.com/evannagle/ludolph/commit/87043a1aaaa1d54e15c25a7ffc06437c2dc6d4ab))
+* read from /dev/tty for curl|bash compatibility ([8363424](https://github.com/evannagle/ludolph/commit/83634247b16f392d3b397dff341dd9b2d5e25a47))
+* use GitHub alert syntax for warning box ([f119333](https://github.com/evannagle/ludolph/commit/f1193336c9dd59bcdf3604eff248302f036ca335))
+
 ## [0.3.0](https://github.com/evannagle/ludolph/compare/v0.2.1...v0.3.0) (2026-02-24)
 
 
