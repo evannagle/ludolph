@@ -7,34 +7,92 @@ Please check back in roughly 3.14 months, give or take a few decimals.
 
 <p>
 <strong>A real brain for your second brain.</strong><br>
-Your vault is the context. Talk to it, anywhere, anytime. 
+Your vault is the context. Talk to it, anywhere, anytime.
 </p>
 
 ---
 
 <img src="docs/images/ludolph-hero.png" align="right" width="400" hspace="20" />
 
-Ludolph is a self-hosted Telegram bot that lets you chat with Claude about your Obsidian vault. It runs on a Raspberry Pi (or any always-on machine) with full access to your notes — so you can search, summarize, create, and edit from anywhere, at any ungodly hour.
+Ludolph is a self-hosted Telegram bot that lets you chat with Claude about your Obsidian vault. A thin client runs on a Raspberry Pi, connecting to your Mac's MCP server to access your notes — so you can search, summarize, create, and edit from anywhere, at any ungodly hour. Your files never leave your Mac.
 
 **Ok, why Ludolph?** Tools like [OpenClaw](https://openclaw.ai/) are equal measures fun and a wee bit scary, toting full-featured AI agents who may or may not desire to drain your blood while you're sleeping. Browser control, shell access, dozens of app integrations: if that's what you need, go use OpenClaw. It's great.
 
-But Ludolph is for people who just want to talk to their notes. No skill configs, no system files, no dedicated Mac Mini. Just a Telegram bot, a Pi, and your vault. The goal is something your non-technical friend could set up in an afternoon, though he'll probably call you for help anyways.
+But Ludolph is for people who just want to talk to their notes. No skill configs, no system files, no vault syncing. Just a Telegram bot, a Pi as a thin client, and your vault on your Mac. The goal is something your non-technical friend could set up in an afternoon, though he'll probably call you for help anyways.
 
 That said, if you are a power user (and you probably are, since Obsidianites tend to use Obsidian for everything short of shaving their neckbeard and drying their underwear), Ludolph is just as configurable under the hood. And because your vault is your entire system (tasks, journals, projects, contacts, reference, whatever you've crammed in there), Claude gets full context on how you actually think and work. No separate memory files, no syncing a knowledge base. Your vault is the brain. So, take it with you from time to time.
 
+## Architecture
+
+```
+Mac (always-on or Wake-on-LAN)
+┌────────────────────────────────┐
+│ ~/Vaults/Noggin                │
+│ MCP Server (0.0.0.0:8200)      │
+│ Auth token required            │
+└───────────────┬────────────────┘
+                │ HTTP
+                │
+         Pi (thin client)
+         ┌──────────────────┐
+         │ Ludolph binary   │
+         │ Telegram bot     │
+         │ MCP client       │
+         │ Wake-on-LAN      │
+         └──────────────────┘
+```
+
+Your vault stays on your Mac. The Pi is just a thin client that forwards requests to your Mac's MCP server. If your Mac is asleep, the Pi wakes it automatically.
+
 ## Features
 
-- **Sandboxed** — Ludolph can't touch anything outside your vault. The blast radius of a hallucination is a bad markdown file, not an e-mail to your nasty ex-partner or a delightful tango with `rm -rf /`
-- **Revision history** — Every change Claude makes is a file edit, tracked in source control. Full diffs on everything it touches or you touch. Don't like some change? Revert it, or ask Ludolph to help you revert it. Or just ask Ludolph what changes have been made, by whom, and when
+- **Files stay on Mac** — Nothing is copied to the Pi. Your vault never leaves your machine
+- **Sandboxed** — Ludolph can only access your vault through the MCP server. The blast radius of a hallucination is a bad markdown file, not an e-mail to your nasty ex-partner or a delightful tango with `rm -rf /`
+- **Revision history** — Every change Claude makes is a file edit, tracked in source control. Full diffs on everything it touches or you touch. Don't like some change? Revert it, or ask Ludolph to help you revert it
 - **Knows Obsidian** — Dataview syntax, Tasks plugin formatting, Templater patterns, YAML frontmatter, wikilinks, callouts. Ludolph doesn't dump text into files — it writes markdown your plugins already understand
-- **Learns your vault** — On first run, Ludolph scans your folder structure, frontmatter schema, tag taxonomy, and templates. When it creates a note, it creates it the way _you_ create notes. And it summarizes your notes in a way that **you** can literally review and modify within your vault
-- **Fast** — Written in Rust. Starts instantly, idles at ~2MB of RAM, and won't break a sweat on a Raspberry Pi Zero
+- **Learns your vault** — On first run, Ludolph scans your folder structure, frontmatter schema, tag taxonomy, and templates. When it creates a note, it creates it the way _you_ create notes
+- **Fast** — Pi client written in Rust. Starts instantly, idles at ~2MB of RAM
 - **Always on** — Runs on a Raspberry Pi, answers via Telegram from anywhere
-- **Two-way sync** — Edit a note on your laptop, ask Ludolph about it from your phone a minute later. Changes flow both ways, so your vault is always current wherever you are
-- **Single binary** — No Python, no Node, no dependencies. Download and run
+- **Wake-on-LAN** — If your Mac is asleep, the Pi wakes it automatically
+- **Single binary** — No Python, no Node, no dependencies on the Pi. Download and run
 - **Your API key** — You control costs, models, and data
 - **Configurable** — Sensible defaults out of the box, but everything's tunable if you want it to be
-- **No knowledge base to sync** — Your vault is the context. Claude sees how you actually organize and think
+- **Extensible MCP server** — The Mac runs a Python MCP server you can customize with your own tools
+
+## Security
+
+The Pi connects to your Mac over the network. Here's how to keep it secure:
+
+**Use Tailscale (strongly recommended)**
+
+Tailscale creates an encrypted private network between your devices. With Tailscale:
+- Traffic between Pi and Mac is encrypted (WireGuard)
+- Your MCP server isn't exposed to the public internet
+- Works from anywhere without port forwarding
+
+Without Tailscale, your MCP server would need to be exposed on your local network or internet, which is risky.
+
+**Auth token**
+
+The installer generates a 256-bit random token stored at `~/.ludolph/mcp_token`. Every request from the Pi must include this token. Without it, the MCP server rejects the request.
+
+- Token is generated with `openssl rand -hex 32`
+- Stored with `chmod 600` (owner read/write only)
+- Transmitted via `Authorization: Bearer <token>` header
+
+**What's exposed**
+
+| With Tailscale | Without Tailscale |
+|----------------|-------------------|
+| MCP server only accessible to your Tailscale devices | MCP server accessible to your local network |
+| Encrypted tunnel | Plaintext HTTP (unless you add TLS) |
+| No port forwarding needed | Requires port forwarding for remote access |
+
+**If you can't use Tailscale**
+
+1. Bind MCP server to `127.0.0.1` instead of `0.0.0.0`
+2. Use SSH tunnel: `ssh -L 8200:localhost:8200 mac.local`
+3. Or add TLS with a reverse proxy (nginx, caddy)
 
 ## Quick Start
 
@@ -48,7 +106,7 @@ Grab a [CanaKit Raspberry Pi 5](https://www.canakit.com/raspberry-pi-5.html) or 
 
 ### 2. Set up remote access
 
-Install [Tailscale](https://tailscale.com/) on both the Pi and your main machine so you can reach your Pi from anywhere safely. New to Tailscale? It's free for personal use and takes about [two minutes to set up](https://tailscale.com/kb/1017/install).
+Install [Tailscale](https://tailscale.com/) on both the Pi and your Mac so they can reach each other securely. New to Tailscale? It's free for personal use and takes about [two minutes to set up](https://tailscale.com/kb/1017/install).
 
 On your Pi:
 ```bash
@@ -63,7 +121,7 @@ brew install tailscale
 
 ### 3. Run the installer on your Mac
 
-The installer runs on your Mac (where your vault already lives) and handles everything:
+The installer runs on your Mac (where your vault lives) and handles everything:
 
 ```bash
 curl -sSL https://ludolph.dev/install | bash
@@ -71,10 +129,9 @@ curl -sSL https://ludolph.dev/install | bash
 
 It will:
 - Find your Obsidian vault
-- Optionally scan for sensitive files (API keys, passwords) to exclude
-- Set up automatic backups through GitHub
+- Set up the MCP server on your Mac
 - Connect to your Pi and install Ludolph
-- Sync your vault to the Pi
+- Configure Wake-on-LAN so the Pi can wake your Mac
 - Configure the Telegram bot
 
 You'll need two API keys during setup:
@@ -85,7 +142,7 @@ You'll need two API keys during setup:
 
 Open [Telegram](https://telegram.org/) — a free, cross-platform messaging app that supports bots natively (which is why we use it instead of iMessage or WhatsApp). Message your bot. You're in.
 
-Edit a note on your Mac, and within a few minutes your Pi will have it. Ask Ludolph about your notes from anywhere in the world.
+Edit a note on your Mac, ask Ludolph about it from your phone. No sync delays — the Pi queries your Mac directly.
 
 [TODO: ADD DEMO CHAT HERE]
 
@@ -102,6 +159,23 @@ lu pi            # Check Pi connectivity
 
 Config lives at `~/.ludolph/config.toml`:
 
+**On your Pi:**
+```toml
+[telegram]
+bot_token = "your-telegram-bot-token"
+allowed_users = [123456789]
+
+[claude]
+api_key = "your-anthropic-api-key"
+model = "claude-sonnet-4-20250514"
+
+[mcp]
+url = "http://mac.local:8200"
+auth_token = "your-mcp-auth-token"
+mac_address = "a4:83:e7:xx:xx:xx"
+```
+
+**On your Mac:**
 ```toml
 [telegram]
 bot_token = "your-telegram-bot-token"
@@ -113,7 +187,13 @@ model = "claude-sonnet-4-20250514"
 
 [vault]
 path = "/path/to/your/vault"
+
+[pi]
+host = "pi.local"
+user = "pi"
 ```
+
+The Pi config includes MCP connection details; the Mac config includes the vault path and Pi connection info for management.
 
 <br clear="right">
 

@@ -3,7 +3,7 @@
 use anyhow::Result;
 use console::style;
 
-use crate::config::{Config, PiConfig};
+use crate::config::{Config, PiConfig, VaultConfig};
 
 /// Detect if we're running on a Raspberry Pi (or similar ARM Linux device).
 const fn is_running_on_pi() -> bool {
@@ -100,7 +100,11 @@ pub async fn collect_credentials(existing: Option<&Config>) -> Result<Credential
         "Local folder with your notes. Sync from desktop if needed.",
     );
 
-    let existing_vault = existing.map(|c| c.vault.path.to_string_lossy().to_string());
+    let existing_vault = existing.and_then(|c| {
+        c.vault
+            .as_ref()
+            .map(|v| v.path.to_string_lossy().to_string())
+    });
 
     let vault_path = ui::prompt::prompt_validated_visible(
         &vault_config,
@@ -234,14 +238,17 @@ pub async fn setup() -> Result<()> {
         creds.telegram_token,
         vec![creds.user_id],
         creds.claude_key,
-        creds.vault_path,
+        Some(creds.vault_path),
         pi_config,
+        None, // MCP config is set via installer, not setup wizard
     );
     cfg.save()?;
     spinner.finish();
 
     StatusLine::ok("Config written").print();
-    StatusLine::ok(format!("Vault: {}", cfg.vault.path.display())).print();
+    if let Some(ref vault) = cfg.vault {
+        StatusLine::ok(format!("Vault: {}", vault.path.display())).print();
+    }
     StatusLine::ok(format!("Authorized user: {}", creds.user_id)).print();
     if let Some(ref pi) = cfg.pi {
         StatusLine::ok(format!("Pi: {}@{}", pi.user, pi.host)).print();
@@ -272,7 +279,8 @@ pub async fn setup_credentials() -> Result<()> {
             creds.telegram_token.clone(),
             vec![creds.user_id],
             creds.claude_key.clone(),
-            creds.vault_path.clone(),
+            Some(creds.vault_path.clone()),
+            None,
             None,
         )
     });
@@ -281,7 +289,9 @@ pub async fn setup_credentials() -> Result<()> {
     config.telegram.bot_token = creds.telegram_token;
     config.telegram.allowed_users = vec![creds.user_id];
     config.claude.api_key = creds.claude_key;
-    config.vault.path = creds.vault_path;
+    config.vault = Some(VaultConfig {
+        path: creds.vault_path,
+    });
 
     config.save()?;
 

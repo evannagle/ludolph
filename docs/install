@@ -1,13 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Ludolph Mac-First Installer
+# Ludolph Installer - Thin Pi + Mac MCP Architecture
 # Usage: curl -sSL https://ludolph.dev/install | bash
+#
+# Pi is a thin client. Mac hosts the MCP server. No vault sync.
 
 REPO="evannagle/ludolph"
 LOCAL_DIR="${LUDOLPH_DIR:-$HOME/.ludolph}"
 VERSION="${LUDOLPH_VERSION:-}"
-SYNCTHING_VERSION="1.27.2"
+
+# Clean exit on Ctrl+C
+cleanup() {
+    [ -n "${SPINNER_PID:-}" ] && kill "$SPINNER_PID" 2>/dev/null
+    printf "\r\033[K"
+    echo
+    echo "  Cancelled."
+    echo
+    exit 1
+}
+trap cleanup INT TERM
 
 # Colors
 GREEN='\033[0;32m'
@@ -141,8 +153,13 @@ echo
 info "This installer will:"
 info "  1. Find your Obsidian vault"
 info "  2. Connect to your Raspberry Pi"
-info "  3. Set up real-time sync with Syncthing"
-info "  4. Configure the Telegram bot"
+info "  3. Set up a server on your Mac to share your vault"
+info "  4. Configure Wake-on-LAN (so Pi can wake your Mac)"
+info "  5. Configure the Telegram bot"
+info "  6. Start everything"
+echo
+info "Your vault stays on your Mac. The Pi asks your Mac"
+info "for notes when you send messages in Telegram."
 echo
 
 if ! confirm "Ready to begin?"; then
@@ -150,6 +167,27 @@ if ! confirm "Ready to begin?"; then
     info "Run this installer again when you're ready."
     echo
     exit 0
+fi
+
+# =============================================================================
+# Load Existing Config (for re-runs)
+# =============================================================================
+
+SAVED_VAULT=""
+SAVED_PI_HOST=""
+SAVED_PI_USER=""
+SAVED_TELEGRAM_TOKEN=""
+SAVED_TELEGRAM_USER=""
+SAVED_CLAUDE_KEY=""
+
+if [ -f "$LOCAL_DIR/config.toml" ]; then
+    # Extract values from TOML (handles both Mac and Linux sed)
+    SAVED_VAULT=$(grep '^path' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2)
+    SAVED_PI_HOST=$(grep '^host' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2)
+    SAVED_PI_USER=$(grep '^user' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2)
+    SAVED_TELEGRAM_TOKEN=$(grep '^bot_token' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2)
+    SAVED_TELEGRAM_USER=$(grep '^allowed_users' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | tr -d '[]' | cut -d'=' -f2 | tr -d ' ')
+    SAVED_CLAUDE_KEY=$(grep '^api_key' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2)
 fi
 
 # =============================================================================
@@ -204,41 +242,56 @@ info "Looking for Obsidian vaults..."
 echo
 
 VAULT_PATH=""
-VAULT_CANDIDATES=(
-    "$HOME/Documents/Obsidian"
-    "$HOME/Obsidian"
-    "$HOME/Documents/vault"
-    "$HOME/vault"
-    "$HOME/Documents/Notes"
-    "$HOME/Notes"
-    "$HOME/Vaults"
-)
 
-# Check for vaults with .obsidian folder
-for candidate in "${VAULT_CANDIDATES[@]}"; do
-    if [ -d "$candidate/.obsidian" ]; then
-        VAULT_PATH="$candidate"
-        break
+# Check for previously configured vault
+if [ -n "$SAVED_VAULT" ] && [ -d "$SAVED_VAULT" ]; then
+    ok "Found previous vault: $SAVED_VAULT"
+    echo
+    if confirm "Use this vault?"; then
+        VAULT_PATH="$SAVED_VAULT"
     fi
-done
+fi
+
+# Only search for vaults if we don't have one yet
+if [ -z "$VAULT_PATH" ]; then
+    VAULT_CANDIDATES=(
+        "$HOME/Documents/Obsidian"
+        "$HOME/Obsidian"
+        "$HOME/Documents/vault"
+        "$HOME/vault"
+        "$HOME/Documents/Notes"
+        "$HOME/Notes"
+        "$HOME/Vaults"
+    )
+
+    # Check for vaults with .obsidian folder
+    for candidate in "${VAULT_CANDIDATES[@]}"; do
+        if [ -d "$candidate/.obsidian" ]; then
+            VAULT_PATH="$candidate"
+            break
+        fi
+    done
+fi
 
 # Also check inside common parent folders
-for parent in "$HOME/Vaults" "$HOME/Documents/Vaults" "$HOME/Documents/Obsidian"; do
-    if [ -d "$parent" ]; then
-        while IFS= read -r -d '' vault; do
-            if [ -d "$vault/.obsidian" ]; then
-                VAULT_PATH="${vault%/.obsidian}"
-                break 2
-            fi
-        done < <(find "$parent" -maxdepth 2 -type d -name ".obsidian" -print0 2>/dev/null)
-    fi
-done
+if [ -z "$VAULT_PATH" ]; then
+    for parent in "$HOME/Vaults" "$HOME/Documents/Vaults" "$HOME/Documents/Obsidian"; do
+        if [ -d "$parent" ]; then
+            while IFS= read -r -d '' vault; do
+                if [ -d "$vault/.obsidian" ]; then
+                    VAULT_PATH="${vault%/.obsidian}"
+                    break 2
+                fi
+            done < <(find "$parent" -maxdepth 2 -type d -name ".obsidian" -print0 2>/dev/null)
+        fi
+    done
 
-if [ -n "$VAULT_PATH" ]; then
-    ok "Found vault: $VAULT_PATH"
-    echo
-    if ! confirm "Use this vault?"; then
-        VAULT_PATH=""
+    if [ -n "$VAULT_PATH" ]; then
+        ok "Found vault: $VAULT_PATH"
+        echo
+        if ! confirm "Use this vault?"; then
+            VAULT_PATH=""
+        fi
     fi
 fi
 
@@ -264,74 +317,10 @@ else
 fi
 
 # =============================================================================
-# Privacy Check
-# =============================================================================
-
-section "Step 3: Privacy Check"
-
-info "Your vault will be synced to your Pi."
-info "This step checks for files you might want to exclude."
-echo
-
-STIGNORE_ENTRIES=()
-
-if confirm "Scan for sensitive files? (API keys, passwords, etc.)"; then
-    echo
-    spinner_start "Scanning for sensitive files..."
-
-    PRIVACY_FILES=()
-
-    # Check for sensitive filenames
-    while IFS= read -r -d '' file; do
-        filename=$(basename "$file" | tr '[:upper:]' '[:lower:]')
-        case "$filename" in
-            .env*|*credential*|*secret*|*password*|*apikey*|*api_key*)
-                rel="${file#$VAULT_PATH/}"
-                PRIVACY_FILES+=("$rel")
-                ;;
-        esac
-    done < <(find "$VAULT_PATH" -type f \( -name "*.md" -o -name "*.txt" -o -name ".env*" -o -name "*.json" \) -print0 2>/dev/null || true)
-
-    # Check file contents for API key patterns
-    while IFS= read -r -d '' file; do
-        if [ -f "$file" ] && [ "$(wc -c < "$file" 2>/dev/null)" -lt 1000000 ]; then
-            if grep -qE 'sk-[a-zA-Z0-9]{20,}' "$file" 2>/dev/null; then
-                rel="${file#$VAULT_PATH/}"
-                [[ ! " ${PRIVACY_FILES[*]} " =~ " ${rel} " ]] && PRIVACY_FILES+=("$rel")
-            fi
-        fi
-    done < <(find "$VAULT_PATH" -type f -name "*.md" -print0 2>/dev/null || true)
-
-    if [ ${#PRIVACY_FILES[@]} -gt 0 ]; then
-        spinner_stop "err" "Found ${#PRIVACY_FILES[@]} potentially sensitive file(s):"
-        echo
-
-        for f in "${PRIVACY_FILES[@]}"; do
-            printf "    ${RED}• %s${NC}\n" "$f"
-            if confirm "      Exclude this file?"; then
-                STIGNORE_ENTRIES+=("$f")
-            fi
-            echo
-        done
-
-        if [ ${#STIGNORE_ENTRIES[@]} -gt 0 ]; then
-            ok "Will exclude ${#STIGNORE_ENTRIES[@]} file(s) from sync"
-        else
-            ok "No files excluded"
-        fi
-    else
-        spinner_stop "ok" "No sensitive files found"
-    fi
-else
-    echo
-    ok "Skipping privacy scan"
-fi
-
-# =============================================================================
 # Connect to Pi
 # =============================================================================
 
-section "Step 4: Connecting to Your Pi"
+section "Step 3: Connecting to Your Pi"
 
 if $IS_PI; then
     ok "Running on Pi - no remote connection needed"
@@ -344,16 +333,19 @@ else
     info "  - Accessible via Tailscale (recommended) or local network"
     echo
 
-    PI_DETECTED=""
-    for host in "pi" "raspberrypi" "pi.local" "raspberrypi.local"; do
-        if ping -c 1 -W 1 "$host" &>/dev/null 2>&1; then
-            PI_DETECTED="$host"
-            break
-        fi
-    done
+    # Use saved values or detect
+    PI_DEFAULT="${SAVED_PI_HOST:-}"
+    if [ -z "$PI_DEFAULT" ]; then
+        for host in "pi" "raspberrypi" "pi.local" "raspberrypi.local"; do
+            if ping -c 1 -W 1 "$host" &>/dev/null 2>&1; then
+                PI_DEFAULT="$host"
+                break
+            fi
+        done
+    fi
 
-    PI_HOST=$(ask "Pi hostname or IP:" "${PI_DETECTED:-pi.local}")
-    PI_USER=$(ask "SSH username:" "pi")
+    PI_HOST=$(ask "Pi hostname or IP:" "${PI_DEFAULT:-pi.local}")
+    PI_USER=$(ask "SSH username:" "${SAVED_PI_USER:-pi}")
 
     spinner_start "Connecting to $PI_USER@$PI_HOST..."
 
@@ -375,7 +367,7 @@ fi
 # Install Ludolph on Pi
 # =============================================================================
 
-section "Step 5: Installing Ludolph"
+section "Step 4: Installing Ludolph"
 
 if [ -z "$VERSION" ]; then
     spinner_start "Fetching latest version..."
@@ -418,483 +410,462 @@ EOF
 fi
 
 # =============================================================================
-# Initial Vault Copy
+# Set Up Vault Access (MCP Server)
 # =============================================================================
 
 if ! $IS_PI; then
-    section "Step 6: Copying Vault to Pi"
+    section "Step 5: Set Up Vault Access"
 
-    # Show vault info
-    VAULT_SIZE=$(du -sh "$VAULT_PATH" 2>/dev/null | cut -f1)
-    FILE_COUNT=$(find "$VAULT_PATH" -type f 2>/dev/null | wc -l | tr -d ' ')
-    info "Vault: $VAULT_PATH"
-    info "Size: $VAULT_SIZE ($FILE_COUNT files)"
+    info "Your Pi needs a way to read your vault on this Mac."
+    info "We'll start a small server that shares your notes securely."
     echo
 
-    # Check if vault is in a git repo with a remote
-    cd "$VAULT_PATH"
-    HAS_GIT_REMOTE=false
-    GIT_REMOTE_URL=""
-    IS_GIT_REPO=false
-
-    spinner_start "Checking for version control..."
-    if git rev-parse --is-inside-work-tree &>/dev/null; then
-        IS_GIT_REPO=true
-        GIT_REMOTE_URL=$(git remote get-url origin 2>/dev/null || true)
-        if [ -n "$GIT_REMOTE_URL" ]; then
-            HAS_GIT_REMOTE=true
-            spinner_stop "ok" "Found: $GIT_REMOTE_URL"
-        else
-            spinner_stop "ok" "Local version control (no backup)"
-        fi
+    # Generate or reuse auth token
+    mkdir -p "$LOCAL_DIR"
+    if [ -f "$LOCAL_DIR/mcp_token" ]; then
+        MCP_AUTH_TOKEN=$(cat "$LOCAL_DIR/mcp_token")
+        ok "Using existing auth token"
     else
-        spinner_stop "ok" "No version control"
+        spinner_start "Generating auth token..."
+        MCP_AUTH_TOKEN=$(openssl rand -hex 32)
+        echo "$MCP_AUTH_TOKEN" > "$LOCAL_DIR/mcp_token"
+        chmod 600 "$LOCAL_DIR/mcp_token"
+        spinner_stop "ok" "Token generated and stored"
     fi
 
-    # Offer to set up GitHub if no remote
-    if ! $HAS_GIT_REMOTE; then
-        echo
-        info "Version control gives you:"
-        info "  • History of every change (can undo anything)"
-        info "  • Automatic backup to GitHub"
-        info "  • Faster sync to Pi"
-        echo
-
-        if confirm "Set up GitHub backup for your vault?"; then
-            echo
-
-            # Check for gh CLI
-            if command -v gh &>/dev/null; then
-                # Check if authenticated
-                if gh auth status &>/dev/null; then
-                    GITHUB_USER=$(gh api user -q .login 2>/dev/null)
-                    REPO_NAME=$(basename "$VAULT_PATH" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')
-
-                    # Initialize git if needed
-                    if ! $IS_GIT_REPO; then
-                        spinner_start "Initializing version control..."
-                        git init -q
-
-                        # Create .gitignore
-                        cat > .gitignore <<'GITIGNORE'
-# Obsidian workspace (changes constantly)
-.obsidian/workspace.json
-.obsidian/workspace-mobile.json
-.obsidian/workspace.json.bak
-
-# Trash
-.trash/
-
-# System files
-.DS_Store
-GITIGNORE
-
-                        git add -A
-                        git commit -q -m "Initial commit"
-                        spinner_stop "ok" "Version control initialized"
-                    fi
-
-                    # Create GitHub repo
-                    spinner_start "Creating private GitHub repository..."
-                    if gh repo create "$REPO_NAME" --private --source=. --push &>/dev/null; then
-                        GIT_REMOTE_URL=$(git remote get-url origin 2>/dev/null)
-                        HAS_GIT_REMOTE=true
-                        spinner_stop "ok" "Created: github.com/$GITHUB_USER/$REPO_NAME"
-                    else
-                        spinner_stop "err" "Could not create repository"
-                        info "You can set this up manually later."
-                    fi
-                else
-                    warn "GitHub CLI not authenticated"
-                    echo
-                    info "Run: gh auth login"
-                    info "Then re-run the installer."
-                    echo
-                    info "Continuing without GitHub backup..."
-                fi
-            else
-                # No gh CLI - guide manual setup
-                info "To set up GitHub backup manually:"
-                echo
-                info "  1. Go to github.com/new"
-                info "  2. Name it something like 'my-vault'"
-                info "  3. Select 'Private'"
-                info "  4. Click 'Create repository'"
-                info "  5. Follow the instructions to push existing code"
-                echo
-                info "Or install GitHub CLI: brew install gh"
-                echo
-                info "Continuing without GitHub backup..."
-            fi
-        else
-            echo
-            ok "Skipping GitHub backup"
+    # Get Mac's IP for Pi to connect to
+    # Prefer Tailscale IP if available, otherwise local IP
+    MAC_IP=""
+    USING_TAILSCALE=false
+    if command -v tailscale &>/dev/null; then
+        MAC_IP=$(tailscale ip -4 2>/dev/null | head -1 || true)
+        if [ -n "$MAC_IP" ]; then
+            USING_TAILSCALE=true
         fi
     fi
-    echo
+    if [ -z "$MAC_IP" ]; then
+        MAC_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "")
+    fi
+    if [ -z "$MAC_IP" ]; then
+        MAC_IP=$(ask "Enter your Mac's IP address:")
+    fi
+    ok "Mac IP: $MAC_IP"
 
-    # Now deploy based on whether we have a remote
-    if $HAS_GIT_REMOTE; then
-        info "Deploying via git clone..."
+    # Security warning if not using Tailscale
+    if ! $USING_TAILSCALE; then
         echo
+        warn "Tailscale not detected"
+        echo
+        info "Without Tailscale, the connection uses plaintext HTTP"
+        info "on your local network. This is fine for home networks, but"
+        info "for better security, consider installing Tailscale:"
+        info "  brew install tailscale"
+        echo
+        info "Tailscale encrypts all traffic and lets you access your"
+        info "vault from anywhere without exposing ports to the internet."
+        echo
+    fi
 
-        # Get the subdirectory if vault is not at repo root
-        GIT_ROOT=$(git rev-parse --show-toplevel)
-        if [ "$GIT_ROOT" != "$VAULT_PATH" ]; then
-            VAULT_SUBDIR="${VAULT_PATH#$GIT_ROOT/}"
-            PI_VAULT_PATH="~/repo/$VAULT_SUBDIR"
-            info "Vault is subdirectory: $VAULT_SUBDIR"
-        else
-            VAULT_SUBDIR=""
-            PI_VAULT_PATH="~/repo"
-        fi
+    # Create server files
+    spinner_start "Creating vault server..."
+    mkdir -p "$LOCAL_DIR/mcp"
 
-        # Check if repo exists on Pi
-        spinner_start "git: Checking Pi for existing repo..."
-        PI_HAS_REPO=$(ssh "$PI_USER@$PI_HOST" "[ -d ~/repo/.git ] && echo yes || echo no")
+    # Write server.py
+    cat > "$LOCAL_DIR/mcp/server.py" << 'SERVEREOF'
+#!/usr/bin/env python3
+"""Ludolph Vault Server - Shares vault with Pi over HTTP."""
 
-        if [ "$PI_HAS_REPO" = "yes" ]; then
-            spinner_stop "ok" "git: Found existing repo on Pi"
+import os
+import re
+from functools import wraps
+from pathlib import Path
 
-            spinner_start "git: Pulling latest changes..."
-            ssh "$PI_USER@$PI_HOST" "cd ~/repo && git pull origin" &>/dev/null
-            spinner_stop "ok" "git: Pulled latest changes"
-        else
-            spinner_stop "ok" "git: No existing repo on Pi"
+from flask import Flask, jsonify, request
 
-            spinner_start "git: Cloning $GIT_REMOTE_URL..."
-            ssh "$PI_USER@$PI_HOST" "git clone '$GIT_REMOTE_URL' ~/repo" &>/dev/null
-            spinner_stop "ok" "git: Repository cloned to ~/repo"
-        fi
+app = Flask(__name__)
+
+VAULT_PATH = Path(os.environ.get("VAULT_PATH", "~/vault")).expanduser().resolve()
+AUTH_TOKEN = os.environ.get("AUTH_TOKEN", "")
+
+
+def require_auth(f):
+    """Decorator to require Bearer token authentication."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.headers.get("Authorization", "")
+        if auth != f"Bearer {AUTH_TOKEN}":
+            return jsonify({"error": "Unauthorized"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+
+def safe_path(relative: str) -> Path | None:
+    """Resolve a path safely within the vault, preventing directory traversal."""
+    if ".." in relative:
+        return None
+    # Handle empty path as vault root
+    if not relative or relative == ".":
+        return VAULT_PATH
+    full = (VAULT_PATH / relative).resolve()
+    # Ensure path is within vault
+    try:
+        full.relative_to(VAULT_PATH)
+        return full
+    except ValueError:
+        return None
+
+
+@app.route("/health")
+@require_auth
+def health():
+    """Health check endpoint."""
+    return jsonify({"status": "ok", "vault": str(VAULT_PATH)})
+
+
+@app.route("/tools")
+@require_auth
+def tools():
+    """Return available tool definitions."""
+    return jsonify({
+        "tools": [
+            {
+                "name": "read_file",
+                "description": "Read the contents of a file in the vault",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to the file relative to vault root"
+                        }
+                    },
+                    "required": ["path"]
+                }
+            },
+            {
+                "name": "list_dir",
+                "description": "List the contents of a directory in the vault",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to the directory relative to vault root"
+                        }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "search",
+                "description": "Search for files or content in the vault",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query (searches file names and content)"
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Optional subdirectory to search within"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            }
+        ]
+    })
+
+
+@app.route("/tools/call", methods=["POST"])
+@require_auth
+def call_tool():
+    """Execute a tool and return the result."""
+    data = request.json or {}
+    name = data.get("name", "")
+    args = data.get("arguments", {})
+
+    if name == "read_file":
+        path = safe_path(args.get("path", ""))
+        if not path:
+            return jsonify({"content": "", "error": "Invalid path"})
+        if not path.exists():
+            return jsonify({"content": "", "error": f"File not found: {args.get('path')}"})
+        if not path.is_file():
+            return jsonify({"content": "", "error": "Path is not a file"})
+        try:
+            content = path.read_text(encoding="utf-8")
+            return jsonify({"content": content, "error": None})
+        except Exception as e:
+            return jsonify({"content": "", "error": str(e)})
+
+    elif name == "list_dir":
+        path = safe_path(args.get("path", ""))
+        if not path:
+            return jsonify({"content": "", "error": "Invalid path"})
+        if not path.exists():
+            return jsonify({"content": "", "error": f"Directory not found: {args.get('path', '.')}"})
+        if not path.is_dir():
+            return jsonify({"content": "", "error": "Path is not a directory"})
+        try:
+            entries = []
+            for entry in sorted(path.iterdir()):
+                if entry.name.startswith("."):
+                    continue
+                kind = "dir" if entry.is_dir() else "file"
+                entries.append(f"{kind}: {entry.name}")
+            content = "\n".join(entries) if entries else "(empty directory)"
+            return jsonify({"content": content, "error": None})
+        except Exception as e:
+            return jsonify({"content": "", "error": str(e)})
+
+    elif name == "search":
+        query = args.get("query", "")
+        search_path = safe_path(args.get("path", ""))
+        if not search_path:
+            search_path = VAULT_PATH
+        if not query:
+            return jsonify({"content": "", "error": "Query required"})
+        try:
+            results = []
+            pattern = re.compile(re.escape(query), re.IGNORECASE)
+            for path in search_path.rglob("*"):
+                if path.is_file() and not any(p.startswith(".") for p in path.parts):
+                    rel_path = path.relative_to(VAULT_PATH)
+                    # Check filename
+                    if pattern.search(path.name):
+                        results.append(f"file: {rel_path}")
+                    # Check content for text files
+                    elif path.suffix in (".md", ".txt", ".json", ".yaml", ".yml"):
+                        try:
+                            content = path.read_text(encoding="utf-8")
+                            if pattern.search(content):
+                                results.append(f"match: {rel_path}")
+                        except Exception:
+                            pass
+                if len(results) >= 50:
+                    break
+            content = "\n".join(results) if results else "No matches found"
+            return jsonify({"content": content, "error": None})
+        except Exception as e:
+            return jsonify({"content": "", "error": str(e)})
+
+    return jsonify({"content": "", "error": f"Unknown tool: {name}"})
+
+
+if __name__ == "__main__":
+    if not AUTH_TOKEN:
+        print("Warning: AUTH_TOKEN not set - server is unprotected!")
+    port = int(os.environ.get("PORT", 8200))
+    print(f"Vault: {VAULT_PATH}")
+    print(f"Port: {port}")
+    app.run(host="0.0.0.0", port=port)
+SERVEREOF
+
+    spinner_stop "ok" "Vault server created"
+
+    # Install Flask
+    spinner_start "Installing Flask..."
+    if pip3 install --user -q flask 2>/dev/null; then
+        spinner_stop "ok" "Flask installed"
+    elif python3 -m pip install --user -q flask 2>/dev/null; then
+        spinner_stop "ok" "Flask installed"
+    elif pip3 install --break-system-packages -q flask 2>/dev/null; then
+        spinner_stop "ok" "Flask installed"
     else
-        # Fall back to rsync
-        info "Deploying via rsync..."
-        echo
-        PI_VAULT_PATH="~/vault"
-
-        spinner_start "rsync: Creating ~/vault on Pi..."
-        ssh "$PI_USER@$PI_HOST" "mkdir -p ~/vault"
-        spinner_stop "ok" "rsync: Created ~/vault"
-
-        info "rsync: Large vaults may take several minutes..."
-        spinner_start "rsync: Copying $VAULT_SIZE to Pi..."
-        rsync -az --delete \
-            --exclude='.obsidian/workspace.json' \
-            --exclude='.obsidian/workspace-mobile.json' \
-            --exclude='.trash' \
-            --exclude='.DS_Store' \
-            "$VAULT_PATH/" "$PI_USER@$PI_HOST:~/vault/"
-        spinner_stop "ok" "rsync: Copied $FILE_COUNT files to ~/vault"
-    fi
-fi
-
-# =============================================================================
-# Install Syncthing
-# =============================================================================
-
-section "Step 7: Setting Up Real-Time Sync"
-
-info "Your vault needs to stay in sync between Mac and Pi."
-info "Syncthing provides real-time bidirectional sync."
-echo
-
-SETUP_SYNCTHING=true
-
-if confirm "Set up Syncthing for automatic sync?"; then
-    echo
-else
-    SETUP_SYNCTHING=false
-    echo
-    ok "Skipping Syncthing setup"
-    echo
-    info "You'll need to sync your vault manually or use your own method."
-    info "Common options: iCloud, Dropbox, rsync, or existing Syncthing."
-    echo
-fi
-
-# Install on Mac
-if $SETUP_SYNCTHING && $IS_MAC; then
-    spinner_start "Installing Syncthing on Mac..."
-
-    if command -v brew &>/dev/null; then
-        # Use Homebrew
-        brew install syncthing &>/dev/null || true
-        spinner_stop "ok" "Syncthing installed via Homebrew"
-    else
-        # Direct download
-        mkdir -p "$LOCAL_DIR/bin"
-
-        if [ "$ARCH" = "aarch64" ]; then
-            ST_ARCH="arm64"
-        else
-            ST_ARCH="amd64"
-        fi
-
-        ST_URL="https://github.com/syncthing/syncthing/releases/download/v${SYNCTHING_VERSION}/syncthing-macos-${ST_ARCH}-v${SYNCTHING_VERSION}.zip"
-
-        curl -fsSL "$ST_URL" -o "/tmp/syncthing.zip" 2>/dev/null
-        unzip -q -o "/tmp/syncthing.zip" -d "/tmp/"
-        mv "/tmp/syncthing-macos-${ST_ARCH}-v${SYNCTHING_VERSION}/syncthing" "$LOCAL_DIR/bin/"
-        chmod +x "$LOCAL_DIR/bin/syncthing"
-        rm -rf "/tmp/syncthing.zip" "/tmp/syncthing-macos-${ST_ARCH}-v${SYNCTHING_VERSION}"
-
-        spinner_stop "ok" "Syncthing installed to ~/.ludolph/bin"
-    fi
-fi
-
-# Install on Pi
-if $SETUP_SYNCTHING && ! $IS_PI; then
-    spinner_start "Installing Syncthing on Pi..."
-    ssh "$PI_USER@$PI_HOST" bash -s <<'EOF'
-set -e
-if ! command -v syncthing &>/dev/null; then
-    sudo apt-get update -qq
-    sudo apt-get install -y -qq syncthing >/dev/null 2>&1
-fi
-EOF
-    spinner_stop "ok" "Syncthing installed on Pi"
-fi
-
-# =============================================================================
-# Configure Syncthing
-# =============================================================================
-
-if $SETUP_SYNCTHING; then
-
-spinner_start "Configuring Syncthing..."
-
-# Generate config and get device IDs
-if $IS_MAC; then
-    # Mac: Generate config if needed
-    if [ ! -d "$HOME/.config/syncthing" ]; then
-        if command -v syncthing &>/dev/null; then
-            syncthing generate --config="$HOME/.config/syncthing" &>/dev/null
-        else
-            "$LOCAL_DIR/bin/syncthing" generate --config="$HOME/.config/syncthing" &>/dev/null
-        fi
+        spinner_stop "err" "Could not install Flask"
+        info "Run: pip3 install flask"
+        info "Then re-run this installer"
+        exit 1
     fi
 
-    if command -v syncthing &>/dev/null; then
-        MAC_DEVICE_ID=$(syncthing --device-id 2>/dev/null)
-    else
-        MAC_DEVICE_ID=$("$LOCAL_DIR/bin/syncthing" --device-id 2>/dev/null)
-    fi
-fi
-
-if ! $IS_PI; then
-    # Pi: Generate config and get device ID
-    PI_DEVICE_ID=$(ssh "$PI_USER@$PI_HOST" bash -s <<'EOF'
-if [ ! -d "$HOME/.config/syncthing" ]; then
-    syncthing generate --config="$HOME/.config/syncthing" &>/dev/null
-fi
-syncthing --device-id 2>/dev/null
-EOF
-)
-fi
-
-spinner_stop "ok" "Generated Syncthing configs"
-
-# Configure the shared folder and devices
-spinner_start "Configuring sync folder..."
-
-if $IS_MAC; then
-    # Create .stignore file for excluded files
-    STIGNORE_FILE="$VAULT_PATH/.stignore"
-    cat > "$STIGNORE_FILE" <<'STIGNORE'
-// Syncthing ignore patterns for Ludolph
-.obsidian/workspace.json
-.obsidian/workspace-mobile.json
-.obsidian/workspace.json.bak
-.trash
-.DS_Store
-STIGNORE
-
-    # Add user-excluded files
-    if [ ${#STIGNORE_ENTRIES[@]} -gt 0 ]; then
-        echo "" >> "$STIGNORE_FILE"
-        echo "// Files excluded by Ludolph installer" >> "$STIGNORE_FILE"
-        for entry in "${STIGNORE_ENTRIES[@]}"; do
-            echo "$entry" >> "$STIGNORE_FILE"
+    # Choose port (default 8200, but check if in use)
+    MCP_PORT=8200
+    if lsof -ti :$MCP_PORT >/dev/null 2>&1; then
+        # Find an available port
+        while lsof -ti :$MCP_PORT >/dev/null 2>&1; do
+            MCP_PORT=$((MCP_PORT + 1))
         done
     fi
-fi
 
-# Copy .stignore to Pi (use correct vault path)
-if ! $IS_PI && [ -f "$VAULT_PATH/.stignore" ]; then
-    scp -q "$VAULT_PATH/.stignore" "$PI_USER@$PI_HOST:$PI_VAULT_PATH/.stignore"
-fi
+    # Create launchd plist for auto-start
+    spinner_start "Setting up auto-start..."
+    PLIST_PATH="$HOME/Library/LaunchAgents/dev.ludolph.mcp.plist"
+    mkdir -p "$HOME/Library/LaunchAgents"
 
-spinner_stop "ok" "Sync folder configured"
+    # Get Python user site-packages for PYTHONPATH
+    PYTHON_USER_SITE=$(python3 -c 'import site; print(site.getusersitepackages())' 2>/dev/null || echo "$HOME/.local/lib/python3/site-packages")
+    PYTHON_PATH=$(which python3)
 
-# Add devices and folder to Syncthing config
-spinner_start "Linking Mac and Pi..."
+    cat > "$PLIST_PATH" << PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.ludolph.mcp</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$PYTHON_PATH</string>
+        <string>$LOCAL_DIR/mcp/server.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>$LOCAL_DIR/mcp</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>VAULT_PATH</key>
+        <string>$VAULT_PATH</string>
+        <key>AUTH_TOKEN</key>
+        <string>$MCP_AUTH_TOKEN</string>
+        <key>PORT</key>
+        <string>$MCP_PORT</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin</string>
+        <key>PYTHONPATH</key>
+        <string>$PYTHON_USER_SITE</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>$LOCAL_DIR/mcp/server.log</string>
+    <key>StandardErrorPath</key>
+    <string>$LOCAL_DIR/mcp/server.log</string>
+</dict>
+</plist>
+PLISTEOF
 
-if $IS_MAC && ! $IS_PI; then
-    # Configure Mac's Syncthing
-    ST_CONFIG="$HOME/.config/syncthing/config.xml"
+    spinner_stop "ok" "Auto-start configured"
 
-    # Use Python to modify XML config (available on Mac by default)
-    python3 - "$ST_CONFIG" "$PI_DEVICE_ID" "$VAULT_PATH" <<'PYEOF'
-import sys
-import xml.etree.ElementTree as ET
+    spinner_start "Starting vault server..."
 
-config_file = sys.argv[1]
-pi_device_id = sys.argv[2]
-vault_path = sys.argv[3]
+    # Stop any existing ludolph server
+    launchctl unload "$PLIST_PATH" 2>/dev/null || true
+    pkill -f "ludolph/mcp/server.py" 2>/dev/null || true
+    sleep 1
 
-tree = ET.parse(config_file)
-root = tree.getroot()
+    launchctl load "$PLIST_PATH" 2>/dev/null
 
-# Add Pi as a device if not present
-devices = root.findall('.//device')
-pi_exists = any(d.get('id') == pi_device_id for d in devices)
-if not pi_exists:
-    device = ET.SubElement(root, 'device')
-    device.set('id', pi_device_id)
-    device.set('name', 'Pi')
-    device.set('compression', 'metadata')
-    device.set('introducer', 'false')
-    device.set('skipIntroductionRemovals', 'false')
-    device.set('introducedBy', '')
-    ET.SubElement(device, 'address').text = 'dynamic'
-    ET.SubElement(device, 'autoAcceptFolders').text = 'true'
+    # Wait for server to respond (retry up to 5 times)
+    SERVER_OK=false
+    for i in 1 2 3 4 5; do
+        sleep 1
+        if curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $MCP_AUTH_TOKEN" "http://localhost:$MCP_PORT/health" 2>/dev/null | grep -q "200"; then
+            SERVER_OK=true
+            break
+        fi
+    done
 
-# Add vault folder if not present
-folders = root.findall('.//folder')
-vault_exists = any(f.get('path') == vault_path for f in folders)
-if not vault_exists:
-    folder = ET.SubElement(root, 'folder')
-    folder.set('id', 'ludolph-vault')
-    folder.set('label', 'Ludolph Vault')
-    folder.set('path', vault_path)
-    folder.set('type', 'sendreceive')
-    folder.set('rescanIntervalS', '60')
-    folder.set('fsWatcherEnabled', 'true')
-    folder.set('fsWatcherDelayS', '1')
-    folder.set('ignorePerms', 'false')
-    folder.set('autoNormalize', 'true')
-
-    # Share with Pi
-    dev_elem = ET.SubElement(folder, 'device')
-    dev_elem.set('id', pi_device_id)
-    dev_elem.set('introducedBy', '')
-
-tree.write(config_file)
-PYEOF
-
-    # Configure Pi's Syncthing (pass vault path as argument)
-    # Note: PI_VAULT_PATH uses ~ which expands on Pi via os.path.expanduser
-    ssh "$PI_USER@$PI_HOST" python3 - "$MAC_DEVICE_ID" "$PI_VAULT_PATH" <<'PYEOF'
-import sys
-import xml.etree.ElementTree as ET
-import os
-
-config_file = os.path.expanduser('~/.config/syncthing/config.xml')
-mac_device_id = sys.argv[1]
-vault_path = os.path.expanduser(sys.argv[2])
-
-tree = ET.parse(config_file)
-root = tree.getroot()
-
-# Add Mac as a device if not present
-devices = root.findall('.//device')
-mac_exists = any(d.get('id') == mac_device_id for d in devices)
-if not mac_exists:
-    device = ET.SubElement(root, 'device')
-    device.set('id', mac_device_id)
-    device.set('name', 'Mac')
-    device.set('compression', 'metadata')
-    device.set('introducer', 'false')
-    device.set('skipIntroductionRemovals', 'false')
-    device.set('introducedBy', '')
-    ET.SubElement(device, 'address').text = 'dynamic'
-    ET.SubElement(device, 'autoAcceptFolders').text = 'true'
-
-# Add vault folder if not present
-folders = root.findall('.//folder')
-vault_exists = any(f.get('path') == vault_path for f in folders)
-if not vault_exists:
-    folder = ET.SubElement(root, 'folder')
-    folder.set('id', 'ludolph-vault')
-    folder.set('label', 'Ludolph Vault')
-    folder.set('path', vault_path)
-    folder.set('type', 'sendreceive')
-    folder.set('rescanIntervalS', '60')
-    folder.set('fsWatcherEnabled', 'true')
-    folder.set('fsWatcherDelayS', '1')
-    folder.set('ignorePerms', 'false')
-    folder.set('autoNormalize', 'true')
-
-    # Share with Mac
-    dev_elem = ET.SubElement(folder, 'device')
-    dev_elem.set('id', mac_device_id)
-    dev_elem.set('introducedBy', '')
-
-tree.write(config_file)
-PYEOF
-fi
-
-spinner_stop "ok" "Mac and Pi linked"
-
-# Start Syncthing services
-spinner_start "Starting Syncthing..."
-
-if $IS_MAC; then
-    # Start Syncthing on Mac (in background)
-    if command -v brew &>/dev/null; then
-        brew services start syncthing &>/dev/null || true
+    if $SERVER_OK; then
+        spinner_stop "ok" "Vault server running (port $MCP_PORT, can change later)"
     else
-        nohup "$LOCAL_DIR/bin/syncthing" --no-browser > "$LOCAL_DIR/syncthing.log" 2>&1 &
+        spinner_stop "err" "Server failed to start"
+        echo
+        info "Check the error:"
+        tail -5 "$LOCAL_DIR/mcp/server.log" 2>/dev/null || echo "  (no log file)"
+        echo
+        info "Fix the issue and restart:"
+        info "  launchctl stop dev.ludolph.mcp"
+        info "  launchctl start dev.ludolph.mcp"
+        exit 1
     fi
 fi
 
+# =============================================================================
+# Configure Wake-on-LAN
+# =============================================================================
+
 if ! $IS_PI; then
-    # Enable and start Syncthing on Pi
+    section "Step 6: Configure Wake-on-LAN"
+
+    info "If your Mac is asleep, the Pi can wake it automatically."
+    echo
+
+    # Get Mac's MAC address
+    spinner_start "Getting Mac's network address..."
+    MAC_ADDRESS=$(ifconfig en0 2>/dev/null | grep ether | awk '{print $2}' || true)
+    if [ -z "$MAC_ADDRESS" ]; then
+        MAC_ADDRESS=$(ifconfig en1 2>/dev/null | grep ether | awk '{print $2}' || true)
+    fi
+
+    if [ -n "$MAC_ADDRESS" ]; then
+        spinner_stop "ok" "MAC address: $MAC_ADDRESS"
+    else
+        spinner_stop "warn" "Could not detect MAC address"
+        MAC_ADDRESS=$(ask "Enter your Mac's MAC address (e.g., a4:83:e7:xx:xx:xx):")
+    fi
+
+    # Install wakeonlan on Pi
+    spinner_start "Installing wakeonlan on Pi..."
     ssh "$PI_USER@$PI_HOST" bash -s <<'EOF'
-systemctl --user enable syncthing.service 2>/dev/null || true
-systemctl --user start syncthing.service 2>/dev/null || true
-EOF
+set -e
+if ! command -v wakeonlan &>/dev/null; then
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq wakeonlan >/dev/null 2>&1
 fi
+EOF
+    spinner_stop "ok" "Wake-on-LAN ready"
 
-spinner_stop "ok" "Syncthing running on both devices"
-
-fi  # end SETUP_SYNCTHING
+    echo
+    info "Note: For Wake-on-LAN to work, you may need to enable it"
+    info "in System Settings > Energy Saver > Wake for network access"
+    echo
+fi
 
 # =============================================================================
 # API Credentials
 # =============================================================================
 
-section "Step 8: API Keys"
+section "Step 7: API Keys"
 
-info "Ludolph needs two API keys to work:"
-echo
-info "  1. Telegram Bot Token - creates your bot"
-info "     Get one from @BotFather: t.me/BotFather"
-echo
-info "  2. Claude API Key - powers the AI"
-info "     Get one from: console.anthropic.com"
-echo
+# Check if we have saved credentials
+if [ -n "$SAVED_TELEGRAM_TOKEN" ] && [ -n "$SAVED_CLAUDE_KEY" ]; then
+    ok "Found saved API keys"
+    echo
+    if confirm "Use existing API keys?"; then
+        TELEGRAM_TOKEN="$SAVED_TELEGRAM_TOKEN"
+        TELEGRAM_USER_ID="$SAVED_TELEGRAM_USER"
+        CLAUDE_API_KEY="$SAVED_CLAUDE_KEY"
+    else
+        SAVED_TELEGRAM_TOKEN=""
+        SAVED_CLAUDE_KEY=""
+    fi
+fi
 
-pause
+if [ -z "$SAVED_TELEGRAM_TOKEN" ]; then
+    info "Ludolph needs two API keys to work:"
+    echo
+    info "  1. Telegram Bot Token - creates your bot"
+    info "     Get one from @BotFather: t.me/BotFather"
+    echo
+    info "  2. Claude API Key - powers the AI"
+    info "     Get one from: console.anthropic.com"
+    echo
 
-TELEGRAM_TOKEN=$(ask_secret "Telegram Bot Token:")
-[ -z "$TELEGRAM_TOKEN" ] && { err "Token required"; exit 1; }
+    pause
 
-echo
-TELEGRAM_USER_ID=$(ask "Your Telegram User ID (get from @userinfobot):")
-[ -z "$TELEGRAM_USER_ID" ] && { err "User ID required"; exit 1; }
+    TELEGRAM_TOKEN=$(ask_secret "Telegram Bot Token:")
+    [ -z "$TELEGRAM_TOKEN" ] && { err "Token required"; exit 1; }
 
-echo
-CLAUDE_API_KEY=$(ask_secret "Claude API Key:")
-[ -z "$CLAUDE_API_KEY" ] && { err "API key required"; exit 1; }
+    echo
+    TELEGRAM_USER_ID=$(ask "Your Telegram User ID (get from @userinfobot):" "$SAVED_TELEGRAM_USER")
+    [ -z "$TELEGRAM_USER_ID" ] && { err "User ID required"; exit 1; }
+
+    echo
+    CLAUDE_API_KEY=$(ask_secret "Claude API Key:")
+    [ -z "$CLAUDE_API_KEY" ] && { err "API key required"; exit 1; }
+fi
 
 # =============================================================================
 # Configure and Start Bot
 # =============================================================================
 
-section "Step 9: Starting Ludolph"
+section "Step 8: Starting Ludolph"
 
-CONFIG="[telegram]
+# Pi config includes MCP connection details
+PI_CONFIG="[telegram]
 bot_token = \"$TELEGRAM_TOKEN\"
 allowed_users = [$TELEGRAM_USER_ID]
 
@@ -902,14 +873,16 @@ allowed_users = [$TELEGRAM_USER_ID]
 api_key = \"$CLAUDE_API_KEY\"
 model = \"claude-sonnet-4-20250514\"
 
-[vault]
-path = \"$PI_VAULT_PATH\"
+[mcp]
+url = \"http://$MAC_IP:$MCP_PORT\"
+auth_token = \"$MCP_AUTH_TOKEN\"
+mac_address = \"$MAC_ADDRESS\"
 "
 
 if $IS_PI; then
     spinner_start "Saving configuration..."
     mkdir -p "$LOCAL_DIR"
-    echo "$CONFIG" > "$LOCAL_DIR/config.toml"
+    echo "$PI_CONFIG" > "$LOCAL_DIR/config.toml"
     spinner_stop "ok" "Configuration saved"
 
     spinner_start "Starting bot..."
@@ -921,13 +894,13 @@ if $IS_PI; then
         spinner_stop "warn" "Check ~/.ludolph/ludolph.log"
     fi
 else
-    spinner_start "Saving configuration..."
-    ssh "$PI_USER@$PI_HOST" bash -s <<EOF
-mkdir -p ~/.ludolph
-cat > ~/.ludolph/config.toml << 'CONFIGEOF'
-$CONFIG
-CONFIGEOF
-EOF
+    spinner_start "Saving configuration on Pi..."
+    # Write config directly (heredoc with quotes prevents expansion)
+    echo "$PI_CONFIG" | ssh "$PI_USER@$PI_HOST" "mkdir -p ~/.ludolph && cat > ~/.ludolph/config.toml"
+    spinner_stop "ok" "Pi configuration saved"
+
+    # Mac config includes vault path and Pi connection info
+    spinner_start "Saving configuration on Mac..."
     mkdir -p "$LOCAL_DIR"
     cat > "$LOCAL_DIR/config.toml" <<EOF
 [telegram]
@@ -945,17 +918,13 @@ path = "$VAULT_PATH"
 host = "$PI_HOST"
 user = "$PI_USER"
 EOF
-    spinner_stop "ok" "Configuration saved"
+    spinner_stop "ok" "Mac configuration saved"
 
     spinner_start "Starting bot on Pi..."
-    BOT_STARTED=$(ssh "$PI_USER@$PI_HOST" bash -s <<'EOF'
-pkill -f 'ludolph/bin/lu' 2>/dev/null || true
-export PATH="$HOME/.ludolph/bin:$PATH"
-nohup ~/.ludolph/bin/lu > ~/.ludolph/ludolph.log 2>&1 &
-sleep 2
-pgrep -f 'ludolph/bin/lu' >/dev/null && echo "running"
-EOF
-)
+    # Use timeout and -n to prevent SSH from hanging
+    BOT_STARTED=$(timeout 15 ssh -n -o ConnectTimeout=5 -o BatchMode=yes "$PI_USER@$PI_HOST" \
+        'pkill -f "ludolph/bin/lu" 2>/dev/null; sleep 1; nohup ~/.ludolph/bin/lu > ~/.ludolph/ludolph.log 2>&1 & sleep 2; pgrep -f "ludolph/bin/lu" >/dev/null && echo running' \
+        2>/dev/null || echo "timeout")
     if [ "$BOT_STARTED" = "running" ]; then
         spinner_stop "ok" "Bot is running"
     else
@@ -975,8 +944,16 @@ BOT_USERNAME=$(echo "$BOT_INFO" | grep -o '"username":"[^"]*"' | cut -d'"' -f4 |
 echo
 printf "  Open Telegram and message ${CYAN}@%s${NC}\n" "$BOT_USERNAME"
 echo
-info "Your vault is ready to talk."
-info "Changes sync automatically between Mac and Pi."
+if ! $IS_PI; then
+    ok "Vault server running on your Mac"
+    ok "Bot running on your Pi"
+    echo
+fi
+info "Everything is connected and ready."
+echo
+rule
+echo
+info "Test it now - send /poke in Telegram"
 echo
 rule
 echo
@@ -986,5 +963,10 @@ if $IS_PI; then
     info "  lu status   Check bot status"
 else
     info "  ssh $PI_USER@$PI_HOST   Connect to your Pi"
+    echo
+    info "Vault server commands:"
+    info "  launchctl stop dev.ludolph.mcp     Stop server"
+    info "  launchctl start dev.ludolph.mcp    Start server"
+    info "  tail -f ~/.ludolph/mcp/server.log  View logs"
 fi
 echo

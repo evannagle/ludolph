@@ -12,6 +12,7 @@ pub struct Tool {
     pub input_schema: Value,
 }
 
+/// Get tool definitions for local execution.
 pub fn get_tool_definitions() -> Vec<Tool> {
     vec![
         read_file::definition(),
@@ -22,7 +23,8 @@ pub fn get_tool_definitions() -> Vec<Tool> {
     ]
 }
 
-pub async fn execute_tool(name: &str, input: &Value, vault_path: &std::path::Path) -> String {
+/// Execute a tool locally (for Mac or standalone Pi with local vault).
+pub async fn execute_tool_local(name: &str, input: &Value, vault_path: &std::path::Path) -> String {
     match name {
         "read_file" => read_file::execute(input, vault_path),
         "list_dir" => list_dir::execute(input, vault_path),

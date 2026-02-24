@@ -10,10 +10,14 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub telegram: TelegramConfig,
     pub claude: ClaudeConfig,
-    #[serde(default)]
-    pub vault: VaultConfig,
+    /// Local vault path (only needed on Mac, not on Pi with MCP)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault: Option<VaultConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pi: Option<PiConfig>,
+    /// MCP server configuration (used by Pi thin client to connect to Mac)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<McpConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +45,18 @@ pub struct VaultConfig {
 pub struct PiConfig {
     pub host: String,
     pub user: String,
+}
+
+/// MCP server connection configuration (for Pi thin client).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpConfig {
+    /// MCP server URL (e.g., `http://mac.local:8200`)
+    pub url: String,
+    /// Authentication token for MCP server
+    pub auth_token: String,
+    /// MAC address for Wake-on-LAN (e.g., "a4:83:e7:xx:xx:xx")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mac_address: Option<String>,
 }
 
 fn default_model() -> String {
@@ -93,8 +109,9 @@ impl Config {
         telegram_token: String,
         allowed_users: Vec<u64>,
         claude_api_key: String,
-        vault_path: PathBuf,
+        vault_path: Option<PathBuf>,
         pi: Option<PiConfig>,
+        mcp: Option<McpConfig>,
     ) -> Self {
         Self {
             telegram: TelegramConfig {
@@ -105,8 +122,9 @@ impl Config {
                 api_key: claude_api_key,
                 model: default_model(),
             },
-            vault: VaultConfig { path: vault_path },
+            vault: vault_path.map(|path| VaultConfig { path }),
             pi,
+            mcp,
         }
     }
 }

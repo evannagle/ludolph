@@ -4,14 +4,24 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
-use crate::tools::execute_tool;
+use crate::mcp_client::McpClient;
+use crate::tools::execute_tool_local;
+
+/// Tool execution backend.
+#[derive(Clone)]
+enum ToolBackend {
+    /// Local filesystem access (Mac or standalone Pi with local vault)
+    Local { vault_path: std::path::PathBuf },
+    /// Remote MCP server (Pi thin client connecting to Mac)
+    Mcp { client: McpClient },
+}
 
 #[derive(Clone)]
 pub struct Claude {
     client: reqwest::Client,
     api_key: String,
     model: String,
-    vault_path: std::path::PathBuf,
+    tool_backend: ToolBackend,
 }
 
 #[derive(Serialize)]
@@ -68,24 +78,70 @@ enum ContentBlock {
 
 impl Claude {
     /// Create a Claude client from config.
+    ///
+    /// If MCP config is present, uses remote MCP server for tool execution.
+    /// Otherwise, uses local filesystem access.
+    ///
+    /// # Panics
+    /// Panics if neither MCP nor vault is configured.
     #[must_use]
     pub fn from_config(config: &Config) -> Self {
+        let tool_backend = config
+            .mcp
+            .as_ref()
+            .map(|mcp_config| ToolBackend::Mcp {
+                client: McpClient::from_config(mcp_config),
+            })
+            .or_else(|| {
+                config.vault.as_ref().map(|vault| ToolBackend::Local {
+                    vault_path: vault.path.clone(),
+                })
+            })
+            .expect("Neither MCP nor vault configured");
+
         Self {
             client: reqwest::Client::new(),
             api_key: config.claude.api_key.clone(),
             model: config.claude.model.clone(),
-            vault_path: config.vault.path.clone(),
+            tool_backend,
+        }
+    }
+
+    /// Get the vault path description for the system prompt.
+    fn vault_description(&self) -> String {
+        match &self.tool_backend {
+            ToolBackend::Local { vault_path } => vault_path.display().to_string(),
+            ToolBackend::Mcp { .. } => "your Mac (via MCP)".to_string(),
+        }
+    }
+
+    /// Execute a tool using the configured backend.
+    async fn execute_tool(&self, name: &str, input: &serde_json::Value) -> String {
+        match &self.tool_backend {
+            ToolBackend::Local { vault_path } => execute_tool_local(name, input, vault_path).await,
+            ToolBackend::Mcp { client } => client
+                .call_tool(name, input)
+                .await
+                .unwrap_or_else(|e| format!("Error: {e}")),
+        }
+    }
+
+    /// Get tool definitions from the configured backend.
+    async fn get_tools(&self) -> Result<Vec<crate::tools::Tool>> {
+        match &self.tool_backend {
+            ToolBackend::Local { .. } => Ok(crate::tools::get_tool_definitions()),
+            ToolBackend::Mcp { client } => client.get_tool_definitions().await,
         }
     }
 
     pub async fn chat(&self, user_message: &str) -> Result<String> {
-        let tools = crate::tools::get_tool_definitions();
+        let tools = self.get_tools().await?;
 
         let system = format!(
             "You are Ludolph, a helpful assistant with access to the user's Obsidian vault at {}. \
              You can read files and search the vault to answer questions about their notes. \
              Be concise and helpful.",
-            self.vault_path.display()
+            self.vault_description()
         );
 
         let mut messages = vec![Message {
@@ -159,7 +215,7 @@ impl Claude {
                             "input": input
                         }));
 
-                        let result = execute_tool(&name, &input, &self.vault_path).await;
+                        let result = self.execute_tool(&name, &input).await;
                         tool_results.push(serde_json::json!({
                             "type": "tool_result",
                             "tool_use_id": id,

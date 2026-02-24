@@ -7,7 +7,8 @@ use console::style;
 use teloxide::prelude::*;
 
 use crate::claude::Claude;
-use crate::config::Config;
+use crate::config::{Config, McpConfig};
+use crate::mcp_client::McpClient;
 use crate::ui::StatusLine;
 
 /// Fetch bot info from Telegram API.
@@ -43,12 +44,21 @@ pub async fn run() -> Result<()> {
     println!("{}", style(&bot_username).bold());
     println!();
 
-    // Validate vault
-    if !config.vault.path.exists() {
-        StatusLine::error(format!("Vault not found: {}", config.vault.path.display())).print();
-        anyhow::bail!("Vault directory does not exist");
+    // Validate vault or MCP connection
+    if let Some(ref mcp) = config.mcp {
+        // Using MCP - vault is on remote Mac
+        StatusLine::ok(format!("MCP: {}", mcp.url)).print();
+    } else if let Some(ref vault) = config.vault {
+        // Using local vault
+        if !vault.path.exists() {
+            StatusLine::error(format!("Vault not found: {}", vault.path.display())).print();
+            anyhow::bail!("Vault directory does not exist");
+        }
+        StatusLine::ok(format!("Vault: {}", vault.path.display())).print();
+    } else {
+        StatusLine::error("No vault or MCP configured".to_string()).print();
+        anyhow::bail!("Configure either [vault] or [mcp] in config.toml");
     }
-    StatusLine::ok(format!("Vault: {}", config.vault.path.display())).print();
 
     // Telegram validated (already fetched username above)
     StatusLine::ok(format!("Telegram: @{bot_username}")).print();
@@ -61,11 +71,13 @@ pub async fn run() -> Result<()> {
     // Run bot
     let bot = Bot::new(&config.telegram.bot_token);
     let claude = Claude::from_config(&config);
-    let allowed_users: HashSet<u64> = config.telegram.allowed_users.into_iter().collect();
+    let allowed_users: HashSet<u64> = config.telegram.allowed_users.iter().copied().collect();
+    let mcp_config = config.mcp.clone();
 
     Box::pin(teloxide::repl(bot, move |bot: Bot, msg: Message| {
         let claude = claude.clone();
         let allowed_users = allowed_users.clone();
+        let mcp_config = mcp_config.clone();
         async move {
             // Check if user is authorized
             let user_id = msg.from.as_ref().map(|u| u.id.0);
@@ -79,10 +91,14 @@ pub async fn run() -> Result<()> {
             }
 
             if let Some(text) = msg.text() {
-                let response = claude
-                    .chat(text)
-                    .await
-                    .unwrap_or_else(|e| format!("Error: {e}"));
+                let response = if text.starts_with('/') {
+                    handle_command(text, mcp_config.as_ref()).await
+                } else {
+                    claude
+                        .chat(text)
+                        .await
+                        .unwrap_or_else(|e| format!("Error: {e}"))
+                };
 
                 bot.send_message(msg.chat.id, response).await?;
             }
@@ -97,4 +113,27 @@ pub async fn run() -> Result<()> {
     println!();
 
     Ok(())
+}
+
+/// Handle bot commands (messages starting with /).
+async fn handle_command(text: &str, mcp_config: Option<&McpConfig>) -> String {
+    let command = text.split_whitespace().next().unwrap_or("");
+
+    match command {
+        "/poke" => {
+            if let Some(mcp) = mcp_config {
+                let client = McpClient::from_config(mcp);
+                match client.health_check().await {
+                    Ok(true) => "MCP connected".to_string(),
+                    Ok(false) => "MCP unreachable".to_string(),
+                    Err(e) => format!("MCP error: {e}"),
+                }
+            } else {
+                "Local vault mode (no MCP)".to_string()
+            }
+        }
+        "/help" => "Commands:\n/poke - Test MCP connection\n/help - Show this message".to_string(),
+        "/start" => "Hello! I'm Ludolph, your vault assistant.\n\nSend /help to see available commands, or just ask me anything about your vault.".to_string(),
+        _ => format!("Unknown command: {command}\n\nSend /help for available commands."),
+    }
 }

@@ -2,6 +2,7 @@ mod bot;
 mod claude;
 mod cli;
 mod config;
+mod mcp_client;
 mod ssh;
 mod tools;
 mod ui;

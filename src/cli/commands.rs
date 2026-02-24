@@ -32,24 +32,28 @@ pub fn check() -> ExitCode {
         },
     );
 
-    // Vault check
-    match config.as_ref().map(|c| &c.vault.path) {
-        Some(path) if path.exists() => {
-            let count = WalkDir::new(path)
-                .into_iter()
-                .filter_map(Result::ok)
-                .filter(|e| e.file_type().is_file())
-                .count();
-            StatusLine::ok(format!("Vault accessible ({count} files)")).print();
+    // Vault/MCP check
+    if let Some(cfg) = config.as_ref() {
+        if let Some(ref mcp) = cfg.mcp {
+            StatusLine::ok(format!("MCP: {}", mcp.url)).print();
+        } else if let Some(ref vault) = cfg.vault {
+            if vault.path.exists() {
+                let count = WalkDir::new(&vault.path)
+                    .into_iter()
+                    .filter_map(Result::ok)
+                    .filter(|e| e.file_type().is_file())
+                    .count();
+                StatusLine::ok(format!("Vault accessible ({count} files)")).print();
+            } else {
+                StatusLine::error(format!("Vault not found: {}", vault.path.display())).print();
+                println!();
+                return ExitCode::FAILURE;
+            }
+        } else {
+            StatusLine::skip("Vault/MCP (not configured)").print();
         }
-        Some(path) => {
-            StatusLine::error(format!("Vault not found: {}", path.display())).print();
-            println!();
-            return ExitCode::FAILURE;
-        }
-        None => {
-            StatusLine::skip("Vault (not configured)").print();
-        }
+    } else {
+        StatusLine::skip("Vault/MCP (no config)").print();
     }
 
     println!();
