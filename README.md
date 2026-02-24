@@ -221,7 +221,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, architecture notes
 
 [Ludolph van Ceulen](https://en.wikipedia.org/wiki/Ludolph_van_Ceulen) (1540–1610), the mathematician who spent 25 years calculating pi to 35 decimal places. He had the digits engraved on his tombstone. We named a Telegram bot after him. He would be furious.
 
-> 3.14159265358979323846264338327950288
+> 3.14159265358979323846264338327950288`(Lu died here)`419716939937510...
 
 ## License
 
