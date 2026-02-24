@@ -398,14 +398,13 @@ else
     PI_DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/lu-$PI_TARGET"
 
     spinner_start "Installing Ludolph on Pi..."
-    ssh -T "$PI_USER@$PI_HOST" bash -s <<EOF
-set -e
-mkdir -p ~/.ludolph/bin
-curl -fsSL "$PI_DOWNLOAD_URL" -o ~/.ludolph/bin/lu 2>/dev/null
-chmod +x ~/.ludolph/bin/lu
-grep -q '.ludolph/bin' ~/.bashrc 2>/dev/null || echo 'export PATH="\$HOME/.ludolph/bin:\$PATH"' >> ~/.bashrc
-grep -q '.ludolph/bin' ~/.profile 2>/dev/null || echo 'export PATH="\$HOME/.ludolph/bin:\$PATH"' >> ~/.profile
-EOF
+    ssh -T "$PI_USER@$PI_HOST" "
+mkdir -p ~/.ludolph/bin &&
+curl -fsSL '$PI_DOWNLOAD_URL' -o ~/.ludolph/bin/lu 2>/dev/null &&
+chmod +x ~/.ludolph/bin/lu &&
+(grep -q '.ludolph/bin' ~/.bashrc 2>/dev/null || echo 'export PATH=\"\$HOME/.ludolph/bin:\$PATH\"' >> ~/.bashrc) &&
+(grep -q '.ludolph/bin' ~/.profile 2>/dev/null || echo 'export PATH=\"\$HOME/.ludolph/bin:\$PATH\"' >> ~/.profile)
+"
     spinner_stop "ok" "Installed Ludolph on Pi"
 fi
 
@@ -895,13 +894,9 @@ if ! $IS_PI; then
 
     # Install wakeonlan on Pi
     spinner_start "Installing wakeonlan on Pi..."
-    ssh -T "$PI_USER@$PI_HOST" bash -s <<'EOF'
-set -e
-if ! command -v wakeonlan &>/dev/null; then
-    sudo apt-get update -qq
-    sudo apt-get install -y -qq wakeonlan >/dev/null 2>&1
-fi
-EOF
+    ssh -T "$PI_USER@$PI_HOST" "
+command -v wakeonlan >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y -qq wakeonlan >/dev/null 2>&1)
+"
     spinner_stop "ok" "Wake-on-LAN ready"
 
     echo
@@ -1067,17 +1062,8 @@ EOF
 
     spinner_start "Setting up bot service on Pi..."
 
-    # Create systemd service file for auto-restart
-    ssh -T "$PI_USER@$PI_HOST" bash -s << 'SERVICEEOF'
-# Stop any existing process
-pkill -f "ludolph/bin/lu" 2>/dev/null || true
-
-# Create systemd user directory
-mkdir -p ~/.config/systemd/user
-
-# Create service file
-cat > ~/.config/systemd/user/ludolph.service << 'EOF'
-[Unit]
+    # Service file content (defined here to avoid heredoc stdin issues with curl|bash)
+    SERVICE_CONTENT='[Unit]
 Description=Ludolph Telegram Bot
 After=network-online.target
 Wants=network-online.target
@@ -1091,17 +1077,18 @@ StandardOutput=append:%h/.ludolph/ludolph.log
 StandardError=append:%h/.ludolph/ludolph.log
 
 [Install]
-WantedBy=default.target
-EOF
+WantedBy=default.target'
 
-# Enable lingering so service runs without login
-loginctl enable-linger $USER 2>/dev/null || true
-
-# Reload and start service
-systemctl --user daemon-reload
-systemctl --user enable ludolph.service
+    # Create systemd service on Pi using inline commands (no heredocs)
+    ssh -T "$PI_USER@$PI_HOST" "
+pkill -f 'ludolph/bin/lu' 2>/dev/null || true;
+mkdir -p ~/.config/systemd/user;
+printf '%s\n' '$SERVICE_CONTENT' > ~/.config/systemd/user/ludolph.service;
+loginctl enable-linger \$USER 2>/dev/null || true;
+systemctl --user daemon-reload;
+systemctl --user enable ludolph.service;
 systemctl --user restart ludolph.service
-SERVICEEOF
+"
 
     spinner_stop "ok" "Bot service installed"
 
