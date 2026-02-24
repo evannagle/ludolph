@@ -398,7 +398,7 @@ else
     PI_DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/lu-$PI_TARGET"
 
     spinner_start "Installing Ludolph on Pi..."
-    ssh -T "$PI_USER@$PI_HOST" "
+    ssh -T -n "$PI_USER@$PI_HOST" "
 mkdir -p ~/.ludolph/bin &&
 curl -fsSL '$PI_DOWNLOAD_URL' -o ~/.ludolph/bin/lu 2>/dev/null &&
 chmod +x ~/.ludolph/bin/lu &&
@@ -510,7 +510,7 @@ if ! $IS_PI; then
 
                 if [ "$NETWORK_CHOICE" = "1" ]; then
                     spinner_start "Installing Tailscale on Pi..."
-                    ssh -T "$PI_USER@$PI_HOST" "curl -fsSL https://tailscale.com/install.sh | sh" >/dev/null 2>&1 || true
+                    ssh -T -n "$PI_USER@$PI_HOST" "curl -fsSL https://tailscale.com/install.sh | sh" >/dev/null 2>&1 || true
                     spinner_stop "ok" "Tailscale installed"
 
                     echo
@@ -894,7 +894,7 @@ if ! $IS_PI; then
 
     # Install wakeonlan on Pi
     spinner_start "Installing wakeonlan on Pi..."
-    ssh -T "$PI_USER@$PI_HOST" "
+    ssh -T -n "$PI_USER@$PI_HOST" "
 command -v wakeonlan >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y -qq wakeonlan >/dev/null 2>&1)
 "
     spinner_stop "ok" "Wake-on-LAN ready"
@@ -1080,7 +1080,7 @@ StandardError=append:%h/.ludolph/ludolph.log
 WantedBy=default.target'
 
     # Create systemd service on Pi using inline commands (no heredocs)
-    ssh -T "$PI_USER@$PI_HOST" "
+    ssh -T -n "$PI_USER@$PI_HOST" "
 pkill -f 'ludolph/bin/lu' 2>/dev/null || true;
 mkdir -p ~/.config/systemd/user;
 printf '%s\n' '$SERVICE_CONTENT' > ~/.config/systemd/user/ludolph.service;
