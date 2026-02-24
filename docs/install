@@ -84,7 +84,7 @@ rule() {
 # Wait for Enter
 pause() {
     printf "\n  ${DIM}Press Enter to continue...${NC}"
-    read -r
+    read -r < /dev/tty
     echo
 }
 
@@ -92,7 +92,7 @@ pause() {
 confirm() {
     local response
     printf "  %s ${DIM}[Y/n]${NC} " "$1"
-    read -r response
+    read -r response < /dev/tty
     case "$response" in
         [nN]*) return 1 ;;
         *) return 0 ;;
@@ -112,7 +112,7 @@ ask() {
         printf "  %s\n" "$prompt" >&2
     fi
     printf "  > " >&2
-    read -r result
+    read -r result < /dev/tty
     echo >&2
 
     result="${result#"${result%%[![:space:]]*}"}"
@@ -128,7 +128,7 @@ ask_secret() {
 
     printf "  %s\n" "$prompt" >&2
     printf "  > " >&2
-    read -rs result
+    read -rs result < /dev/tty
     echo >&2
 
     result="${result#"${result%%[![:space:]]*}"}"
