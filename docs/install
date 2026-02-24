@@ -434,36 +434,132 @@ if ! $IS_PI; then
     fi
 
     # Get Mac's IP for Pi to connect to
-    # Prefer Tailscale IP if available, otherwise local IP
+    # Try Tailscale first, but verify Pi can reach it
     MAC_IP=""
+    LOCAL_IP=""
+    TAILSCALE_IP=""
     USING_TAILSCALE=false
+
+    # Get local network IP
+    LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "")
+
+    # Get Tailscale IP if available
     if command -v tailscale &>/dev/null; then
-        MAC_IP=$(tailscale ip -4 2>/dev/null | head -1 || true)
-        if [ -n "$MAC_IP" ]; then
+        TAILSCALE_IP=$(tailscale ip -4 2>/dev/null | head -1 || true)
+    fi
+
+    # If Mac has Tailscale, check if Pi can use it
+    if [ -n "$TAILSCALE_IP" ]; then
+        spinner_start "Checking Tailscale connectivity..."
+        PI_CAN_REACH_TS=$(ssh -n -o ConnectTimeout=5 "$PI_USER@$PI_HOST" \
+            "ping -c 1 -W 2 $TAILSCALE_IP >/dev/null 2>&1 && echo yes || echo no" 2>/dev/null || echo "no")
+
+        if [ "$PI_CAN_REACH_TS" = "yes" ]; then
+            spinner_stop "ok" "Tailscale connected"
+            MAC_IP="$TAILSCALE_IP"
             USING_TAILSCALE=true
+        else
+            spinner_stop "warn" "Tailscale not reachable from Pi"
+
+            # Check Pi's Tailscale status
+            PI_TS_STATUS=$(ssh -n -o ConnectTimeout=5 "$PI_USER@$PI_HOST" \
+                "command -v tailscale >/dev/null && tailscale status 2>&1 | head -1 || echo 'not installed'" 2>/dev/null || echo "unknown")
+
+            echo
+            info "Your Mac has Tailscale, but your Pi can't reach it."
+            echo
+
+            if echo "$PI_TS_STATUS" | grep -qi "logged out\|stopped"; then
+                # Tailscale installed but not running
+                info "Tailscale is installed on Pi but not connected."
+                echo
+                printf "  ${BOLD}Choose an option:${NC}\n"
+                echo "  1) Connect Pi to Tailscale (recommended - encrypted)"
+                echo "  2) Use local network (unencrypted, home network only)"
+                echo
+                NETWORK_CHOICE=$(ask "Enter 1 or 2:" "1")
+
+                if [ "$NETWORK_CHOICE" = "1" ]; then
+                    echo
+                    info "Starting Tailscale on Pi..."
+                    info "You may need to authenticate in your browser."
+                    echo
+                    ssh -t "$PI_USER@$PI_HOST" "sudo tailscale up" || true
+
+                    # Check if it worked
+                    sleep 2
+                    PI_CAN_REACH_TS=$(ssh -n -o ConnectTimeout=5 "$PI_USER@$PI_HOST" \
+                        "ping -c 1 -W 2 $TAILSCALE_IP >/dev/null 2>&1 && echo yes || echo no" 2>/dev/null || echo "no")
+
+                    if [ "$PI_CAN_REACH_TS" = "yes" ]; then
+                        ok "Tailscale connected"
+                        MAC_IP="$TAILSCALE_IP"
+                        USING_TAILSCALE=true
+                    else
+                        warn "Tailscale connection failed"
+                        info "Falling back to local network."
+                    fi
+                fi
+
+            elif echo "$PI_TS_STATUS" | grep -qi "not installed"; then
+                # Tailscale not installed
+                printf "  ${BOLD}Choose an option:${NC}\n"
+                echo "  1) Install Tailscale on Pi (recommended - encrypted)"
+                echo "  2) Use local network (unencrypted, home network only)"
+                echo
+                NETWORK_CHOICE=$(ask "Enter 1 or 2:" "2")
+
+                if [ "$NETWORK_CHOICE" = "1" ]; then
+                    spinner_start "Installing Tailscale on Pi..."
+                    ssh "$PI_USER@$PI_HOST" "curl -fsSL https://tailscale.com/install.sh | sh" >/dev/null 2>&1 || true
+                    spinner_stop "ok" "Tailscale installed"
+
+                    echo
+                    info "Starting Tailscale on Pi..."
+                    info "You may need to authenticate in your browser."
+                    echo
+                    ssh -t "$PI_USER@$PI_HOST" "sudo tailscale up" || true
+
+                    # Check if it worked
+                    sleep 2
+                    PI_CAN_REACH_TS=$(ssh -n -o ConnectTimeout=5 "$PI_USER@$PI_HOST" \
+                        "ping -c 1 -W 2 $TAILSCALE_IP >/dev/null 2>&1 && echo yes || echo no" 2>/dev/null || echo "no")
+
+                    if [ "$PI_CAN_REACH_TS" = "yes" ]; then
+                        ok "Tailscale connected"
+                        MAC_IP="$TAILSCALE_IP"
+                        USING_TAILSCALE=true
+                    else
+                        warn "Tailscale connection failed"
+                        info "Falling back to local network."
+                    fi
+                fi
+            else
+                # Unknown state
+                info "Pi Tailscale status: $PI_TS_STATUS"
+                info "Using local network instead."
+            fi
+            echo
         fi
     fi
-    if [ -z "$MAC_IP" ]; then
-        MAC_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "")
-    fi
-    if [ -z "$MAC_IP" ]; then
-        MAC_IP=$(ask "Enter your Mac's IP address:")
-    fi
-    ok "Mac IP: $MAC_IP"
 
-    # Security warning if not using Tailscale
-    if ! $USING_TAILSCALE; then
-        echo
-        warn "Tailscale not detected"
-        echo
-        info "Without Tailscale, the connection uses plaintext HTTP"
-        info "on your local network. This is fine for home networks, but"
-        info "for better security, consider installing Tailscale:"
-        info "  brew install tailscale"
-        echo
-        info "Tailscale encrypts all traffic and lets you access your"
-        info "vault from anywhere without exposing ports to the internet."
-        echo
+    # Fall back to local IP if Tailscale not available/working
+    if [ -z "$MAC_IP" ]; then
+        if [ -n "$LOCAL_IP" ]; then
+            MAC_IP="$LOCAL_IP"
+            ok "Using local network: $MAC_IP"
+        else
+            MAC_IP=$(ask "Enter your Mac's IP address:")
+        fi
+    fi
+
+    # Summary
+    echo
+    if $USING_TAILSCALE; then
+        ok "Connection: Tailscale (encrypted)"
+    else
+        warn "Connection: Local network (unencrypted)"
+        info "Traffic is plaintext HTTP. Fine for home networks."
     fi
 
     # Create server files
@@ -849,6 +945,20 @@ if [ -z "$SAVED_TELEGRAM_TOKEN" ]; then
     TELEGRAM_TOKEN=$(ask_secret "Telegram Bot Token:")
     [ -z "$TELEGRAM_TOKEN" ] && { err "Token required"; exit 1; }
 
+    # Validate token and show bot info
+    spinner_start "Validating bot token..."
+    BOT_RESPONSE=$(curl -s "https://api.telegram.org/bot$TELEGRAM_TOKEN/getMe" 2>/dev/null || echo '{"ok":false}')
+
+    if echo "$BOT_RESPONSE" | grep -q '"ok":true'; then
+        BOT_NAME=$(echo "$BOT_RESPONSE" | grep -o '"first_name":"[^"]*"' | cut -d'"' -f4)
+        BOT_USERNAME=$(echo "$BOT_RESPONSE" | grep -o '"username":"[^"]*"' | cut -d'"' -f4)
+        spinner_stop "ok" "Bot: $BOT_NAME (@$BOT_USERNAME)"
+    else
+        spinner_stop "err" "Invalid bot token"
+        err "Could not validate token with Telegram"
+        exit 1
+    fi
+
     echo
     TELEGRAM_USER_ID=$(ask "Your Telegram User ID (get from @userinfobot):" "$SAVED_TELEGRAM_USER")
     [ -z "$TELEGRAM_USER_ID" ] && { err "User ID required"; exit 1; }
@@ -885,13 +995,48 @@ if $IS_PI; then
     echo "$PI_CONFIG" > "$LOCAL_DIR/config.toml"
     spinner_stop "ok" "Configuration saved"
 
-    spinner_start "Starting bot..."
-    nohup "$LOCAL_DIR/bin/lu" > "$LOCAL_DIR/ludolph.log" 2>&1 &
+    spinner_start "Setting up bot service..."
+
+    # Stop any existing process
+    pkill -f "ludolph/bin/lu" 2>/dev/null || true
+
+    # Create systemd user directory
+    mkdir -p ~/.config/systemd/user
+
+    # Create service file
+    cat > ~/.config/systemd/user/ludolph.service << 'EOF'
+[Unit]
+Description=Ludolph Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.ludolph/bin/lu
+Restart=always
+RestartSec=5
+StandardOutput=append:%h/.ludolph/ludolph.log
+StandardError=append:%h/.ludolph/ludolph.log
+
+[Install]
+WantedBy=default.target
+EOF
+
+    # Enable lingering so service runs without login
+    loginctl enable-linger "$USER" 2>/dev/null || true
+
+    # Reload and start service
+    systemctl --user daemon-reload
+    systemctl --user enable ludolph.service
+    systemctl --user restart ludolph.service
+
+    spinner_stop "ok" "Bot service installed"
+
     sleep 2
-    if pgrep -f 'ludolph/bin/lu' >/dev/null; then
-        spinner_stop "ok" "Bot is running"
+    if systemctl --user is-active ludolph.service >/dev/null 2>&1; then
+        ok "Bot is running (auto-restarts on crash)"
     else
-        spinner_stop "warn" "Check ~/.ludolph/ludolph.log"
+        warn "Check: systemctl --user status ludolph.service"
     fi
 else
     spinner_start "Saving configuration on Pi..."
@@ -920,15 +1065,84 @@ user = "$PI_USER"
 EOF
     spinner_stop "ok" "Mac configuration saved"
 
-    spinner_start "Starting bot on Pi..."
-    # Use timeout and -n to prevent SSH from hanging
-    BOT_STARTED=$(timeout 15 ssh -n -o ConnectTimeout=5 -o BatchMode=yes "$PI_USER@$PI_HOST" \
-        'pkill -f "ludolph/bin/lu" 2>/dev/null; sleep 1; nohup ~/.ludolph/bin/lu > ~/.ludolph/ludolph.log 2>&1 & sleep 2; pgrep -f "ludolph/bin/lu" >/dev/null && echo running' \
-        2>/dev/null || echo "timeout")
-    if [ "$BOT_STARTED" = "running" ]; then
-        spinner_stop "ok" "Bot is running"
+    spinner_start "Setting up bot service on Pi..."
+
+    # Create systemd service file for auto-restart
+    ssh "$PI_USER@$PI_HOST" bash -s << 'SERVICEEOF'
+# Stop any existing process
+pkill -f "ludolph/bin/lu" 2>/dev/null || true
+
+# Create systemd user directory
+mkdir -p ~/.config/systemd/user
+
+# Create service file
+cat > ~/.config/systemd/user/ludolph.service << 'EOF'
+[Unit]
+Description=Ludolph Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.ludolph/bin/lu
+Restart=always
+RestartSec=5
+StandardOutput=append:%h/.ludolph/ludolph.log
+StandardError=append:%h/.ludolph/ludolph.log
+
+[Install]
+WantedBy=default.target
+EOF
+
+# Enable lingering so service runs without login
+loginctl enable-linger $USER 2>/dev/null || true
+
+# Reload and start service
+systemctl --user daemon-reload
+systemctl --user enable ludolph.service
+systemctl --user restart ludolph.service
+SERVICEEOF
+
+    spinner_stop "ok" "Bot service installed"
+
+    # Check if service is running
+    sleep 2
+    BOT_STATUS=$(ssh -n -o ConnectTimeout=5 "$PI_USER@$PI_HOST" \
+        "systemctl --user is-active ludolph.service 2>/dev/null" || echo "unknown")
+
+    if [ "$BOT_STATUS" = "active" ]; then
+        ok "Bot is running (auto-restarts on crash)"
     else
-        spinner_stop "warn" "Bot may not have started"
+        warn "Bot service may not have started"
+        info "Check with: ssh $PI_USER@$PI_HOST 'systemctl --user status ludolph.service'"
+    fi
+
+    # Verify MCP connection from Pi
+    spinner_start "Verifying MCP connection..."
+    MCP_TEST=$(timeout 10 ssh -n -o ConnectTimeout=5 "$PI_USER@$PI_HOST" \
+        "curl -s -m 5 -H 'Authorization: Bearer $MCP_AUTH_TOKEN' 'http://$MAC_IP:$MCP_PORT/health' 2>/dev/null" \
+        || echo "failed")
+
+    if echo "$MCP_TEST" | grep -q '"status":"ok"'; then
+        spinner_stop "ok" "MCP connection verified"
+    else
+        spinner_stop "err" "MCP connection failed"
+        echo
+        err "Pi cannot reach the vault server on your Mac"
+        echo
+        info "The server is running at http://$MAC_IP:$MCP_PORT"
+        info "but the Pi cannot connect to it."
+        echo
+        info "Possible causes:"
+        info "  - Firewall blocking port $MCP_PORT"
+        info "  - Pi and Mac on different networks"
+        if [ -n "$TAILSCALE_IP" ] && ! $USING_TAILSCALE; then
+            info "  - Tailscale not running on Pi (run: sudo tailscale up)"
+        fi
+        echo
+        info "To test manually from your Pi:"
+        info "  curl -H 'Authorization: Bearer \$(cat ~/.ludolph/mcp_token)' http://$MAC_IP:$MCP_PORT/health"
+        echo
     fi
 fi
 

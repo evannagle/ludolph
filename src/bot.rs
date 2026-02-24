@@ -11,8 +11,43 @@ use crate::config::{Config, McpConfig};
 use crate::mcp_client::McpClient;
 use crate::ui::StatusLine;
 
+/// Register bot commands with Telegram for autocomplete.
+async fn register_commands(token: &str) -> Result<()> {
+    let commands = serde_json::json!({
+        "commands": [
+            {"command": "poke", "description": "Test MCP connection to your vault"},
+            {"command": "help", "description": "Show available commands"},
+        ]
+    });
+
+    let url = format!("https://api.telegram.org/bot{token}/setMyCommands");
+    let client = reqwest::Client::new();
+
+    let response = client
+        .post(&url)
+        .json(&commands)
+        .send()
+        .await
+        .context("Failed to register commands")?;
+
+    if !response.status().is_success() {
+        let body = response.text().await.unwrap_or_default();
+        tracing::warn!("Failed to register commands: {}", body);
+    }
+
+    Ok(())
+}
+
+/// Bot identity from Telegram API.
+struct BotInfo {
+    /// Bot's display name (e.g., "Lu")
+    name: String,
+    /// Bot's username (e.g., `LudolphPiBot`)
+    username: String,
+}
+
 /// Fetch bot info from Telegram API.
-async fn get_bot_username(token: &str) -> Result<String> {
+async fn get_bot_info(token: &str) -> Result<BotInfo> {
     let url = format!("https://api.telegram.org/bot{token}/getMe");
     let response: serde_json::Value = reqwest::get(&url)
         .await
@@ -25,23 +60,45 @@ async fn get_bot_username(token: &str) -> Result<String> {
         anyhow::bail!("Telegram API error");
     }
 
-    response
+    let result = response
         .get("result")
-        .and_then(|r| r.get("username"))
+        .context("Missing result in response")?;
+
+    let username = result
+        .get("username")
         .and_then(serde_json::Value::as_str)
         .map(String::from)
-        .context("Missing username in response")
+        .context("Missing username in response")?;
+
+    // Use first_name as the friendly name, fallback to username
+    let name = result
+        .get("first_name")
+        .and_then(serde_json::Value::as_str)
+        .map_or_else(|| username.clone(), String::from);
+
+    Ok(BotInfo { name, username })
 }
+
+/// Version from Cargo.toml
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub async fn run() -> Result<()> {
     let config = Config::load()?;
 
     // Fetch bot info first (needed for header)
-    let bot_username = get_bot_username(&config.telegram.bot_token).await?;
+    let bot_info = get_bot_info(&config.telegram.bot_token).await?;
 
-    // Header
+    // Register bot commands for autocomplete
+    register_commands(&config.telegram.bot_token).await?;
+
+    // Header with version
     println!();
-    println!("{}", style(&bot_username).bold());
+    println!(
+        "{} (@{}) {}",
+        style(&bot_info.name).bold(),
+        style(&bot_info.username).dim(),
+        style(format!("v{VERSION}")).dim()
+    );
     println!();
 
     // Validate vault or MCP connection
@@ -61,7 +118,7 @@ pub async fn run() -> Result<()> {
     }
 
     // Telegram validated (already fetched username above)
-    StatusLine::ok(format!("Telegram: @{bot_username}")).print();
+    StatusLine::ok(format!("Telegram: @{}", bot_info.username)).print();
 
     // Ready
     println!();
@@ -73,11 +130,13 @@ pub async fn run() -> Result<()> {
     let claude = Claude::from_config(&config);
     let allowed_users: HashSet<u64> = config.telegram.allowed_users.iter().copied().collect();
     let mcp_config = config.mcp.clone();
+    let bot_name = bot_info.name.clone();
 
     Box::pin(teloxide::repl(bot, move |bot: Bot, msg: Message| {
         let claude = claude.clone();
         let allowed_users = allowed_users.clone();
         let mcp_config = mcp_config.clone();
+        let bot_name = bot_name.clone();
         async move {
             // Check if user is authorized
             let user_id = msg.from.as_ref().map(|u| u.id.0);
@@ -91,8 +150,13 @@ pub async fn run() -> Result<()> {
             }
 
             if let Some(text) = msg.text() {
+                // Show typing indicator
+                let _ = bot
+                    .send_chat_action(msg.chat.id, teloxide::types::ChatAction::Typing)
+                    .await;
+
                 let response = if text.starts_with('/') {
-                    handle_command(text, mcp_config.as_ref()).await
+                    handle_command(text, &bot_name, mcp_config.as_ref()).await
                 } else {
                     claude
                         .chat(text)
@@ -116,24 +180,39 @@ pub async fn run() -> Result<()> {
 }
 
 /// Handle bot commands (messages starting with /).
-async fn handle_command(text: &str, mcp_config: Option<&McpConfig>) -> String {
+async fn handle_command(text: &str, bot_name: &str, mcp_config: Option<&McpConfig>) -> String {
     let command = text.split_whitespace().next().unwrap_or("");
 
     match command {
-        "/poke" => {
-            if let Some(mcp) = mcp_config {
+        "/poke" | "/start" => {
+            let connection_status = if let Some(mcp) = mcp_config {
                 let client = McpClient::from_config(mcp);
                 match client.health_check().await {
-                    Ok(true) => "MCP connected".to_string(),
-                    Ok(false) => "MCP unreachable".to_string(),
-                    Err(e) => format!("MCP error: {e}"),
+                    Ok(true) => "connected to your vault",
+                    Ok(false) => "having trouble reaching your vault",
+                    Err(_) => "unable to connect to your vault",
                 }
             } else {
-                "Local vault mode (no MCP)".to_string()
-            }
+                "connected to your local vault"
+            };
+
+            format!(
+                "Hi! I'm {bot_name}, and I'm {connection_status}.\n\n\
+                I can help you:\n\
+                - Search through your notes\n\
+                - Read and summarize files\n\
+                - Find information across your vault\n\
+                - Answer questions about your notes\n\n\
+                Just ask me anything, or try: \"What did I write about last week?\""
+            )
         }
-        "/help" => "Commands:\n/poke - Test MCP connection\n/help - Show this message".to_string(),
-        "/start" => "Hello! I'm Ludolph, your vault assistant.\n\nSend /help to see available commands, or just ask me anything about your vault.".to_string(),
-        _ => format!("Unknown command: {command}\n\nSend /help for available commands."),
+        "/help" => format!(
+            "I'm {bot_name}, your vault assistant.\n\n\
+            Commands:\n\
+            /poke - Check vault connection\n\
+            /help - Show this message\n\n\
+            Or just send me a message and I'll search your vault to help answer it."
+        ),
+        _ => "I don't recognize that command.\n\nSend /help to see what I can do, or just ask me a question about your vault.".to_string(),
     }
 }
