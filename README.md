@@ -1,9 +1,8 @@
 <img src="docs/images/ludolph-name.png" width="300" />
 
-<p style="background:#fbf4d2;font-weight:bold;padding:1rem;margin:0 0 2rem;" align="center">
-Ludolph is grumpy and is currently under active development.<br/>
-Please check back in roughly 3.14 months, give or take a few decimals.
-</p>
+> [!WARNING]
+> Ludolph is grumpy and is currently under active development.
+> Please check back in roughly 3.14 months, give or take a few decimals.
 
 <p>
 <strong>A real brain for your second brain.</strong><br>
