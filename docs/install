@@ -398,7 +398,7 @@ else
     PI_DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/lu-$PI_TARGET"
 
     spinner_start "Installing Ludolph on Pi..."
-    ssh "$PI_USER@$PI_HOST" bash -s <<EOF
+    ssh -T "$PI_USER@$PI_HOST" bash -s <<EOF
 set -e
 mkdir -p ~/.ludolph/bin
 curl -fsSL "$PI_DOWNLOAD_URL" -o ~/.ludolph/bin/lu 2>/dev/null
@@ -511,7 +511,7 @@ if ! $IS_PI; then
 
                 if [ "$NETWORK_CHOICE" = "1" ]; then
                     spinner_start "Installing Tailscale on Pi..."
-                    ssh "$PI_USER@$PI_HOST" "curl -fsSL https://tailscale.com/install.sh | sh" >/dev/null 2>&1 || true
+                    ssh -T "$PI_USER@$PI_HOST" "curl -fsSL https://tailscale.com/install.sh | sh" >/dev/null 2>&1 || true
                     spinner_stop "ok" "Tailscale installed"
 
                     echo
@@ -895,7 +895,7 @@ if ! $IS_PI; then
 
     # Install wakeonlan on Pi
     spinner_start "Installing wakeonlan on Pi..."
-    ssh "$PI_USER@$PI_HOST" bash -s <<'EOF'
+    ssh -T "$PI_USER@$PI_HOST" bash -s <<'EOF'
 set -e
 if ! command -v wakeonlan &>/dev/null; then
     sudo apt-get update -qq
@@ -1041,7 +1041,7 @@ EOF
 else
     spinner_start "Saving configuration on Pi..."
     # Write config directly (heredoc with quotes prevents expansion)
-    echo "$PI_CONFIG" | ssh "$PI_USER@$PI_HOST" "mkdir -p ~/.ludolph && cat > ~/.ludolph/config.toml"
+    echo "$PI_CONFIG" | ssh -T "$PI_USER@$PI_HOST" "mkdir -p ~/.ludolph && cat > ~/.ludolph/config.toml"
     spinner_stop "ok" "Pi configuration saved"
 
     # Mac config includes vault path and Pi connection info
@@ -1068,7 +1068,7 @@ EOF
     spinner_start "Setting up bot service on Pi..."
 
     # Create systemd service file for auto-restart
-    ssh "$PI_USER@$PI_HOST" bash -s << 'SERVICEEOF'
+    ssh -T "$PI_USER@$PI_HOST" bash -s << 'SERVICEEOF'
 # Stop any existing process
 pkill -f "ludolph/bin/lu" 2>/dev/null || true
 
