@@ -349,7 +349,7 @@ else
 
     spinner_start "Connecting to $PI_USER@$PI_HOST..."
 
-    if ssh -o ConnectTimeout=5 -o BatchMode=yes "$PI_USER@$PI_HOST" "echo ok" &>/dev/null; then
+    if ssh -n -o ConnectTimeout=5 -o BatchMode=yes "$PI_USER@$PI_HOST" "echo ok" &>/dev/null; then
         spinner_stop "ok" "Connected to $PI_USER@$PI_HOST"
     else
         spinner_stop "err" "Could not connect to $PI_USER@$PI_HOST"
