@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.3.0](https://github.com/evannagle/ludolph/compare/v0.2.1...v0.3.0) (2026-02-24)
+
+
+### Features
+
+* add /release skill ([edeb36d](https://github.com/evannagle/ludolph/commit/edeb36dd513d9c5af515bfd4e1b3bd9597d6e6b6))
+* add lu check command ([49e7a0d](https://github.com/evannagle/ludolph/commit/49e7a0da64f630495f7ec9d64f86f67142065512))
+* add pi-digit spinner animation for scanning ([384e7bd](https://github.com/evannagle/ludolph/commit/384e7bd179adb04d1f82592fecfffc289248b932))
+* add Skip status variant for lu check ([50de7f9](https://github.com/evannagle/ludolph/commit/50de7f9adde2444d62442eb1aae0219ca322b2fd))
+* complete MCP architecture for Pi thin client ([6681d5b](https://github.com/evannagle/ludolph/commit/6681d5b68914c36b845be67116a7ff8d1152e687))
+* Mac-first installer with vault sync ([948ca60](https://github.com/evannagle/ludolph/commit/948ca605fc3afaeea68733edb4d64c4e2e13d63e))
+* make Syncthing setup optional ([49d4fbe](https://github.com/evannagle/ludolph/commit/49d4fbe73bd3c9fb78ad3d4f87161ddb2e09a7d6))
+* offer GitHub setup when no version control exists ([12c5447](https://github.com/evannagle/ludolph/commit/12c5447667fadea3d3284a3cdb4bd3b4f4050598))
+* replace git sync with Syncthing for real-time vault sync ([9199e4e](https://github.com/evannagle/ludolph/commit/9199e4ecd629fe25dfd067a6be832cffce6b682a))
+
+
+### Bug Fixes
+
+* add bullet points to file list ([0b13229](https://github.com/evannagle/ludolph/commit/0b13229b70bf0ddb0e50e4d05479a374d9bca996))
+* clarify vault path prompt is local to this machine ([c4a1dbe](https://github.com/evannagle/ludolph/commit/c4a1dbe5188da9a88e273321f8f30b8c5a2b2ad9))
+* clean up installer UX with clear steps and proper prompts ([7e39908](https://github.com/evannagle/ludolph/commit/7e39908b8e426d3580aeb4a0ff7854509819dc5b))
+* consistent spinners, spacing, and bullet character ([776c4db](https://github.com/evannagle/ludolph/commit/776c4dbc76f6e73e985cca572341f1aeb4b6a016))
+* handle subdirectory vaults and bidirectional sync ([7949ea9](https://github.com/evannagle/ludolph/commit/7949ea90452283e3236eaafef0a1c3325046be44))
+* installer prompt style and vault path validation ([312190a](https://github.com/evannagle/ludolph/commit/312190ae1e4d5690508fc0521c87e9a30f9f3338))
+* per-file exclusion and use red alert for sensitive files ([3178191](https://github.com/evannagle/ludolph/commit/3178191c4b89d0f67e183c94582b73ebc5fe03f7))
+* show deployment method explicitly in Step 6 ([ada2586](https://github.com/evannagle/ludolph/commit/ada2586725e23cecfa02244460b2eb551f641cfb))
+* source cargo env in release command SSH calls ([a86c2a6](https://github.com/evannagle/ludolph/commit/a86c2a6faa42773aad44f76aed98d92690baee49))
+* use bouncing ball spinner to match Rust version ([a48f74d](https://github.com/evannagle/ludolph/commit/a48f74d46846bed920242a8422667c23742f92e7))
+* use git clone when available, add progress steps for vault copy ([b178eab](https://github.com/evannagle/ludolph/commit/b178eabb1d147a53b61ec0b864901b32c056d4d7))
+* use PI_VAULT_PATH for Syncthing config on Pi ([a165feb](https://github.com/evannagle/ludolph/commit/a165febde0423c1d3939c50b3902374eaf1f55a0))
+* use spinners for all progress indicators ([bdc2f10](https://github.com/evannagle/ludolph/commit/bdc2f104da49339b165b0f41fd1292a0ab7b76b4))
+
 ## [0.2.1](https://github.com/evannagle/ludolph/compare/v0.2.0...v0.2.1) (2026-02-22)
 
 
