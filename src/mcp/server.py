@@ -24,11 +24,15 @@ from .tools import call_tool, get_tool_definitions
 
 app = Flask(__name__)
 
+# Read version from VERSION file (populated during release)
+VERSION_FILE = Path(__file__).parent / "VERSION"
+VERSION = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else "dev"
+
 
 @app.route("/")
 def root():
     """Server info (no auth required)."""
-    return jsonify({"name": "Ludolph MCP Server", "version": "0.5.0", "status": "running"})
+    return jsonify({"name": "Ludolph MCP Server", "version": VERSION, "status": "running"})
 
 
 @app.route("/health")

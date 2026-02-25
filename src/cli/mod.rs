@@ -5,7 +5,7 @@ mod setup;
 
 use clap::{Parser, Subcommand};
 
-pub use commands::{check, config_cmd, pi};
+pub use commands::{check, config_cmd, mcp_restart, mcp_update, mcp_version, pi};
 pub use setup::{setup, setup_credentials, setup_pi};
 
 #[derive(Parser)]
@@ -30,6 +30,11 @@ pub enum Command {
     },
     /// Check Pi connectivity
     Pi,
+    /// Manage MCP server
+    Mcp {
+        #[command(subcommand)]
+        action: McpAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -38,4 +43,14 @@ pub enum SetupStep {
     Credentials,
     /// Configure Pi SSH connection
     Pi,
+}
+
+#[derive(Subcommand)]
+pub enum McpAction {
+    /// Update MCP server to latest version
+    Update,
+    /// Show current MCP version
+    Version,
+    /// Restart MCP server
+    Restart,
 }

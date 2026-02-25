@@ -70,3 +70,25 @@ jobs:
         with:
           tag_name: ${{ needs.release-please.outputs.tag_name }}
           files: lu-${{ matrix.target }}
+
+  package-mcp:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package MCP Server
+        run: |
+          VERSION=${{ needs.release-please.outputs.tag_name }}
+          echo "${VERSION#v}" > src/mcp/VERSION
+          tar -czf ludolph-mcp-${VERSION}.tar.gz -C src mcp/
+          echo "Created ludolph-mcp-${VERSION}.tar.gz"
+          tar -tzf ludolph-mcp-${VERSION}.tar.gz | head -10
+
+      - name: Upload MCP Package
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.release-please.outputs.tag_name }}
+          files: ludolph-mcp-*.tar.gz

@@ -51,6 +51,14 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             cli::pi()?;
             Ok(ExitCode::SUCCESS)
         }
+        Some(Command::Mcp { action }) => {
+            match action {
+                cli::McpAction::Update => cli::mcp_update()?,
+                cli::McpAction::Version => cli::mcp_version()?,
+                cli::McpAction::Restart => cli::mcp_restart()?,
+            }
+            Ok(ExitCode::SUCCESS)
+        }
         None => {
             bot::run().await?;
             Ok(ExitCode::SUCCESS)
