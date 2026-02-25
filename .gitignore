@@ -20,6 +20,12 @@ Thumbs.db
 # Test artifacts
 *.log
 
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
 # Claude Code
 .claude/*
 !.claude/commands/
