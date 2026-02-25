@@ -266,12 +266,12 @@ fn fetch_latest_release_tag() -> Result<String> {
 
     // Extract tag_name from JSON (simple parsing without serde)
     for line in body.lines() {
-        if line.contains("\"tag_name\"") {
-            if let Some(start) = line.find(": \"") {
-                let rest = &line[start + 3..];
-                if let Some(end) = rest.find('"') {
-                    return Ok(rest[..end].to_string());
-                }
+        if line.contains("\"tag_name\"")
+            && let Some(start) = line.find(": \"")
+        {
+            let rest = &line[start + 3..];
+            if let Some(end) = rest.find('"') {
+                return Ok(rest[..end].to_string());
             }
         }
     }
@@ -279,7 +279,7 @@ fn fetch_latest_release_tag() -> Result<String> {
     anyhow::bail!("Could not parse release tag from GitHub API")
 }
 
-#[allow(clippy::unnecessary_wraps)]
+#[allow(clippy::unnecessary_wraps, unreachable_code)]
 fn mcp_restart_service() -> Result<()> {
     let spinner = Spinner::new("Restarting MCP server...");
 
@@ -321,6 +321,14 @@ fn mcp_restart_service() -> Result<()> {
     {
         spinner.finish_error();
         ui::status::hint("Could not restart MCP service. Restart manually.");
+        return Ok(());
+    }
+
+    // macOS case when plist doesn't exist
+    #[cfg(target_os = "macos")]
+    {
+        spinner.finish_error();
+        ui::status::hint("Could not find launchd plist. Restart manually.");
     }
 
     Ok(())
