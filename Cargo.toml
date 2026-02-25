@@ -33,6 +33,7 @@ dialoguer = "0.11"
 indicatif = "0.17"
 shellexpand = "3"
 dirs = "5"
+rand = "0.9"
 
 [dev-dependencies]
 cargo-husky = { version = "1", default-features = false, features = ["prepush-hook", "run-cargo-check", "run-cargo-clippy", "run-cargo-fmt", "run-cargo-test"] }

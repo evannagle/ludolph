@@ -5,10 +5,12 @@ use std::collections::HashSet;
 use anyhow::{Context, Result};
 use console::style;
 use teloxide::prelude::*;
+use teloxide::types::{ParseMode, ReactionType};
 
 use crate::claude::Claude;
 use crate::config::{Config, McpConfig};
 use crate::mcp_client::McpClient;
+use crate::telegram::{thinking_message, to_telegram_html};
 use crate::ui::StatusLine;
 
 /// Register bot commands with Telegram for autocomplete.
@@ -150,21 +152,60 @@ pub async fn run() -> Result<()> {
             }
 
             if let Some(text) = msg.text() {
-                // Show typing indicator
-                let _ = bot
-                    .send_chat_action(msg.chat.id, teloxide::types::ChatAction::Typing)
-                    .await;
-
                 let response = if text.starts_with('/') {
+                    // Commands are fast, no thinking indicator needed
                     handle_command(text, &bot_name, mcp_config.as_ref()).await
                 } else {
-                    claude
+                    // Add eyes reaction to show we're working on it
+                    let _ = bot
+                        .set_message_reaction(msg.chat.id, msg.id)
+                        .reaction(vec![ReactionType::Emoji {
+                            emoji: "👀".to_string(),
+                        }])
+                        .await;
+
+                    // Send thinking message
+                    let thinking = bot
+                        .send_message(msg.chat.id, thinking_message())
+                        .await
+                        .ok();
+
+                    // Show typing indicator while processing
+                    let _ = bot
+                        .send_chat_action(msg.chat.id, teloxide::types::ChatAction::Typing)
+                        .await;
+
+                    // Get response from Claude
+                    let response = claude
                         .chat(text)
                         .await
-                        .unwrap_or_else(|e| format!("Error: {e}"))
+                        .unwrap_or_else(|e| format!("Error: {e}"));
+
+                    // Delete thinking message
+                    if let Some(thinking_msg) = thinking {
+                        let _ = bot.delete_message(msg.chat.id, thinking_msg.id).await;
+                    }
+
+                    // Remove eyes reaction
+                    let _ = bot
+                        .set_message_reaction(msg.chat.id, msg.id)
+                        .reaction(vec![])
+                        .await;
+
+                    response
                 };
 
-                bot.send_message(msg.chat.id, response).await?;
+                // Send formatted response
+                let formatted = to_telegram_html(&response);
+                let send_result = bot
+                    .send_message(msg.chat.id, &formatted)
+                    .parse_mode(ParseMode::Html)
+                    .await;
+
+                // Fallback to plain text if HTML parsing fails
+                if send_result.is_err() {
+                    bot.send_message(msg.chat.id, response).await?;
+                }
             }
             Ok(())
         }
