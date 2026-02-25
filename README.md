@@ -196,15 +196,18 @@ The Pi config includes MCP connection details; the Mac config includes the vault
 
 ## MCP Server
 
-The MCP server runs on your Mac and exposes your vault over HTTP. It provides tools for reading, writing, searching, and managing files.
+The MCP server is a small program that runs on your Mac and lets Lu interact with your vault. When you ask Lu to "find my notes about project X," Lu needs a way to actually search your files. The MCP server provides that bridge — it defines specific "tools" (like `read_file` and `search`) that Lu can use, while keeping everything else off-limits.
 
-**Available tools:**
-- File operations: `read_file`, `write_file`, `append_file`, `delete_file`, `move_file`
-- Directory operations: `list_directory`, `create_directory`
-- Search: `search`, `search_advanced`
-- Metadata: `file_info`
+You don't need to configure anything — the installer sets it up automatically. But if you're curious or want to add custom tools, here's what's available out of the box:
 
-For full API documentation, tool reference, and instructions for adding custom tools, see [src/mcp/README.md](src/mcp/README.md).
+| Category | Tools |
+|----------|-------|
+| File operations | `read_file`, `write_file`, `append_file`, `delete_file`, `move_file` |
+| Directories | `list_directory`, `create_directory` |
+| Search | `search`, `search_advanced` |
+| Metadata | `file_info` |
+
+For the full API reference and instructions for adding your own tools, see [src/mcp/README.md](src/mcp/README.md).
 
 <br clear="right">
 

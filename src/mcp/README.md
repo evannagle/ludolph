@@ -2,6 +2,44 @@
 
 A general-purpose filesystem access server that gives Lu read/write access to any folder. Works with Obsidian vaults, code repositories, or any directory structure.
 
+## What is an MCP Server?
+
+**MCP** stands for **Model Context Protocol**. It's a way to give AI assistants like Lu controlled access to external resources — files, databases, APIs, or anything else you want the AI to interact with.
+
+Think of it like this: Lu is smart, but by default can only see what you paste into the chat. An MCP server is a bridge that lets Lu reach out and interact with things on your computer, but only in ways you've explicitly allowed.
+
+**Why does Ludolph need one?**
+
+When you message Lu on Telegram, here's what happens:
+
+1. Your message goes to the Pi (a tiny computer running Ludolph)
+2. The Pi sends your message to Lu
+3. Lu realizes it needs to read a file from your vault
+4. Lu tells the Pi "I need to use the `read_file` tool"
+5. The Pi calls your Mac's MCP server: "Hey, read `notes/todo.md`"
+6. The MCP server reads the file and sends it back
+7. Lu uses that information to answer you
+
+The MCP server is the gatekeeper. It decides what Lu can and can't do with your files. Without it, Lu would have no way to access your notes.
+
+**What can it do?**
+
+This MCP server provides "tools" — specific actions Lu can request:
+
+| Tool | What it does |
+|------|--------------|
+| `read_file` | Read a file's contents |
+| `write_file` | Create or update a file |
+| `search` | Find files by name or content |
+| `list_directory` | See what's in a folder |
+| ...and more | See [full list below](#tools) |
+
+Lu can only use tools you've defined. It can't run arbitrary code, delete your system files, or access anything outside your vault. The blast radius of a mistake is a bad markdown file, not a catastrophe.
+
+**Do I need to understand this?**
+
+Nope. The installer sets everything up automatically. This documentation is here if you want to customize things, add your own tools, or just understand how it works under the hood.
+
 ## Architecture
 
 ```
