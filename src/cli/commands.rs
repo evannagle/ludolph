@@ -279,7 +279,7 @@ fn fetch_latest_release_tag() -> Result<String> {
     anyhow::bail!("Could not parse release tag from GitHub API")
 }
 
-#[allow(clippy::unnecessary_wraps, unreachable_code)]
+#[allow(clippy::unnecessary_wraps)]
 fn mcp_restart_service() -> Result<()> {
     let spinner = Spinner::new("Restarting MCP server...");
 
@@ -302,8 +302,11 @@ fn mcp_restart_service() -> Result<()> {
                 .status();
 
             spinner.finish();
-            return Ok(());
+        } else {
+            spinner.finish_error();
+            ui::status::hint("Could not find launchd plist. Restart manually.");
         }
+        Ok(())
     }
 
     // Linux: systemctl
@@ -313,7 +316,7 @@ fn mcp_restart_service() -> Result<()> {
             .args(["--user", "restart", "ludolph-mcp"])
             .status();
         spinner.finish();
-        return Ok(());
+        Ok(())
     }
 
     // Fallback for other platforms
@@ -321,15 +324,6 @@ fn mcp_restart_service() -> Result<()> {
     {
         spinner.finish_error();
         ui::status::hint("Could not restart MCP service. Restart manually.");
-        return Ok(());
+        Ok(())
     }
-
-    // macOS case when plist doesn't exist
-    #[cfg(target_os = "macos")]
-    {
-        spinner.finish_error();
-        ui::status::hint("Could not find launchd plist. Restart manually.");
-    }
-
-    Ok(())
 }

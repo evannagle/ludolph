@@ -165,10 +165,7 @@ pub async fn run() -> Result<()> {
                         .await;
 
                     // Send thinking message
-                    let thinking = bot
-                        .send_message(msg.chat.id, thinking_message())
-                        .await
-                        .ok();
+                    let thinking = bot.send_message(msg.chat.id, thinking_message()).await.ok();
 
                     // Show typing indicator while processing
                     let _ = bot
