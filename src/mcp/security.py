@@ -1,6 +1,5 @@
 """Security utilities for path validation and authentication."""
 
-import os
 from functools import wraps
 from pathlib import Path
 
@@ -57,12 +56,14 @@ def safe_path(relative: str) -> Path | None:
 
 def require_auth(f):
     """Decorator to require Bearer token authentication."""
+
     @wraps(f)
     def decorated(*args, **kwargs):
         auth = request.headers.get("Authorization", "")
         if auth != f"Bearer {_AUTH_TOKEN}":
             return jsonify({"error": "Unauthorized"}), 401
         return f(*args, **kwargs)
+
     return decorated
 
 
@@ -89,6 +90,4 @@ def is_git_ignored(path: Path) -> bool:
 def is_git_repo() -> bool:
     """Check if the vault is inside a git repository."""
     vault = get_vault_path()
-    return (vault / ".git").is_dir() or any(
-        (p / ".git").is_dir() for p in vault.parents
-    )
+    return (vault / ".git").is_dir() or any((p / ".git").is_dir() for p in vault.parents)

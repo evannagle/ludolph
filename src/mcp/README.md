@@ -398,6 +398,29 @@ curl -X POST http://localhost:8200/tools/call \
 
 ## Development
 
+### Setup
+
+Install dev dependencies and enable auto-formatting:
+
+```bash
+cd src/mcp
+
+# Install tools
+make install-dev
+
+# Install pre-commit hooks (formats code automatically on commit)
+make install-hooks
+```
+
+### Commands
+
+```bash
+make fmt      # Format code with black + ruff
+make lint     # Check formatting without fixing
+make test     # Run unit tests
+make check    # Format + test (run before committing)
+```
+
 ### Project Structure
 
 ```

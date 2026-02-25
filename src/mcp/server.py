@@ -19,8 +19,8 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request
 
-from .security import init_security, require_auth, get_vault_path, is_git_repo
-from .tools import get_tool_definitions, call_tool
+from .security import get_vault_path, init_security, is_git_repo, require_auth
+from .tools import call_tool, get_tool_definitions
 
 app = Flask(__name__)
 
@@ -28,11 +28,7 @@ app = Flask(__name__)
 @app.route("/")
 def root():
     """Server info (no auth required)."""
-    return jsonify({
-        "name": "Ludolph MCP Server",
-        "version": "0.5.0",
-        "status": "running"
-    })
+    return jsonify({"name": "Ludolph MCP Server", "version": "0.5.0", "status": "running"})
 
 
 @app.route("/health")
@@ -40,11 +36,7 @@ def root():
 def health():
     """Health check endpoint."""
     vault = get_vault_path()
-    return jsonify({
-        "status": "ok",
-        "vault": str(vault),
-        "git_repo": is_git_repo()
-    })
+    return jsonify({"status": "ok", "vault": str(vault), "git_repo": is_git_repo()})
 
 
 @app.route("/tools")

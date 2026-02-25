@@ -1,0 +1,20 @@
+# Pre-commit hooks for Python code
+# Install: pip install pre-commit && pre-commit install
+# Run manually: pre-commit run --all-files
+
+repos:
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black
+        files: ^src/mcp/
+        args: [--line-length=100]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff
+        files: ^src/mcp/
+        args: [--fix]
+      - id: ruff-format
+        files: ^src/mcp/

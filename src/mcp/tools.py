@@ -1,13 +1,11 @@
 """Tool definitions and implementations for the MCP server."""
 
-import os
 import re
 import shutil
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
-from .security import get_vault_path, safe_path, is_git_ignored
+from .security import get_vault_path, is_git_ignored, safe_path
 
 # Tool definitions for /tools endpoint
 TOOLS = [
@@ -18,13 +16,10 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to the file relative to root"
-                }
+                "path": {"type": "string", "description": "Path to the file relative to root"}
             },
-            "required": ["path"]
-        }
+            "required": ["path"],
+        },
     },
     {
         "name": "write_file",
@@ -32,17 +27,11 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to the file relative to root"
-                },
-                "content": {
-                    "type": "string",
-                    "description": "Content to write to the file"
-                }
+                "path": {"type": "string", "description": "Path to the file relative to root"},
+                "content": {"type": "string", "description": "Content to write to the file"},
             },
-            "required": ["path", "content"]
-        }
+            "required": ["path", "content"],
+        },
     },
     {
         "name": "append_file",
@@ -50,17 +39,11 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to the file relative to root"
-                },
-                "content": {
-                    "type": "string",
-                    "description": "Content to append"
-                }
+                "path": {"type": "string", "description": "Path to the file relative to root"},
+                "content": {"type": "string", "description": "Content to append"},
             },
-            "required": ["path", "content"]
-        }
+            "required": ["path", "content"],
+        },
     },
     {
         "name": "delete_file",
@@ -68,13 +51,10 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to the file relative to root"
-                }
+                "path": {"type": "string", "description": "Path to the file relative to root"}
             },
-            "required": ["path"]
-        }
+            "required": ["path"],
+        },
     },
     {
         "name": "move_file",
@@ -82,17 +62,14 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "source": {
-                    "type": "string",
-                    "description": "Source path relative to root"
-                },
+                "source": {"type": "string", "description": "Source path relative to root"},
                 "destination": {
                     "type": "string",
-                    "description": "Destination path relative to root"
-                }
+                    "description": "Destination path relative to root",
+                },
             },
-            "required": ["source", "destination"]
-        }
+            "required": ["source", "destination"],
+        },
     },
     # Phase 2: Directory Operations
     {
@@ -103,11 +80,11 @@ TOOLS = [
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the directory relative to root (empty for root)"
+                    "description": "Path to the directory relative to root (empty for root)",
                 }
             },
-            "required": []
-        }
+            "required": [],
+        },
     },
     {
         "name": "create_directory",
@@ -115,13 +92,10 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to the directory relative to root"
-                }
+                "path": {"type": "string", "description": "Path to the directory relative to root"}
             },
-            "required": ["path"]
-        }
+            "required": ["path"],
+        },
     },
     # Phase 3: Search
     {
@@ -132,19 +106,16 @@ TOOLS = [
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Search query (searches file names and content)"
+                    "description": "Search query (searches file names and content)",
                 },
-                "path": {
-                    "type": "string",
-                    "description": "Optional subdirectory to search within"
-                },
+                "path": {"type": "string", "description": "Optional subdirectory to search within"},
                 "context_length": {
                     "type": "integer",
-                    "description": "Number of characters of context around matches (default 50)"
-                }
+                    "description": "Number of characters of context around matches (default 50)",
+                },
             },
-            "required": ["query"]
-        }
+            "required": ["query"],
+        },
     },
     {
         "name": "search_advanced",
@@ -152,25 +123,19 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "pattern": {
-                    "type": "string",
-                    "description": "Regex pattern to search for"
-                },
-                "path": {
-                    "type": "string",
-                    "description": "Optional subdirectory to search within"
-                },
+                "pattern": {"type": "string", "description": "Regex pattern to search for"},
+                "path": {"type": "string", "description": "Optional subdirectory to search within"},
                 "glob": {
                     "type": "string",
-                    "description": "Glob pattern to filter files (e.g., '*.md')"
+                    "description": "Glob pattern to filter files (e.g., '*.md')",
                 },
                 "content_only": {
                     "type": "boolean",
-                    "description": "Search only file content, not names"
-                }
+                    "description": "Search only file content, not names",
+                },
             },
-            "required": ["pattern"]
-        }
+            "required": ["pattern"],
+        },
     },
     # Phase 4: Metadata
     {
@@ -179,13 +144,10 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to the file relative to root"
-                }
+                "path": {"type": "string", "description": "Path to the file relative to root"}
             },
-            "required": ["path"]
-        }
+            "required": ["path"],
+        },
     },
 ]
 
@@ -228,6 +190,7 @@ def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
 # =============================================================================
 # Phase 1: Core File Operations
 # =============================================================================
+
 
 def _read_file(args: dict) -> dict:
     """Read the contents of a file."""
@@ -312,15 +275,13 @@ def _move_file(args: dict) -> dict:
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     shutil.move(str(source), str(destination))
-    return {
-        "content": f"Moved {args.get('source')} to {args.get('destination')}",
-        "error": None
-    }
+    return {"content": f"Moved {args.get('source')} to {args.get('destination')}", "error": None}
 
 
 # =============================================================================
 # Phase 2: Directory Operations
 # =============================================================================
+
 
 def _list_directory(args: dict) -> dict:
     """List the contents of a directory."""
@@ -357,6 +318,7 @@ def _create_directory(args: dict) -> dict:
 # Phase 3: Search
 # =============================================================================
 
+
 def _search(args: dict) -> dict:
     """Simple text search across file names and content."""
     query = args.get("query", "")
@@ -381,7 +343,17 @@ def _search(args: dict) -> dict:
                 results.append(f"file: {rel_path}")
 
             # Check content for text files
-            elif path.suffix in (".md", ".txt", ".json", ".yaml", ".yml", ".py", ".js", ".ts", ".rs"):
+            elif path.suffix in (
+                ".md",
+                ".txt",
+                ".json",
+                ".yaml",
+                ".yml",
+                ".py",
+                ".js",
+                ".ts",
+                ".rs",
+            ):
                 try:
                     content = path.read_text(encoding="utf-8")
                     match = pattern.search(content)
@@ -452,6 +424,7 @@ def _search_advanced(args: dict) -> dict:
 # =============================================================================
 # Phase 4: Metadata
 # =============================================================================
+
 
 def _file_info(args: dict) -> dict:
     """Get file metadata."""

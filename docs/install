@@ -650,10 +650,16 @@ if ! $IS_PI; then
     # Write server.py
     cat > "$LOCAL_DIR/mcp/server.py" << 'SERVEREOF'
 #!/usr/bin/env python3
-"""Ludolph Vault Server - Shares vault with Pi over HTTP."""
+"""Ludolph MCP Server - General-purpose filesystem access via HTTP.
+
+Provides read/write access to any folder structure. Works with Obsidian vaults,
+code repositories, or any directory. See src/mcp/README.md for documentation.
+"""
 
 import os
 import re
+import shutil
+from datetime import datetime
 from functools import wraps
 from pathlib import Path
 
@@ -665,14 +671,21 @@ VAULT_PATH = Path(os.environ.get("VAULT_PATH", "~/vault")).expanduser().resolve(
 AUTH_TOKEN = os.environ.get("AUTH_TOKEN", "")
 
 
+# =============================================================================
+# Security
+# =============================================================================
+
+
 def require_auth(f):
     """Decorator to require Bearer token authentication."""
+
     @wraps(f)
     def decorated(*args, **kwargs):
         auth = request.headers.get("Authorization", "")
         if auth != f"Bearer {AUTH_TOKEN}":
             return jsonify({"error": "Unauthorized"}), 401
         return f(*args, **kwargs)
+
     return decorated
 
 
@@ -680,11 +693,9 @@ def safe_path(relative: str) -> Path | None:
     """Resolve a path safely within the vault, preventing directory traversal."""
     if ".." in relative:
         return None
-    # Handle empty path as vault root
     if not relative or relative == ".":
         return VAULT_PATH
     full = (VAULT_PATH / relative).resolve()
-    # Ensure path is within vault
     try:
         full.relative_to(VAULT_PATH)
         return full
@@ -692,67 +703,158 @@ def safe_path(relative: str) -> Path | None:
         return None
 
 
+def is_git_repo() -> bool:
+    """Check if the vault is inside a git repository."""
+    return (VAULT_PATH / ".git").is_dir()
+
+
+# =============================================================================
+# Tool Definitions
+# =============================================================================
+
+TOOLS = [
+    {
+        "name": "read_file",
+        "description": "Read the contents of a file",
+        "input_schema": {
+            "type": "object",
+            "properties": {"path": {"type": "string", "description": "Path relative to root"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "write_file",
+        "description": "Create or replace a file",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path relative to root"},
+                "content": {"type": "string", "description": "Content to write"},
+            },
+            "required": ["path", "content"],
+        },
+    },
+    {
+        "name": "append_file",
+        "description": "Append content to the end of a file",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path relative to root"},
+                "content": {"type": "string", "description": "Content to append"},
+            },
+            "required": ["path", "content"],
+        },
+    },
+    {
+        "name": "delete_file",
+        "description": "Delete a file",
+        "input_schema": {
+            "type": "object",
+            "properties": {"path": {"type": "string", "description": "Path relative to root"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "move_file",
+        "description": "Move or rename a file",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "source": {"type": "string", "description": "Source path"},
+                "destination": {"type": "string", "description": "Destination path"},
+            },
+            "required": ["source", "destination"],
+        },
+    },
+    {
+        "name": "list_directory",
+        "description": "List the contents of a directory",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path relative to root (empty for root)"}
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "create_directory",
+        "description": "Create a directory (including parent directories)",
+        "input_schema": {
+            "type": "object",
+            "properties": {"path": {"type": "string", "description": "Path relative to root"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "search",
+        "description": "Search for files or content (simple text search)",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "path": {"type": "string", "description": "Subdirectory to search within"},
+                "context_length": {
+                    "type": "integer",
+                    "description": "Characters of context (default 50)",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "search_advanced",
+        "description": "Advanced search with regex and glob patterns",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "Regex pattern"},
+                "path": {"type": "string", "description": "Subdirectory to search within"},
+                "glob": {"type": "string", "description": "Glob pattern to filter files"},
+                "content_only": {
+                    "type": "boolean",
+                    "description": "Search only content, not names",
+                },
+            },
+            "required": ["pattern"],
+        },
+    },
+    {
+        "name": "file_info",
+        "description": "Get file metadata (size, dates, permissions)",
+        "input_schema": {
+            "type": "object",
+            "properties": {"path": {"type": "string", "description": "Path relative to root"}},
+            "required": ["path"],
+        },
+    },
+]
+
+
+# =============================================================================
+# Routes
+# =============================================================================
+
+
+@app.route("/")
+def root():
+    """Server info (no auth required)."""
+    return jsonify({"name": "Ludolph MCP Server", "version": "0.5.0", "status": "running"})
+
+
 @app.route("/health")
 @require_auth
 def health():
     """Health check endpoint."""
-    return jsonify({"status": "ok", "vault": str(VAULT_PATH)})
+    return jsonify({"status": "ok", "vault": str(VAULT_PATH), "git_repo": is_git_repo()})
 
 
 @app.route("/tools")
 @require_auth
 def tools():
     """Return available tool definitions."""
-    return jsonify({
-        "tools": [
-            {
-                "name": "read_file",
-                "description": "Read the contents of a file in the vault",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Path to the file relative to vault root"
-                        }
-                    },
-                    "required": ["path"]
-                }
-            },
-            {
-                "name": "list_dir",
-                "description": "List the contents of a directory in the vault",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Path to the directory relative to vault root"
-                        }
-                    },
-                    "required": []
-                }
-            },
-            {
-                "name": "search",
-                "description": "Search for files or content in the vault",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Search query (searches file names and content)"
-                        },
-                        "path": {
-                            "type": "string",
-                            "description": "Optional subdirectory to search within"
-                        }
-                    },
-                    "required": ["query"]
-                }
-            }
-        ]
-    })
+    return jsonify({"tools": TOOLS})
 
 
 @app.route("/tools/call", methods=["POST"])
@@ -763,72 +865,202 @@ def call_tool():
     name = data.get("name", "")
     args = data.get("arguments", {})
 
-    if name == "read_file":
-        path = safe_path(args.get("path", ""))
-        if not path:
-            return jsonify({"content": "", "error": "Invalid path"})
-        if not path.exists():
-            return jsonify({"content": "", "error": f"File not found: {args.get('path')}"})
-        if not path.is_file():
-            return jsonify({"content": "", "error": "Path is not a file"})
-        try:
-            content = path.read_text(encoding="utf-8")
-            return jsonify({"content": content, "error": None})
-        except Exception as e:
-            return jsonify({"content": "", "error": str(e)})
+    handlers = {
+        "read_file": _read_file,
+        "write_file": _write_file,
+        "append_file": _append_file,
+        "delete_file": _delete_file,
+        "move_file": _move_file,
+        "list_directory": _list_directory,
+        "create_directory": _create_directory,
+        "search": _search,
+        "search_advanced": _search_advanced,
+        "file_info": _file_info,
+    }
 
-    elif name == "list_dir":
-        path = safe_path(args.get("path", ""))
-        if not path:
-            return jsonify({"content": "", "error": "Invalid path"})
-        if not path.exists():
-            return jsonify({"content": "", "error": f"Directory not found: {args.get('path', '.')}"})
-        if not path.is_dir():
-            return jsonify({"content": "", "error": "Path is not a directory"})
-        try:
-            entries = []
-            for entry in sorted(path.iterdir()):
-                if entry.name.startswith("."):
-                    continue
-                kind = "dir" if entry.is_dir() else "file"
-                entries.append(f"{kind}: {entry.name}")
-            content = "\n".join(entries) if entries else "(empty directory)"
-            return jsonify({"content": content, "error": None})
-        except Exception as e:
-            return jsonify({"content": "", "error": str(e)})
+    handler = handlers.get(name)
+    if not handler:
+        return jsonify({"content": "", "error": f"Unknown tool: {name}"})
 
-    elif name == "search":
-        query = args.get("query", "")
-        search_path = safe_path(args.get("path", ""))
-        if not search_path:
-            search_path = VAULT_PATH
-        if not query:
-            return jsonify({"content": "", "error": "Query required"})
-        try:
-            results = []
-            pattern = re.compile(re.escape(query), re.IGNORECASE)
-            for path in search_path.rglob("*"):
-                if path.is_file() and not any(p.startswith(".") for p in path.parts):
-                    rel_path = path.relative_to(VAULT_PATH)
-                    # Check filename
-                    if pattern.search(path.name):
-                        results.append(f"file: {rel_path}")
-                    # Check content for text files
-                    elif path.suffix in (".md", ".txt", ".json", ".yaml", ".yml"):
-                        try:
-                            content = path.read_text(encoding="utf-8")
-                            if pattern.search(content):
-                                results.append(f"match: {rel_path}")
-                        except Exception:
-                            pass
-                if len(results) >= 50:
-                    break
-            content = "\n".join(results) if results else "No matches found"
-            return jsonify({"content": content, "error": None})
-        except Exception as e:
-            return jsonify({"content": "", "error": str(e)})
+    try:
+        result = handler(args)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"content": "", "error": str(e)})
 
-    return jsonify({"content": "", "error": f"Unknown tool: {name}"})
+
+# =============================================================================
+# Tool Implementations
+# =============================================================================
+
+
+def _read_file(args):
+    path = safe_path(args.get("path", ""))
+    if not path:
+        return {"content": "", "error": "Invalid path"}
+    if not path.exists():
+        return {"content": "", "error": f"File not found: {args.get('path')}"}
+    if not path.is_file():
+        return {"content": "", "error": "Path is not a file"}
+    return {"content": path.read_text(encoding="utf-8"), "error": None}
+
+
+def _write_file(args):
+    path = safe_path(args.get("path", ""))
+    if not path:
+        return {"content": "", "error": "Invalid path"}
+    content = args.get("content", "")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return {"content": f"Written {len(content)} bytes to {args.get('path')}", "error": None}
+
+
+def _append_file(args):
+    path = safe_path(args.get("path", ""))
+    if not path:
+        return {"content": "", "error": "Invalid path"}
+    content = args.get("content", "")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        existing = path.read_text(encoding="utf-8")
+        if existing and not existing.endswith("\n"):
+            content = "\n" + content
+        with path.open("a", encoding="utf-8") as f:
+            f.write(content)
+    else:
+        path.write_text(content, encoding="utf-8")
+    return {"content": f"Appended {len(content)} bytes to {args.get('path')}", "error": None}
+
+
+def _delete_file(args):
+    path = safe_path(args.get("path", ""))
+    if not path:
+        return {"content": "", "error": "Invalid path"}
+    if not path.exists():
+        return {"content": "", "error": f"File not found: {args.get('path')}"}
+    if not path.is_file():
+        return {"content": "", "error": "Path is not a file"}
+    path.unlink()
+    return {"content": f"Deleted {args.get('path')}", "error": None}
+
+
+def _move_file(args):
+    source = safe_path(args.get("source", ""))
+    destination = safe_path(args.get("destination", ""))
+    if not source:
+        return {"content": "", "error": "Invalid source path"}
+    if not destination:
+        return {"content": "", "error": "Invalid destination path"}
+    if not source.exists():
+        return {"content": "", "error": f"Source not found: {args.get('source')}"}
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(source), str(destination))
+    return {"content": f"Moved {args.get('source')} to {args.get('destination')}", "error": None}
+
+
+def _list_directory(args):
+    path = safe_path(args.get("path", ""))
+    if not path:
+        return {"content": "", "error": "Invalid path"}
+    if not path.exists():
+        return {"content": "", "error": f"Directory not found: {args.get('path', '.')}"}
+    if not path.is_dir():
+        return {"content": "", "error": "Path is not a directory"}
+    entries = []
+    for entry in sorted(path.iterdir()):
+        if entry.name.startswith("."):
+            continue
+        kind = "dir" if entry.is_dir() else "file"
+        entries.append(f"{kind}: {entry.name}")
+    return {"content": "\n".join(entries) if entries else "(empty directory)", "error": None}
+
+
+def _create_directory(args):
+    path = safe_path(args.get("path", ""))
+    if not path:
+        return {"content": "", "error": "Invalid path"}
+    path.mkdir(parents=True, exist_ok=True)
+    return {"content": f"Created directory: {args.get('path')}", "error": None}
+
+
+def _search(args):
+    query = args.get("query", "")
+    if not query:
+        return {"content": "", "error": "Query required"}
+    search_path = safe_path(args.get("path", "")) or VAULT_PATH
+    context_length = args.get("context_length", 50)
+    results = []
+    pattern = re.compile(re.escape(query), re.IGNORECASE)
+    for p in search_path.rglob("*"):
+        if p.is_file() and not any(part.startswith(".") for part in p.parts):
+            rel_path = p.relative_to(VAULT_PATH)
+            if pattern.search(p.name):
+                results.append(f"file: {rel_path}")
+            elif p.suffix in (".md", ".txt", ".json", ".yaml", ".yml", ".py", ".js", ".ts", ".rs"):
+                try:
+                    content = p.read_text(encoding="utf-8")
+                    match = pattern.search(content)
+                    if match:
+                        start = max(0, match.start() - context_length)
+                        end = min(len(content), match.end() + context_length)
+                        context = content[start:end].replace("\n", " ")
+                        results.append(f"match: {rel_path}\n  ...{context}...")
+                except Exception:
+                    pass
+        if len(results) >= 50:
+            break
+    return {"content": "\n".join(results) if results else "No matches found", "error": None}
+
+
+def _search_advanced(args):
+    pattern_str = args.get("pattern", "")
+    if not pattern_str:
+        return {"content": "", "error": "Pattern required"}
+    try:
+        pattern = re.compile(pattern_str, re.IGNORECASE | re.MULTILINE)
+    except re.error as e:
+        return {"content": "", "error": f"Invalid regex: {e}"}
+    search_path = safe_path(args.get("path", "")) or VAULT_PATH
+    glob_pattern = args.get("glob", "*")
+    content_only = args.get("content_only", False)
+    results = []
+    for p in search_path.rglob(glob_pattern):
+        if p.is_file() and not any(part.startswith(".") for part in p.parts):
+            rel_path = p.relative_to(VAULT_PATH)
+            if not content_only and pattern.search(p.name):
+                results.append(f"file: {rel_path}")
+            try:
+                content = p.read_text(encoding="utf-8")
+                matches = list(pattern.finditer(content))
+                if matches:
+                    for match in matches[:3]:
+                        start = max(0, match.start() - 30)
+                        end = min(len(content), match.end() + 30)
+                        context = content[start:end].replace("\n", " ")
+                        results.append(f"match: {rel_path}:{match.start()}\n  ...{context}...")
+            except Exception:
+                pass
+        if len(results) >= 50:
+            break
+    return {"content": "\n".join(results) if results else "No matches found", "error": None}
+
+
+def _file_info(args):
+    path = safe_path(args.get("path", ""))
+    if not path:
+        return {"content": "", "error": "Invalid path"}
+    if not path.exists():
+        return {"content": "", "error": f"File not found: {args.get('path')}"}
+    stat = path.stat()
+    info = [
+        f"path: {args.get('path')}",
+        f"type: {'directory' if path.is_dir() else 'file'}",
+        f"size: {stat.st_size} bytes",
+        f"created: {datetime.fromtimestamp(stat.st_ctime).isoformat()}",
+        f"modified: {datetime.fromtimestamp(stat.st_mtime).isoformat()}",
+        f"permissions: {oct(stat.st_mode)[-3:]}",
+    ]
+    return {"content": "\n".join(info), "error": None}
 
 
 if __name__ == "__main__":
@@ -837,7 +1069,9 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8200))
     print(f"Vault: {VAULT_PATH}")
     print(f"Port: {port}")
+    print(f"Git repo: {is_git_repo()}")
     app.run(host="0.0.0.0", port=port)
+
 SERVEREOF
 
     spinner_stop "ok" "Vault server created"

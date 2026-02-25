@@ -1,12 +1,11 @@
 """Unit tests for MCP tools."""
 
-import os
+# Add parent to path for imports
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-# Add parent to path for imports
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from mcp.security import init_security, safe_path
@@ -25,6 +24,7 @@ class TestSafePath(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.tmpdir)
 
     def test_safe_path_accepts_valid_paths(self):
@@ -64,6 +64,7 @@ class TestReadFile(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.tmpdir)
 
     def test_read_existing_file(self):
@@ -94,6 +95,7 @@ class TestWriteFile(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.tmpdir)
 
     def test_write_new_file(self):
@@ -126,6 +128,7 @@ class TestAppendFile(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.tmpdir)
 
     def test_append_to_existing(self):
@@ -160,6 +163,7 @@ class TestDeleteFile(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.tmpdir)
 
     def test_delete_existing_file(self):
@@ -185,6 +189,7 @@ class TestMoveFile(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.tmpdir)
 
     def test_move_file(self):
@@ -215,6 +220,7 @@ class TestListDirectory(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.tmpdir)
 
     def test_list_root(self):
@@ -240,6 +246,7 @@ class TestCreateDirectory(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.tmpdir)
 
     def test_create_single_directory(self):
@@ -268,6 +275,7 @@ class TestSearch(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.tmpdir)
 
     def test_search_filename(self):
@@ -300,6 +308,7 @@ class TestSearchAdvanced(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.tmpdir)
 
     def test_regex_search(self):
@@ -326,6 +335,7 @@ class TestFileInfo(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.tmpdir)
 
     def test_file_info(self):
