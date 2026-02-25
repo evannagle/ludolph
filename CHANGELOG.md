@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.5.0](https://github.com/evannagle/ludolph/compare/v0.4.0...v0.5.0) (2026-02-25)
+
+
+### Features
+
+* **mcp:** add auto-formatting with black and ruff ([7f5116a](https://github.com/evannagle/ludolph/commit/7f5116a86f0fe47c03adc9d4c1da30491557e6fb))
+* **mcp:** add modular 34-tool MCP server ([5d412a0](https://github.com/evannagle/ludolph/commit/5d412a02a528d7287502e53ad601af66a430b3c2))
+* **mcp:** add modular Python MCP server with 10 tools ([9044f3d](https://github.com/evannagle/ludolph/commit/9044f3d8ae8e91f5ac80003c086a0267fbad385f))
+* **mcp:** package MCP server as GitHub release asset ([acfe32b](https://github.com/evannagle/ludolph/commit/acfe32b3b6ae6cca59c9a16725d5bb06a866fb4a))
+
+
+### Bug Fixes
+
+* add -n flag to SSH commands to prevent stdin consumption ([68179be](https://github.com/evannagle/ludolph/commit/68179be3cfb30ef4168262c6ab1dc54ac5aade5e))
+* add -T to SSH heredocs for curl|bash compatibility ([569e2b8](https://github.com/evannagle/ludolph/commit/569e2b8007877edf1e7dc2a94c4b12b41cee99ce))
+* improve installer reliability with better error handling and trackable steps ([7a5468c](https://github.com/evannagle/ludolph/commit/7a5468c363243fcdd2d7ef403c9194241afbb8c4))
+* replace SSH heredocs with inline commands for curl|bash compatibility ([5ce5a93](https://github.com/evannagle/ludolph/commit/5ce5a933f9ab6d22a764115064f3865c59cab8dd))
+* use explicit stdin redirect (&lt; /dev/null) for SSH commands ([37a26f1](https://github.com/evannagle/ludolph/commit/37a26f1d5112d00b0ad323561c4093d93ce59f26))
+
 ## [0.4.0](https://github.com/evannagle/ludolph/compare/v0.3.0...v0.4.0) (2026-02-24)
 
 
