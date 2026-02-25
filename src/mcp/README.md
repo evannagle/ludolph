@@ -477,3 +477,13 @@ launchctl start dev.ludolph.mcp
 # View logs
 tail -f ~/.ludolph/mcp/server.log
 ```
+
+## Inspired By
+
+This MCP server's design draws from two excellent projects:
+
+- **[Obsidian Local REST API](https://github.com/coddingtonbear/obsidian-local-rest-api)** — An Obsidian plugin that exposes your vault via REST endpoints. We adopted its endpoint structure (`/vault/{path}`, `/search/`) and the idea of PATCH operations for editing by heading.
+
+- **[mcp-obsidian](https://github.com/bitbonsai/mcp-obsidian)** — A Python MCP server for Obsidian. We borrowed its tool naming conventions and the concept of batch operations.
+
+Our implementation combines ideas from both while staying simple: pure Python with no dependencies beyond Flask, works with any folder (not just Obsidian vaults), and designed to be extended with custom tools.
