@@ -316,7 +316,12 @@ fn mcp_restart_service() -> Result<()> {
         return Ok(());
     }
 
-    spinner.finish_error();
-    ui::status::hint("Could not restart MCP service. Restart manually.");
+    // Fallback for other platforms
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        spinner.finish_error();
+        ui::status::hint("Could not restart MCP service. Restart manually.");
+    }
+
     Ok(())
 }
