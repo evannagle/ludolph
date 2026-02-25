@@ -56,7 +56,7 @@ Your vault stays on your Mac. The Pi is just a thin client that forwards request
 - **Single binary** — No Python, no Node, no dependencies on the Pi. Download and run
 - **Your API key** — You control costs, models, and data
 - **Configurable** — Sensible defaults out of the box, but everything's tunable if you want it to be
-- **Extensible MCP server** — The Mac runs a Python MCP server you can customize with your own tools
+- **Extensible MCP server** — The Mac runs a Python MCP server you can customize with your own tools. See [MCP Server Documentation](src/mcp/README.md)
 
 ## Security
 
@@ -193,6 +193,18 @@ user = "pi"
 ```
 
 The Pi config includes MCP connection details; the Mac config includes the vault path and Pi connection info for management.
+
+## MCP Server
+
+The MCP server runs on your Mac and exposes your vault over HTTP. It provides tools for reading, writing, searching, and managing files.
+
+**Available tools:**
+- File operations: `read_file`, `write_file`, `append_file`, `delete_file`, `move_file`
+- Directory operations: `list_directory`, `create_directory`
+- Search: `search`, `search_advanced`
+- Metadata: `file_info`
+
+For full API documentation, tool reference, and instructions for adding custom tools, see [src/mcp/README.md](src/mcp/README.md).
 
 <br clear="right">
 
