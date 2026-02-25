@@ -35,7 +35,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ""  # Uses rust-toolchain.toml
       - run: cargo check --all-features
 
   clippy:
@@ -43,9 +45,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
-          components: clippy
+          toolchain: ""  # Uses rust-toolchain.toml
       - run: cargo clippy --all-features -- -D warnings
 
   fmt:
@@ -53,9 +55,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
-          components: rustfmt
+          toolchain: ""  # Uses rust-toolchain.toml
       - run: cargo fmt --all -- --check
 
   test:
@@ -63,5 +65,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ""  # Uses rust-toolchain.toml
       - run: cargo test --all-features
