@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/evannagle/ludolph/compare/v0.5.0...v0.5.1) (2026-02-25)
+
+
+### Bug Fixes
+
+* pin Rust version for consistent CI builds ([#7](https://github.com/evannagle/ludolph/issues/7)) ([6134cc9](https://github.com/evannagle/ludolph/commit/6134cc954599859a3d0c678b4afafc34f606d227))
+
 ## [0.5.0](https://github.com/evannagle/ludolph/compare/v0.4.0...v0.5.0) (2026-02-25)
 
 
