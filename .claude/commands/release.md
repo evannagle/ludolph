@@ -16,17 +16,20 @@ Validate the codebase, test ARM build on Pi, and push to production to trigger r
 ## Process
 
 1. Verify prerequisites
-2. Run local checks:
+2. Run local checks (Rust):
    - `cargo fmt --check`
    - `cargo clippy -- -D warnings`
    - `cargo test`
-3. Test ARM build on Pi:
+3. Run local checks (MCP Python):
+   - `python3 -m py_compile src/mcp/**/*.py`
+   - `ruff check src/mcp/` (if ruff installed)
+4. Test ARM build on Pi:
    - `ssh pi "cd ~/ludolph && git pull origin develop && cargo build --release"`
    - `ssh pi "~/ludolph/target/release/lu check"`
-4. Confirm release
-5. Push to production:
+5. Confirm release
+6. Push to production:
    - `git push origin develop:production`
-6. Print next steps
+7. Print next steps
 
 ## Rules
 
@@ -62,7 +65,24 @@ cargo clippy -- -D warnings
 cargo test
 ```
 
-### Step 3: Test ARM build on Pi
+### Step 3: Run local checks (MCP Python)
+
+Validate Python syntax for all MCP server files:
+
+```bash
+python3 -m py_compile src/mcp/server.py
+python3 -m py_compile src/mcp/security.py
+python3 -m py_compile src/mcp/tools/__init__.py
+find src/mcp/tools -name "*.py" -exec python3 -m py_compile {} \;
+```
+
+If ruff is available, run linting:
+
+```bash
+ruff check src/mcp/ || echo "ruff not installed, skipping"
+```
+
+### Step 4: Test ARM build on Pi
 
 Use the SSH alias `pi` (configured via `lu setup`):
 
@@ -80,11 +100,12 @@ ssh pi "source ~/.cargo/env && ~/ludolph/target/release/lu check"
 
 If either fails, abort with error output.
 
-### Step 4: Confirm release
+### Step 5: Confirm release
 
 Print summary:
 ```
-Local checks: passed
+Local checks (Rust): passed
+Local checks (MCP Python): passed
 ARM build on Pi: passed
 
 Ready to push develop -> production?
@@ -92,13 +113,13 @@ Ready to push develop -> production?
 
 Wait for user confirmation before proceeding.
 
-### Step 5: Push to production
+### Step 6: Push to production
 
 ```bash
 git push origin develop:production
 ```
 
-### Step 6: Print next steps
+### Step 7: Print next steps
 
 Print:
 ```
@@ -108,4 +129,5 @@ Next steps:
 1. Wait for release-please PR at https://github.com/evannagle/ludolph/pulls
 2. Review the changelog
 3. Merge the PR to publish the release
+4. Run /deploy to deploy MCP to Mac and restart bot on Pi
 ```
