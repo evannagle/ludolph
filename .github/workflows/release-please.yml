@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - production
+  release:
+    types: [published]
 
 permissions:
   contents: write
@@ -12,6 +14,7 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    if: github.event_name == 'push'
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
@@ -23,7 +26,7 @@ jobs:
 
   build-release:
     needs: release-please
-    if: ${{ needs.release-please.outputs.release_created }}
+    if: ${{ always() && (needs.release-please.outputs.release_created || github.event_name == 'release') }}
     strategy:
       matrix:
         include:
@@ -69,12 +72,12 @@ jobs:
       - name: Upload to release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ needs.release-please.outputs.tag_name }}
+          tag_name: ${{ needs.release-please.outputs.tag_name || github.event.release.tag_name }}
           files: lu-${{ matrix.target }}
 
   package-mcp:
     needs: release-please
-    if: ${{ needs.release-please.outputs.release_created }}
+    if: ${{ always() && (needs.release-please.outputs.release_created || github.event_name == 'release') }}
     runs-on: ubuntu-latest
 
     steps:
@@ -82,7 +85,7 @@ jobs:
 
       - name: Package MCP Server
         run: |
-          VERSION=${{ needs.release-please.outputs.tag_name }}
+          VERSION=${{ needs.release-please.outputs.tag_name || github.event.release.tag_name }}
           echo "${VERSION#v}" > src/mcp/VERSION
           tar -czf ludolph-mcp-${VERSION}.tar.gz -C src mcp/
           echo "Created ludolph-mcp-${VERSION}.tar.gz"
@@ -91,5 +94,5 @@ jobs:
       - name: Upload MCP Package
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ needs.release-please.outputs.tag_name }}
+          tag_name: ${{ needs.release-please.outputs.tag_name || github.event.release.tag_name }}
           files: ludolph-mcp-*.tar.gz
