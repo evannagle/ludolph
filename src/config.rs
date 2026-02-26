@@ -18,6 +18,9 @@ pub struct Config {
     /// MCP server configuration (used by Pi thin client to connect to Mac)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp: Option<McpConfig>,
+    /// Memory configuration for conversation context
+    #[serde(default)]
+    pub memory: MemoryConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +60,43 @@ pub struct McpConfig {
     /// MAC address for Wake-on-LAN (e.g., "a4:83:e7:xx:xx:xx")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mac_address: Option<String>,
+}
+
+/// Memory configuration for conversation context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryConfig {
+    /// Number of recent messages to include in context (default: 8)
+    #[serde(default = "default_window_size")]
+    pub window_size: usize,
+    /// Persist to vault when this many messages accumulate (default: 16)
+    #[serde(default = "default_persist_threshold")]
+    pub persist_threshold: usize,
+    /// Maximum bytes of context to include (default: 32KB, protects Pi memory)
+    /// Messages are trimmed from oldest first if this limit is exceeded.
+    #[serde(default = "default_max_context_bytes")]
+    pub max_context_bytes: usize,
+}
+
+const fn default_window_size() -> usize {
+    8
+}
+
+const fn default_persist_threshold() -> usize {
+    16
+}
+
+const fn default_max_context_bytes() -> usize {
+    32 * 1024 // 32KB default - conservative for Pi
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            window_size: default_window_size(),
+            persist_threshold: default_persist_threshold(),
+            max_context_bytes: default_max_context_bytes(),
+        }
+    }
 }
 
 fn default_model() -> String {
@@ -125,6 +165,7 @@ impl Config {
             vault: vault_path.map(|path| VaultConfig { path }),
             pi,
             mcp,
+            memory: MemoryConfig::default(),
         }
     }
 }

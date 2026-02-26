@@ -133,6 +133,7 @@ impl McpClient {
     ///
     /// If the server is unreachable and a MAC address is configured,
     /// this will attempt to wake the Mac and retry.
+    #[allow(clippy::cognitive_complexity)]
     pub async fn call_tool(&self, name: &str, input: &Value) -> Result<String> {
         // First attempt
         let first_result = self.try_call_tool(name, input).await;

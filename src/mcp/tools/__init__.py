@@ -19,6 +19,8 @@ from . import (
     directories,
     editing,
     files,
+    memory,
+    meta,
     metadata,
     periodic,
     search,
@@ -42,6 +44,8 @@ _CORE_TOOLS = (
     + text.TOOLS
     + backlinks.TOOLS
     + analytics.TOOLS
+    + memory.TOOLS
+    + meta.TOOLS
 )
 
 # Aggregate core handlers
@@ -59,6 +63,8 @@ _CORE_HANDLERS = {
     **text.HANDLERS,
     **backlinks.HANDLERS,
     **analytics.HANDLERS,
+    **memory.HANDLERS,
+    **meta.HANDLERS,
 }
 
 
@@ -110,6 +116,20 @@ def _load_custom_tools() -> tuple[list[dict], dict[str, Any]]:
 _custom_tools, _custom_handlers = _load_custom_tools()
 TOOLS = list(_CORE_TOOLS) + _custom_tools
 HANDLERS = {**_CORE_HANDLERS, **_custom_handlers}
+
+
+def reload_tools() -> None:
+    """Reload custom tools without restarting the server.
+
+    Called by SIGHUP handler to hot-reload custom tools.
+    """
+    global TOOLS, HANDLERS
+
+    _custom_tools, _custom_handlers = _load_custom_tools()
+    TOOLS = list(_CORE_TOOLS) + _custom_tools
+    HANDLERS = {**_CORE_HANDLERS, **_custom_handlers}
+
+    print(f"Reloaded tools: {len(TOOLS)} total ({len(_custom_tools)} custom)")
 
 
 def get_tool_definitions() -> list[dict]:

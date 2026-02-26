@@ -15,14 +15,20 @@ Environment Variables:
 """
 
 import os
+import signal
 from pathlib import Path
 
 from flask import Flask, jsonify, request
 
 from .security import get_vault_path, init_security, is_git_repo, require_auth
-from .tools import call_tool, get_tool_definitions
+from .tools import call_tool, get_tool_definitions, reload_tools
 
 app = Flask(__name__)
+
+
+def _handle_sighup(signum, frame):
+    """Handle SIGHUP to hot-reload custom tools."""
+    reload_tools()
 
 # Read version from VERSION file (populated during release)
 VERSION_FILE = Path(__file__).parent / "VERSION"
@@ -76,6 +82,9 @@ def main():
 
     # Initialize security module
     init_security(vault_path, auth_token)
+
+    # Register SIGHUP handler for hot-reloading custom tools
+    signal.signal(signal.SIGHUP, _handle_sighup)
 
     print(f"Vault: {vault_path}")
     print(f"Port: {port}")

@@ -3,6 +3,7 @@ mod claude;
 mod cli;
 mod config;
 mod mcp_client;
+mod memory;
 mod ssh;
 mod telegram;
 mod tools;

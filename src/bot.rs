@@ -1,6 +1,9 @@
 //! Telegram bot handler.
 
+#![allow(clippy::too_many_lines)]
+
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use console::style;
@@ -8,8 +11,9 @@ use teloxide::prelude::*;
 use teloxide::types::{ParseMode, ReactionType};
 
 use crate::claude::Claude;
-use crate::config::{Config, McpConfig};
+use crate::config::{Config, McpConfig, config_dir};
 use crate::mcp_client::McpClient;
+use crate::memory::Memory;
 use crate::telegram::{thinking_message, to_telegram_html};
 use crate::ui::StatusLine;
 
@@ -122,6 +126,23 @@ pub async fn run() -> Result<()> {
     // Telegram validated (already fetched username above)
     StatusLine::ok(format!("Telegram: @{}", bot_info.username)).print();
 
+    // Initialize memory
+    let memory = match Memory::open(&config_dir().join("conversations.db"), &config.memory) {
+        Ok(mem) => {
+            let (window, threshold, max_bytes) = mem.config();
+            StatusLine::ok(format!(
+                "Memory: window={window}, persist={threshold}, max={}KB",
+                max_bytes / 1024
+            ))
+            .print();
+            Some(Arc::new(mem))
+        }
+        Err(e) => {
+            StatusLine::error(format!("Memory disabled: {e}")).print();
+            None
+        }
+    };
+
     // Ready
     println!();
     println!("  Listening... {}", style("(Ctrl+C to stop)").dim());
@@ -129,7 +150,7 @@ pub async fn run() -> Result<()> {
 
     // Run bot
     let bot = Bot::new(&config.telegram.bot_token);
-    let claude = Claude::from_config(&config);
+    let claude = Claude::from_config_with_memory(&config, memory);
     let allowed_users: HashSet<u64> = config.telegram.allowed_users.iter().copied().collect();
     let mcp_config = config.mcp.clone();
     let bot_name = bot_info.name.clone();
@@ -172,9 +193,12 @@ pub async fn run() -> Result<()> {
                         .send_chat_action(msg.chat.id, teloxide::types::ChatAction::Typing)
                         .await;
 
-                    // Get response from Claude
+                    // Get response from Claude (pass user_id for memory)
+                    // Safe: Telegram user IDs fit in i64
+                    #[allow(clippy::cast_possible_wrap)]
+                    let uid = user_id.map(|id| id as i64);
                     let response = claude
-                        .chat(text)
+                        .chat(text, uid)
                         .await
                         .unwrap_or_else(|e| format!("Error: {e}"));
 
