@@ -1,133 +1,183 @@
 ---
 name: release
-description: Validate ARM build on Pi and push to production for release
+description: Validate, version bump, create release, and monitor CI
 ---
 
 # /release - Release to Production
 
-Validate the codebase, test ARM build on Pi, and push to production to trigger release-please.
+Validate the codebase, bump version, create GitHub release, and monitor CI until all builds pass.
 
 ## Prerequisites
 
 - On `develop` branch
 - Working directory clean
-- Pi SSH configured (`lu pi` succeeds)
+- Pi SSH configured (`ssh pi` works)
+- GitHub CLI configured (`gh auth status`)
 
 ## Process
 
-1. Verify prerequisites
-2. Run local checks (Rust):
-   - `cargo fmt --check`
-   - `cargo clippy -- -D warnings`
-   - `cargo test`
-3. Run local checks (MCP Python):
-   - `python3 -m py_compile src/mcp/**/*.py`
-   - `ruff check src/mcp/` (if ruff installed)
-4. Test ARM build on Pi:
-   - `ssh pi "cd ~/ludolph && git pull origin develop && cargo build --release"`
-   - `ssh pi "~/ludolph/target/release/lu check"`
-5. Confirm release
-6. Push to production:
-   - `git push origin develop:production`
-7. Print next steps
-
-## Rules
-
-- Must be on `develop` branch
-- Working directory must be clean
-- Pi SSH must be configured (`lu pi` succeeds)
-- ARM build is blocking — release aborts if Pi build fails
-- Always confirm before pushing to production
+1. Pre-flight validation
+2. Check version not already released
+3. Bump version (prompt for major/minor/patch)
+4. Commit and push to develop + production
+5. Create GitHub release
+6. Monitor CI until complete
+7. Print deploy instructions
 
 ## Steps
 
-### Step 1: Verify prerequisites
+### Step 1: Pre-flight Validation
 
 Check branch:
 ```bash
 git branch --show-current
 ```
-Must be `develop`. If not, abort with: "Must be on develop branch to release."
+Must be `develop`. If not, abort: "Must be on develop branch to release."
 
 Check working directory:
 ```bash
 git status --porcelain
 ```
-Must be empty. If not, abort with: "Working directory not clean. Commit or stash changes first."
+Must be empty. If not, abort: "Working directory not clean. Commit or stash changes first."
 
-### Step 2: Run local checks
-
-Run each in sequence, stop on first failure:
-
+Run Rust checks (stop on first failure):
 ```bash
 cargo fmt --check
 cargo clippy -- -D warnings
 cargo test
 ```
 
-### Step 3: Run local checks (MCP Python)
-
-Validate Python syntax for all MCP server files:
-
+Run Python checks:
 ```bash
-python3 -m py_compile src/mcp/server.py
-python3 -m py_compile src/mcp/security.py
-python3 -m py_compile src/mcp/tools/__init__.py
-find src/mcp/tools -name "*.py" -exec python3 -m py_compile {} \;
+find src/mcp -name "*.py" -exec python3 -m py_compile {} \;
 ```
 
-If ruff is available, run linting:
-
+Test ARM build on Pi:
 ```bash
-ruff check src/mcp/ || echo "ruff not installed, skipping"
+ssh pi "source ~/.cargo/env && cd ~/ludolph && git fetch origin develop && git checkout origin/develop && cargo build --release"
+ssh pi "~/.ludolph/bin/lu --version || ~/ludolph/target/release/lu --version"
 ```
 
-### Step 4: Test ARM build on Pi
+If any check fails, abort with error output.
 
-Use the SSH alias `pi` (configured via `lu setup`):
+### Step 2: Check Version Not Released
 
+Get current version:
 ```bash
-ssh pi "source ~/.cargo/env && cd ~/ludolph && git pull origin develop && cargo build --release"
+grep '^version' Cargo.toml | head -1 | cut -d'"' -f2
 ```
 
-Note: First build on Pi takes 10-20 minutes (compiling all dependencies). Incremental builds are much faster.
-
-If build succeeds, verify binary:
-
+Check if tag exists:
 ```bash
-ssh pi "source ~/.cargo/env && ~/ludolph/target/release/lu check"
+gh release view v${VERSION} 2>/dev/null && echo "EXISTS" || echo "NEW"
 ```
 
-If either fails, abort with error output.
+If EXISTS, abort: "Version ${VERSION} already released. Bump version first."
 
-### Step 5: Confirm release
+### Step 3: Prompt for Version Bump
 
-Print summary:
+Display current version and ask:
 ```
-Local checks (Rust): passed
-Local checks (MCP Python): passed
-ARM build on Pi: passed
+Current version: 0.5.6
 
-Ready to push develop -> production?
+Version bump type?
+1. patch (0.5.6 → 0.5.7) - Bug fixes
+2. minor (0.5.6 → 0.6.0) - New features
+3. major (0.5.6 → 1.0.0) - Breaking changes
 ```
 
-Wait for user confirmation before proceeding.
+Wait for user selection (default: patch).
 
-### Step 6: Push to production
-
+Calculate new version and update Cargo.toml:
 ```bash
+# For patch bump example:
+NEW_VERSION="0.5.7"
+sed -i '' "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" Cargo.toml
+```
+
+### Step 4: Commit and Push
+
+Create commit:
+```bash
+git add Cargo.toml
+git commit -m "chore: release v${NEW_VERSION}"
+```
+
+Push to both branches:
+```bash
+git push origin develop
 git push origin develop:production
 ```
 
-### Step 7: Print next steps
+### Step 5: Create GitHub Release
 
-Print:
+Generate release notes from commits since last tag:
+```bash
+LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+if [ -n "$LAST_TAG" ]; then
+  NOTES=$(git log ${LAST_TAG}..HEAD --pretty=format:"- %s" | grep -E "^- (feat|fix|docs|refactor):")
+else
+  NOTES="Initial release"
+fi
 ```
-Pushed to production. release-please will create a PR.
 
-Next steps:
-1. Wait for release-please PR at https://github.com/evannagle/ludolph/pulls
-2. Review the changelog
-3. Merge the PR to publish the release
-4. Run /deploy to deploy MCP to Mac and restart bot on Pi
+Create release:
+```bash
+gh release create v${NEW_VERSION} --title "v${NEW_VERSION}" --notes "${NOTES}"
 ```
+
+Print release URL.
+
+### Step 6: Monitor CI
+
+Get workflow run ID:
+```bash
+sleep 5  # Wait for workflow to start
+RUN_ID=$(gh run list --limit 1 --json databaseId -q '.[0].databaseId')
+```
+
+Poll until complete (check every 30 seconds, timeout after 20 minutes):
+```bash
+gh run view ${RUN_ID}
+```
+
+Print status for each job as it completes:
+```
+Monitoring CI...
+  package-mcp: passed (7s)
+  x86_64-linux: passed (3m54s)
+  aarch64-linux: running...
+  x86_64-macos: running...
+  aarch64-macos: passed (4m37s)
+```
+
+If any job fails, print error and link to logs.
+
+### Step 7: Print Deploy Instructions
+
+If all jobs passed:
+```
+Release v${NEW_VERSION} complete!
+
+All 5 assets uploaded:
+  - lu-x86_64-unknown-linux-gnu
+  - lu-aarch64-unknown-linux-gnu
+  - lu-x86_64-apple-darwin
+  - lu-aarch64-apple-darwin
+  - ludolph-mcp-v${NEW_VERSION}.tar.gz
+
+Run /deploy to install on Pi and Mac.
+```
+
+If any job failed:
+```
+Release v${NEW_VERSION} created but some builds failed.
+
+Check: https://github.com/evannagle/ludolph/actions/runs/${RUN_ID}
+
+You may need to fix issues and create a new release.
+```
+
+## Troubleshooting
+
+See RELEASE.md for CI requirements and known issues.
