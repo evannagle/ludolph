@@ -1,123 +1,165 @@
 ---
 name: deploy
-description: Deploy MCP to Mac and restart bot on Pi after a release
+description: Download release binaries and install on Pi and Mac
 ---
 
-# /deploy - Deploy to Production
+# /deploy - Deploy Release Binaries
 
-Deploy the MCP server to Mac and restart the bot service on Pi.
+Download pre-built binaries from the latest GitHub release and install on Pi and Mac.
 
 ## Prerequisites
 
-- Release has been pushed to production (run `/release` first)
+- Release exists on GitHub (run `/release` first)
 - Pi SSH configured (`ssh pi` works)
-- MCP launchd service configured on Mac (`dev.ludolph.mcp`)
-- Bot systemd service configured on Pi (`ludolph.service`)
+- GitHub CLI configured (`gh auth status`)
 
 ## Process
 
-1. Verify prerequisites
-2. Deploy MCP to Mac:
-   - Stop launchctl service
-   - Copy src/mcp/ to deployment location
-   - Start launchctl service
-   - Verify health endpoint
-3. Deploy bot to Pi:
-   - Pull latest code
-   - Restart systemd service
-   - Verify bot is running
-4. Print summary
+1. Get latest release version
+2. Download and install Pi binary
+3. Download and install MCP on Mac
+4. Verify both installations
+5. Print summary
 
 ## Steps
 
-### Step 1: Verify prerequisites
+### Step 1: Get Latest Release
 
-Check that this is being run from the ludolph repo:
+Get latest release tag:
 ```bash
-test -f Cargo.toml && grep -q "ludolph" Cargo.toml
+VERSION=$(gh release view --json tagName -q '.tagName')
+echo "Latest release: ${VERSION}"
 ```
 
-Check Pi SSH:
+If no release found, abort: "No releases found. Run /release first."
+
+List available assets:
 ```bash
-ssh pi "echo ok" 2>/dev/null
+gh release view ${VERSION} --json assets -q '.assets[].name'
 ```
 
-### Step 2: Deploy MCP to Mac
+### Step 2: Download and Install Pi Binary
 
-The MCP server runs locally on Mac. The source is at `src/mcp/`.
-
-Stop the MCP service:
+Create temp directory:
 ```bash
-launchctl stop dev.ludolph.mcp 2>/dev/null || true
+TMPDIR=$(mktemp -d)
+cd ${TMPDIR}
 ```
 
-The MCP code is already in place (same repo). Just restart:
+Download ARM Linux binary:
 ```bash
-launchctl start dev.ludolph.mcp
+gh release download ${VERSION} -p "lu-aarch64-unknown-linux-gnu"
 ```
 
-Wait 2 seconds, then verify health:
+If download fails, abort: "Failed to download Pi binary. Check release assets."
+
+Copy to Pi:
 ```bash
-sleep 2
-curl -s http://localhost:8200/ | grep -q "running" && echo "MCP OK" || echo "MCP FAILED"
+scp lu-aarch64-unknown-linux-gnu pi:~/.ludolph/bin/lu.new
 ```
 
-If MCP has a different port configured, adjust accordingly.
-
-### Step 3: Deploy bot to Pi
-
-Pull latest code on Pi:
+Install and restart service:
 ```bash
-ssh pi "cd ~/ludolph && git pull origin production"
+ssh pi "chmod +x ~/.ludolph/bin/lu.new && mv ~/.ludolph/bin/lu.new ~/.ludolph/bin/lu && systemctl --user restart ludolph.service"
 ```
 
-The binary was built during `/release` at `~/ludolph/target/release/lu`.
-Copy it to the install location used by the systemd service:
-```bash
-ssh pi "systemctl --user stop ludolph.service && cp ~/ludolph/target/release/lu ~/.ludolph/bin/lu && systemctl --user start ludolph.service"
-```
-
-Wait 3 seconds, then verify:
+Wait and verify:
 ```bash
 sleep 3
-ssh pi "systemctl --user is-active ludolph.service && ~/.ludolph/bin/lu --version"
+PI_VERSION=$(ssh pi "~/.ludolph/bin/lu --version 2>/dev/null || echo 'FAILED'")
+echo "Pi version: ${PI_VERSION}"
 ```
 
-### Step 4: Print summary
+### Step 3: Download and Install MCP on Mac
 
-Print:
+Download MCP package:
+```bash
+gh release download ${VERSION} -p "ludolph-mcp-*.tar.gz"
 ```
-Deployment complete:
-  MCP (Mac): [status]
-  Bot (Pi):  [status]
 
-To check logs:
-  Mac MCP: tail -f ~/Library/Logs/ludolph-mcp.log
-  Pi Bot:  ssh pi "journalctl --user -u ludolph.service -f"
+If download fails, abort: "Failed to download MCP package. Check release assets."
+
+Determine MCP install location (check Claude Code config or use default):
+```bash
+MCP_DIR="${HOME}/.config/claude-code/mcp/ludolph"
+mkdir -p ${MCP_DIR}
+```
+
+Extract and install:
+```bash
+tar -xzf ludolph-mcp-*.tar.gz -C ${MCP_DIR} --strip-components=1
+```
+
+Verify MCP version file:
+```bash
+MCP_VERSION=$(cat ${MCP_DIR}/VERSION 2>/dev/null || echo "UNKNOWN")
+echo "MCP version: ${MCP_VERSION}"
+```
+
+### Step 4: Cleanup
+
+Remove temp directory:
+```bash
+rm -rf ${TMPDIR}
+```
+
+### Step 5: Print Summary
+
+```
+Deploy complete!
+
+Pi (aarch64-linux):
+  Binary: ~/.ludolph/bin/lu
+  Version: ${PI_VERSION}
+  Service: ludolph.service (restarted)
+
+Mac MCP:
+  Location: ${MCP_DIR}
+  Version: ${MCP_VERSION}
+
+To verify Pi bot:
+  ssh pi "journalctl --user -u ludolph.service -n 20"
+
+To test Pi bot:
+  Send a message to your Telegram bot
+
+To verify MCP:
+  Check Claude Code can use ludolph MCP tools
 ```
 
 ## Troubleshooting
 
-### MCP won't start
+### Pi binary won't run
+
 ```bash
-# Check logs
-tail -50 ~/Library/Logs/ludolph-mcp.log
+# Check permissions
+ssh pi "ls -la ~/.ludolph/bin/lu"
 
-# Check if port is in use
-lsof -i :8200
+# Check architecture
+ssh pi "file ~/.ludolph/bin/lu"
 
-# Manual start for debugging
-cd ~/Repos/ludolph && VAULT_PATH=~/Vault AUTH_TOKEN=xxx python -m src.mcp.server
+# Run manually
+ssh pi "~/.ludolph/bin/lu check"
 ```
 
-### Bot won't start
+### MCP not recognized
+
 ```bash
-# Check logs
+# Check files exist
+ls -la ~/.config/claude-code/mcp/ludolph/
+
+# Check VERSION file
+cat ~/.config/claude-code/mcp/ludolph/VERSION
+
+# Restart Claude Code to pick up new MCP
+```
+
+### Service won't start
+
+```bash
+# Pi logs
 ssh pi "journalctl --user -u ludolph.service -n 50"
 
-# Check config
-ssh pi "cat ~/.ludolph/config.toml"
-
-# Manual start for debugging
-ssh pi "cd ~/ludolph && ./target/release/lu bot"
+# Pi service status
+ssh pi "systemctl --user status ludolph.service"
 ```
