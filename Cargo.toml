@@ -1,6 +1,6 @@
 [package]
 name = "ludolph"
-version = "0.5.5"
+version = "0.5.6"
 edition = "2024"
 description = "A real brain for your second brain. Talk to your vault, from anywhere, anytime."
 license = "MIT"
@@ -37,6 +37,7 @@ rand = "0.9"
 rusqlite = { version = "0.31", features = ["bundled"] }
 chrono = { version = "0.4", features = ["serde"] }
 anthropic-sdk-rust = "0.1"
+openssl = { version = "0.10", features = ["vendored"] }
 
 [dev-dependencies]
 cargo-husky = { version = "1", default-features = false, features = ["prepush-hook", "run-cargo-check", "run-cargo-clippy", "run-cargo-fmt", "run-cargo-test"] }
