@@ -24,7 +24,7 @@ async fn register_commands(token: &str) -> Result<()> {
         "commands": [
             {"command": "setup", "description": "Configure your vault assistant"},
             {"command": "version", "description": "Show version info"},
-            {"command": "poke", "description": "Test MCP connection to your vault"},
+            {"command": "poke", "description": "Show connection status and available tools"},
             {"command": "help", "description": "Show available commands"},
         ]
     });
@@ -370,33 +370,51 @@ async fn handle_command(text: &str, bot_name: &str, mcp_config: Option<&McpConfi
     match command {
         "/poke" | "/start" => {
             let version = env!("CARGO_PKG_VERSION");
-            let connection_status = if let Some(mcp) = mcp_config {
-                let client = McpClient::from_config(mcp);
-                match client.health_check().await {
-                    Ok(true) => "connected to your vault",
-                    Ok(false) => "having trouble reaching your vault",
-                    Err(_) => "unable to connect to your vault",
-                }
-            } else {
-                "connected to your local vault"
-            };
 
-            format!(
-                "Hi! I'm {bot_name} v{version}, and I'm {connection_status}.\n\n\
-                I can help you:\n\
-                - Search through your notes\n\
-                - Read and summarize files\n\
-                - Find information across your vault\n\
-                - Answer questions about your notes\n\n\
-                Just ask me anything, or try: \"What did I write about last week?\""
-            )
+            if let Some(mcp) = mcp_config {
+                let client = McpClient::from_config(mcp);
+
+                // Check connection
+                let connection_status = match client.health_check().await {
+                    Ok(true) => "✓ Connected to vault",
+                    Ok(false) => "⚠ Having trouble reaching vault",
+                    Err(_) => "✗ Unable to connect to vault",
+                };
+
+                // Get available tools
+                let tools_list = client
+                    .get_tool_definitions()
+                    .await
+                    .map_or_else(
+                        |_| String::new(),
+                        |tools| {
+                            let mut list = String::from("\n\n**Available Tools:**\n");
+                            for tool in tools {
+                                list.push_str("• ");
+                                list.push_str(&tool.name);
+                                list.push_str(" - ");
+                                list.push_str(&tool.description);
+                                list.push('\n');
+                            }
+                            list
+                        },
+                    );
+
+                format!(
+                    "{bot_name} v{version}\n{connection_status}{tools_list}"
+                )
+            } else {
+                format!(
+                    "{bot_name} v{version}\n✓ Connected to local vault"
+                )
+            }
         }
         "/help" => format!(
             "I'm {bot_name}, your vault assistant.\n\n\
             Commands:\n\
             /setup - Configure your assistant (creates Lu.md)\n\
             /version - Show version info\n\
-            /poke - Check vault connection\n\
+            /poke - Show connection status and available tools\n\
             /cancel - Cancel setup in progress\n\
             /help - Show this message\n\n\
             Or just send me a message and I'll search your vault to help answer it."
