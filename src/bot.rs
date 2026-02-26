@@ -247,6 +247,7 @@ async fn handle_command(text: &str, bot_name: &str, mcp_config: Option<&McpConfi
 
     match command {
         "/poke" | "/start" => {
+            let version = env!("CARGO_PKG_VERSION");
             let connection_status = if let Some(mcp) = mcp_config {
                 let client = McpClient::from_config(mcp);
                 match client.health_check().await {
@@ -259,7 +260,7 @@ async fn handle_command(text: &str, bot_name: &str, mcp_config: Option<&McpConfi
             };
 
             format!(
-                "Hi! I'm {bot_name}, and I'm {connection_status}.\n\n\
+                "Hi! I'm {bot_name} v{version}, and I'm {connection_status}.\n\n\
                 I can help you:\n\
                 - Search through your notes\n\
                 - Read and summarize files\n\
