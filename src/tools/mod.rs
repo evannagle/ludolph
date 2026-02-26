@@ -1,4 +1,5 @@
 mod append_file;
+mod complete_setup;
 mod create_file;
 mod list_dir;
 mod read_file;
@@ -20,6 +21,7 @@ pub fn get_tool_definitions() -> Vec<Tool> {
         search::definition(),
         append_file::definition(),
         create_file::definition(),
+        complete_setup::definition(),
     ]
 }
 
@@ -31,6 +33,7 @@ pub async fn execute_tool_local(name: &str, input: &Value, vault_path: &std::pat
         "search" => search::execute(input, vault_path),
         "append_file" => append_file::execute(input, vault_path),
         "create_file" => create_file::execute(input, vault_path),
+        "complete_setup" => complete_setup::execute(input, vault_path),
         _ => format!("Unknown tool: {name}"),
     }
 }

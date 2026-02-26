@@ -3,7 +3,7 @@
 #![allow(clippy::too_many_lines)]
 
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use console::style;
@@ -14,6 +14,7 @@ use crate::claude::Claude;
 use crate::config::{Config, McpConfig, config_dir};
 use crate::mcp_client::McpClient;
 use crate::memory::Memory;
+use crate::setup::{SETUP_SYSTEM_PROMPT, initial_setup_message};
 use crate::telegram::{thinking_message, to_telegram_html};
 use crate::ui::StatusLine;
 
@@ -21,6 +22,8 @@ use crate::ui::StatusLine;
 async fn register_commands(token: &str) -> Result<()> {
     let commands = serde_json::json!({
         "commands": [
+            {"command": "setup", "description": "Configure your vault assistant"},
+            {"command": "version", "description": "Show version info"},
             {"command": "poke", "description": "Test MCP connection to your vault"},
             {"command": "help", "description": "Show available commands"},
         ]
@@ -155,11 +158,15 @@ pub async fn run() -> Result<()> {
     let mcp_config = config.mcp.clone();
     let bot_name = bot_info.name.clone();
 
+    // Track users currently in setup mode
+    let setup_users: Arc<Mutex<HashSet<u64>>> = Arc::new(Mutex::new(HashSet::new()));
+
     Box::pin(teloxide::repl(bot, move |bot: Bot, msg: Message| {
         let claude = claude.clone();
         let allowed_users = allowed_users.clone();
         let mcp_config = mcp_config.clone();
         let bot_name = bot_name.clone();
+        let setup_users = setup_users.clone();
         async move {
             // Check if user is authorized
             let user_id = msg.from.as_ref().map(|u| u.id.0);
@@ -172,42 +179,157 @@ pub async fn run() -> Result<()> {
                 return Ok(());
             }
 
+            // Safe to unwrap - we verified user_id exists above
+            let uid = user_id.unwrap();
+
             if let Some(text) = msg.text() {
+                // Check if user is in setup mode
+                let in_setup = setup_users
+                    .lock()
+                    .map(|guard| guard.contains(&uid))
+                    .unwrap_or(false);
+
                 let response = if text.starts_with('/') {
-                    // Commands are fast, no thinking indicator needed
-                    handle_command(text, &bot_name, mcp_config.as_ref()).await
-                } else {
-                    // Add eyes reaction to show we're working on it
+                    // Handle commands
+                    match text.split_whitespace().next().unwrap_or("") {
+                        "/setup" => {
+                            // Enter setup mode
+                            if let Ok(mut guard) = setup_users.lock() {
+                                guard.insert(uid);
+                            }
+
+                            // Show thinking indicator for setup
+                            let _ = bot
+                                .set_message_reaction(msg.chat.id, msg.id)
+                                .reaction(vec![ReactionType::Emoji {
+                                    emoji: "👀".to_string(),
+                                }])
+                                .await;
+                            let thinking =
+                                bot.send_message(msg.chat.id, thinking_message()).await.ok();
+                            let _ = bot
+                                .send_chat_action(msg.chat.id, teloxide::types::ChatAction::Typing)
+                                .await;
+
+                            // Start setup conversation
+                            #[allow(clippy::cast_possible_wrap)]
+                            let result = claude
+                                .chat_with_system(
+                                    &initial_setup_message(&bot_name),
+                                    SETUP_SYSTEM_PROMPT,
+                                    Some(uid as i64),
+                                )
+                                .await;
+
+                            // Cleanup indicators
+                            if let Some(thinking_msg) = thinking {
+                                let _ = bot.delete_message(msg.chat.id, thinking_msg.id).await;
+                            }
+                            let _ = bot
+                                .set_message_reaction(msg.chat.id, msg.id)
+                                .reaction(vec![])
+                                .await;
+
+                            match result {
+                                Ok(chat_result) => {
+                                    if chat_result.setup_completed {
+                                        if let Ok(mut guard) = setup_users.lock() {
+                                            guard.remove(&uid);
+                                        }
+                                    }
+                                    chat_result.response
+                                }
+                                Err(e) => {
+                                    // Exit setup mode on error
+                                    if let Ok(mut guard) = setup_users.lock() {
+                                        guard.remove(&uid);
+                                    }
+                                    format!("Setup error: {e}")
+                                }
+                            }
+                        }
+                        "/cancel" => {
+                            if in_setup {
+                                if let Ok(mut guard) = setup_users.lock() {
+                                    guard.remove(&uid);
+                                }
+                                "Setup cancelled.".to_string()
+                            } else {
+                                "Nothing to cancel.".to_string()
+                            }
+                        }
+                        "/version" => {
+                            format!("Ludolph v{VERSION}")
+                        }
+                        _ => {
+                            // Other commands handled by handle_command
+                            handle_command(text, &bot_name, mcp_config.as_ref()).await
+                        }
+                    }
+                } else if in_setup {
+                    // Continue setup conversation
                     let _ = bot
                         .set_message_reaction(msg.chat.id, msg.id)
                         .reaction(vec![ReactionType::Emoji {
                             emoji: "👀".to_string(),
                         }])
                         .await;
-
-                    // Send thinking message
                     let thinking = bot.send_message(msg.chat.id, thinking_message()).await.ok();
-
-                    // Show typing indicator while processing
                     let _ = bot
                         .send_chat_action(msg.chat.id, teloxide::types::ChatAction::Typing)
                         .await;
 
-                    // Get response from Claude (pass user_id for memory)
-                    // Safe: Telegram user IDs fit in i64
                     #[allow(clippy::cast_possible_wrap)]
-                    let uid = user_id.map(|id| id as i64);
-                    let response = claude
-                        .chat(text, uid)
-                        .await
-                        .unwrap_or_else(|e| format!("Error: {e}"));
+                    let result = claude
+                        .chat_with_system(text, SETUP_SYSTEM_PROMPT, Some(uid as i64))
+                        .await;
 
-                    // Delete thinking message
                     if let Some(thinking_msg) = thinking {
                         let _ = bot.delete_message(msg.chat.id, thinking_msg.id).await;
                     }
+                    let _ = bot
+                        .set_message_reaction(msg.chat.id, msg.id)
+                        .reaction(vec![])
+                        .await;
 
-                    // Remove eyes reaction
+                    match result {
+                        Ok(chat_result) => {
+                            if chat_result.setup_completed {
+                                if let Ok(mut guard) = setup_users.lock() {
+                                    guard.remove(&uid);
+                                }
+                            }
+                            chat_result.response
+                        }
+                        Err(e) => {
+                            if let Ok(mut guard) = setup_users.lock() {
+                                guard.remove(&uid);
+                            }
+                            format!("Setup error: {e}")
+                        }
+                    }
+                } else {
+                    // Normal chat
+                    let _ = bot
+                        .set_message_reaction(msg.chat.id, msg.id)
+                        .reaction(vec![ReactionType::Emoji {
+                            emoji: "👀".to_string(),
+                        }])
+                        .await;
+                    let thinking = bot.send_message(msg.chat.id, thinking_message()).await.ok();
+                    let _ = bot
+                        .send_chat_action(msg.chat.id, teloxide::types::ChatAction::Typing)
+                        .await;
+
+                    #[allow(clippy::cast_possible_wrap)]
+                    let response = claude
+                        .chat(text, Some(uid as i64))
+                        .await
+                        .unwrap_or_else(|e| format!("Error: {e}"));
+
+                    if let Some(thinking_msg) = thinking {
+                        let _ = bot.delete_message(msg.chat.id, thinking_msg.id).await;
+                    }
                     let _ = bot
                         .set_message_reaction(msg.chat.id, msg.id)
                         .reaction(vec![])
@@ -272,7 +394,10 @@ async fn handle_command(text: &str, bot_name: &str, mcp_config: Option<&McpConfi
         "/help" => format!(
             "I'm {bot_name}, your vault assistant.\n\n\
             Commands:\n\
+            /setup - Configure your assistant (creates Lu.md)\n\
+            /version - Show version info\n\
             /poke - Check vault connection\n\
+            /cancel - Cancel setup in progress\n\
             /help - Show this message\n\n\
             Or just send me a message and I'll search your vault to help answer it."
         ),

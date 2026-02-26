@@ -74,6 +74,14 @@ TOOLS = [
             "properties": {},
         },
     },
+    {
+        "name": "complete_setup",
+        "description": "Signal that setup is complete. Call this after writing Lu.md to exit setup mode.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
 ]
 
 
@@ -216,9 +224,21 @@ def _reload_tools(args: dict) -> dict:
         return {"content": "", "error": f"Failed to send reload signal: {e}"}
 
 
+def _complete_setup(args: dict) -> dict:
+    """Signal setup completion.
+
+    Returns a marker that the bot uses to detect setup completion.
+    """
+    return {
+        "content": "[SETUP_COMPLETE] Setup wizard completed successfully.",
+        "error": None,
+    }
+
+
 HANDLERS = {
     "list_custom_tools": _list_custom_tools,
     "create_tool": _create_tool,
     "delete_tool": _delete_tool,
     "reload_tools": _reload_tools,
+    "complete_setup": _complete_setup,
 }

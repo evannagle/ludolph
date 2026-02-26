@@ -4,6 +4,7 @@ mod cli;
 mod config;
 mod mcp_client;
 mod memory;
+mod setup;
 mod ssh;
 mod telegram;
 mod tools;
