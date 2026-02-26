@@ -71,15 +71,16 @@ Pull latest code on Pi:
 ssh pi "cd ~/ludolph && git pull origin production"
 ```
 
-The binary was already built during `/release`. Restart the service:
+The binary was built during `/release` at `~/ludolph/target/release/lu`.
+Copy it to the install location used by the systemd service:
 ```bash
-ssh pi "systemctl --user restart ludolph.service"
+ssh pi "systemctl --user stop ludolph.service && cp ~/ludolph/target/release/lu ~/.ludolph/bin/lu && systemctl --user start ludolph.service"
 ```
 
 Wait 3 seconds, then verify:
 ```bash
 sleep 3
-ssh pi "systemctl --user is-active ludolph.service" | grep -q "active" && echo "Bot OK" || echo "Bot FAILED"
+ssh pi "systemctl --user is-active ludolph.service && ~/.ludolph/bin/lu --version"
 ```
 
 ### Step 4: Print summary
