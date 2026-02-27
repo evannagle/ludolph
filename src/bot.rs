@@ -17,7 +17,7 @@ use crate::config::{Config, McpConfig, config_dir};
 use crate::mcp_client::McpClient;
 use crate::memory::Memory;
 use crate::setup::{SETUP_SYSTEM_PROMPT, initial_setup_message};
-use crate::telegram::{thinking_message, to_telegram_html};
+use crate::telegram::to_telegram_html;
 use crate::ui::StatusLine;
 
 /// Set a reaction emoji on a message.
@@ -248,10 +248,8 @@ pub async fn run() -> Result<()> {
                                 guard.insert(uid);
                             }
 
-                            // Show thinking indicator for setup
+                            // Show status indicators
                             set_reaction(&bot, msg.chat.id, msg.id, "👀").await;
-                            let thinking =
-                                bot.send_message(msg.chat.id, thinking_message()).await.ok();
                             let typing = start_typing(bot.clone(), msg.chat.id);
 
                             // Start setup conversation
@@ -264,11 +262,8 @@ pub async fn run() -> Result<()> {
                                 )
                                 .await;
 
-                            // Cleanup indicators
+                            // Stop typing
                             drop(typing);
-                            if let Some(thinking_msg) = thinking {
-                                let _ = bot.delete_message(msg.chat.id, thinking_msg.id).await;
-                            }
 
                             match result {
                                 Ok(chat_result) => {
@@ -316,7 +311,6 @@ pub async fn run() -> Result<()> {
                 } else if in_setup {
                     // Continue setup conversation
                     set_reaction(&bot, msg.chat.id, msg.id, "👀").await;
-                    let thinking = bot.send_message(msg.chat.id, thinking_message()).await.ok();
                     let typing = start_typing(bot.clone(), msg.chat.id);
 
                     #[allow(clippy::cast_possible_wrap)]
@@ -325,9 +319,6 @@ pub async fn run() -> Result<()> {
                         .await;
 
                     drop(typing);
-                    if let Some(thinking_msg) = thinking {
-                        let _ = bot.delete_message(msg.chat.id, thinking_msg.id).await;
-                    }
 
                     match result {
                         Ok(chat_result) => {
@@ -355,16 +346,12 @@ pub async fn run() -> Result<()> {
                 } else {
                     // Normal chat
                     set_reaction(&bot, msg.chat.id, msg.id, "👀").await;
-                    let thinking = bot.send_message(msg.chat.id, thinking_message()).await.ok();
                     let typing = start_typing(bot.clone(), msg.chat.id);
 
                     #[allow(clippy::cast_possible_wrap)]
                     let result = claude.chat(text, Some(uid as i64)).await;
 
                     drop(typing);
-                    if let Some(thinking_msg) = thinking {
-                        let _ = bot.delete_message(msg.chat.id, thinking_msg.id).await;
-                    }
 
                     match result {
                         Ok(response) => {

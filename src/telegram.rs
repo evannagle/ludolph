@@ -1,7 +1,5 @@
 //! Telegram formatting utilities.
 
-use rand::prelude::IndexedRandom;
-
 /// Convert markdown-style formatting to Telegram HTML.
 ///
 /// Telegram supports a subset of HTML:
@@ -114,20 +112,6 @@ pub fn to_telegram_html(text: &str) -> String {
     }
 
     result
-}
-
-/// Get a random "thinking" message.
-pub fn thinking_message() -> &'static str {
-    const MESSAGES: &[&str] = &[
-        "Let me check the vault...",
-        "Looking through your notes...",
-        "Searching the vault...",
-        "Let me find that...",
-        "Checking your notes...",
-        "One moment...",
-    ];
-
-    MESSAGES.choose(&mut rand::rng()).unwrap_or(&MESSAGES[0])
 }
 
 #[cfg(test)]
