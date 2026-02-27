@@ -166,6 +166,8 @@ impl McpClient {
     }
 
     async fn try_call_tool(&self, name: &str, input: &Value) -> Result<String> {
+        tracing::debug!("MCP: Calling tool {} at {}", name, self.base_url);
+
         let request = ToolCallRequest {
             name: name.to_string(),
             arguments: input.clone(),
@@ -180,6 +182,8 @@ impl McpClient {
             .send()
             .await
             .context("Failed to connect to MCP server")?;
+
+        tracing::debug!("MCP: Received response with status {}", response.status());
 
         if !response.status().is_success() {
             let status = response.status();

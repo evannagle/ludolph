@@ -166,6 +166,7 @@ impl Claude {
     /// If `user_id` is provided and memory is configured, conversation history
     /// will be included in context and the exchange will be stored.
     #[allow(clippy::too_many_lines)]
+    #[allow(clippy::cognitive_complexity)]
     pub async fn chat(&self, user_message: &str, user_id: Option<i64>) -> Result<String> {
         let tools = self.get_tools().await?;
 
@@ -226,6 +227,12 @@ impl Claude {
 
         // Tool execution loop
         loop {
+            tracing::debug!(
+                "Calling Claude API (turn {}, {} messages)",
+                messages.len() / 2 + 1,
+                messages.len()
+            );
+
             let params = MessageCreateBuilder::new(&self.model, 4096)
                 .system(&system)
                 .tools(tools.clone())
@@ -242,6 +249,11 @@ impl Claude {
                 .await
                 .context("Failed to call Claude API")?;
 
+            tracing::debug!(
+                "Received Claude response with {} content blocks",
+                response.content.len()
+            );
+
             // Process response
             let mut assistant_content: Vec<ContentBlockParam> = Vec::new();
             let mut tool_results: Vec<ContentBlockParam> = Vec::new();
@@ -254,6 +266,9 @@ impl Claude {
                         assistant_content.push(ContentBlockParam::Text { text: text.clone() });
                     }
                     ContentBlock::ToolUse { id, name, input } => {
+                        tracing::debug!("Executing tool: {}", name);
+                        tracing::trace!("Tool input: {:?}", input);
+
                         assistant_content.push(ContentBlockParam::ToolUse {
                             id: id.clone(),
                             name: name.clone(),
@@ -261,6 +276,8 @@ impl Claude {
                         });
 
                         let result = self.execute_tool(name, input).await;
+                        tracing::trace!("Tool {} returned {} bytes", name, result.len());
+
                         tool_results.push(ContentBlockParam::ToolResult {
                             tool_use_id: id.clone(),
                             content: Some(result),
@@ -272,6 +289,11 @@ impl Claude {
             }
 
             if tool_results.is_empty() {
+                tracing::debug!(
+                    "Conversation complete, returning {} chars",
+                    final_text.len()
+                );
+
                 // Store assistant response in memory
                 if let (Some(memory), Some(uid)) = (&self.memory, user_id) {
                     let _ = memory.add_message(uid, "assistant", &final_text);
@@ -283,6 +305,11 @@ impl Claude {
                 }
                 return Ok(final_text);
             }
+
+            tracing::debug!(
+                "Tool execution loop continuing with {} results",
+                tool_results.len()
+            );
 
             // Add assistant message and tool results, continue loop
             messages.push(MessageParam {

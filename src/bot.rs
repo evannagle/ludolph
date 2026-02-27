@@ -345,12 +345,14 @@ pub async fn run() -> Result<()> {
                     }
                 } else {
                     // Normal chat
+                    tracing::info!("Processing chat message from user {}: {}", uid, text);
                     set_reaction(&bot, msg.chat.id, msg.id, "👀").await;
                     let typing = start_typing(bot.clone(), msg.chat.id);
 
                     #[allow(clippy::cast_possible_wrap)]
                     let result = claude.chat(text, Some(uid as i64)).await;
 
+                    tracing::info!("Chat result received for user {}", uid);
                     drop(typing);
 
                     match result {
