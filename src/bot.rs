@@ -75,6 +75,7 @@ async fn register_commands(token: &str) -> Result<()> {
             {"command": "version", "description": "Show version info"},
             {"command": "poke", "description": "Show connection status and available tools"},
             {"command": "help", "description": "Show available commands"},
+            {"command": "cancel", "description": "Cancel setup in progress"},
         ]
     });
 
