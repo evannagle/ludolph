@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anthropic_sdk::{
     client::Anthropic,
     types::{
-        Tool, ToolInputSchema,
+        ContentBlockDelta, MessageStreamEvent, Tool, ToolInputSchema,
         messages::{
             ContentBlock, ContentBlockParam, MessageContent, MessageCreateBuilder, MessageParam,
             Role,
@@ -15,6 +15,7 @@ use anthropic_sdk::{
     },
 };
 use anyhow::{Context, Result};
+use futures::StreamExt;
 use serde_json::{Map, Value};
 
 use crate::config::Config;
@@ -38,6 +39,13 @@ enum ToolBackend {
     Local { vault_path: std::path::PathBuf },
     /// Remote MCP server (Pi thin client connecting to Mac)
     Mcp { client: McpClient },
+}
+
+/// Pending tool call being accumulated during streaming.
+struct PendingToolCall {
+    id: String,
+    name: String,
+    input_json: String,
 }
 
 /// Claude API client with tool execution support.
@@ -367,6 +375,183 @@ impl Claude {
         self.store_assistant_message(user_id, &final_text).await;
 
         Ok(final_text)
+    }
+
+    /// Chat with streaming response support.
+    ///
+    /// Similar to `chat()` but calls the provided callback with accumulated text
+    /// as the response streams in. The callback receives the full text so far.
+    #[allow(clippy::too_many_lines)]
+    pub async fn chat_streaming<F>(
+        &self,
+        user_message: &str,
+        user_id: Option<i64>,
+        on_text: F,
+    ) -> Result<String>
+    where
+        F: Fn(&str) + Send + Sync,
+    {
+        let tools = self.get_tools().await?;
+        let system = self.build_system_prompt().await;
+
+        // Load conversation history and add current message
+        let mut messages = self.load_conversation_history(user_id);
+        messages.push(MessageParam {
+            role: Role::User,
+            content: MessageContent::Text(user_message.to_string()),
+        });
+
+        // Store user message in memory
+        if let (Some(memory), Some(uid)) = (&self.memory, user_id) {
+            let _ = memory.add_message(uid, "user", user_message);
+        }
+
+        // Execute streaming tool loop
+        let final_text = self
+            .execute_streaming_tool_loop(&system, &tools, &mut messages, &on_text)
+            .await?;
+
+        // Store assistant response
+        self.store_assistant_message(user_id, &final_text).await;
+
+        Ok(final_text)
+    }
+
+    /// Execute the tool loop with streaming support.
+    ///
+    /// Streams text content to the callback as it arrives. When tool calls are
+    /// detected, they are executed and the loop continues.
+    #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
+    async fn execute_streaming_tool_loop<F>(
+        &self,
+        system: &str,
+        tools: &[Tool],
+        messages: &mut Vec<MessageParam>,
+        on_text: &F,
+    ) -> Result<String>
+    where
+        F: Fn(&str) + Send + Sync,
+    {
+        loop {
+            let params = MessageCreateBuilder::new(&self.model, 4096)
+                .system(system)
+                .tools(tools.to_vec())
+                .stream(true)
+                .build();
+
+            let mut params = params;
+            params.messages.clone_from(messages);
+
+            // Start streaming
+            let mut stream = self
+                .client
+                .messages()
+                .create_stream(params)
+                .await
+                .context("Failed to create streaming request")?;
+
+            let mut accumulated_text = String::new();
+            let mut assistant_content: Vec<ContentBlockParam> = Vec::new();
+            let mut tool_results: Vec<ContentBlockParam> = Vec::new();
+            let mut current_tool: Option<PendingToolCall> = None;
+
+            // Process stream events
+            while let Some(event_result) = stream.next().await {
+                let event = event_result.context("Stream error")?;
+
+                match event {
+                    MessageStreamEvent::ContentBlockStart {
+                        content_block: ContentBlock::ToolUse { id, name, input },
+                        ..
+                    } => {
+                        // Initialize tool call tracking when a ToolUse block starts
+                        current_tool = Some(PendingToolCall {
+                            id: id.clone(),
+                            name: name.clone(),
+                            input_json: input.to_string(),
+                        });
+                    }
+                    MessageStreamEvent::ContentBlockDelta { delta, .. } => {
+                        match delta {
+                            ContentBlockDelta::TextDelta { text } => {
+                                accumulated_text.push_str(&text);
+                                on_text(&accumulated_text);
+                            }
+                            ContentBlockDelta::InputJsonDelta { partial_json } => {
+                                // Accumulate tool input JSON
+                                if let Some(ref mut tool) = current_tool {
+                                    tool.input_json.push_str(&partial_json);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    MessageStreamEvent::ContentBlockStop { .. } => {
+                        // Check if we have a completed tool call
+                        if let Some(tool) = current_tool.take() {
+                            tracing::debug!("Executing tool: {}", tool.name);
+
+                            // Parse the accumulated JSON
+                            let input: serde_json::Value =
+                                serde_json::from_str(&tool.input_json).unwrap_or_default();
+
+                            assistant_content.push(ContentBlockParam::ToolUse {
+                                id: tool.id.clone(),
+                                name: tool.name.clone(),
+                                input: input.clone(),
+                            });
+
+                            let result = self.execute_tool(&tool.name, &input).await;
+                            tracing::trace!("Tool {} returned {} bytes", tool.name, result.len());
+
+                            tool_results.push(ContentBlockParam::ToolResult {
+                                tool_use_id: tool.id,
+                                content: Some(result),
+                                is_error: Some(false),
+                            });
+                        }
+                    }
+                    MessageStreamEvent::MessageStop => {
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+
+            // Add accumulated text to assistant content if any
+            if !accumulated_text.is_empty() {
+                assistant_content.insert(
+                    0,
+                    ContentBlockParam::Text {
+                        text: accumulated_text.clone(),
+                    },
+                );
+            }
+
+            // If no tool calls, we're done
+            if tool_results.is_empty() {
+                tracing::debug!(
+                    "Streaming complete, returning {} chars",
+                    accumulated_text.len()
+                );
+                return Ok(accumulated_text);
+            }
+
+            // Continue tool loop
+            tracing::debug!(
+                "Streaming tool loop continuing with {} results",
+                tool_results.len()
+            );
+
+            messages.push(MessageParam {
+                role: Role::Assistant,
+                content: MessageContent::Blocks(assistant_content),
+            });
+            messages.push(MessageParam {
+                role: Role::User,
+                content: MessageContent::Blocks(tool_results),
+            });
+        }
     }
 
     /// Chat with a custom system prompt, tracking if `complete_setup` is called.

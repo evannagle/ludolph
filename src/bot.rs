@@ -4,6 +4,7 @@
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use console::style;
@@ -344,51 +345,130 @@ pub async fn run() -> Result<()> {
                         }
                     }
                 } else {
-                    // Normal chat
+                    // Normal chat with streaming
                     tracing::info!("Processing chat message from user {}: {}", uid, text);
                     set_reaction(&bot, msg.chat.id, msg.id, "👀").await;
                     let typing = start_typing(bot.clone(), msg.chat.id);
 
-                    #[allow(clippy::cast_possible_wrap)]
-                    let result = claude.chat(text, Some(uid as i64)).await;
+                    // Send placeholder message for streaming edits
+                    let placeholder_result = bot.send_message(msg.chat.id, "...").await;
 
-                    tracing::info!("Chat result received for user {}", uid);
-                    drop(typing);
+                    if let Ok(placeholder) = placeholder_result {
+                        let placeholder_id = placeholder.id;
+                        let stream_bot = bot.clone();
+                        let stream_chat_id = msg.chat.id;
+                        let last_edit = Arc::new(Mutex::new(Instant::now()));
+                        let edit_counter = Arc::new(Mutex::new(0u32));
 
-                    match result {
-                        Ok(response) => {
-                            set_reaction(&bot, msg.chat.id, msg.id, "✅").await;
-                            clear_reactions(&bot, msg.chat.id, msg.id).await;
-                            response
+                        #[allow(clippy::cast_possible_wrap)]
+                        let result = claude
+                            .chat_streaming(text, Some(uid as i64), |partial: &str| {
+                                // Debounce edits to every 500ms
+                                let mut last = last_edit.lock().unwrap();
+                                if last.elapsed() >= Duration::from_millis(500) {
+                                    // Clone values for the spawned task
+                                    let formatted = to_telegram_html(partial);
+                                    let text_with_indicator = format!("{formatted}...");
+                                    let bot_clone = stream_bot.clone();
+                                    let chat_id = stream_chat_id;
+                                    let msg_id = placeholder_id;
+                                    let counter = edit_counter.clone();
+
+                                    tokio::spawn(async move {
+                                        // Increment counter for debugging
+                                        if let Ok(mut c) = counter.lock() {
+                                            *c += 1;
+                                            tracing::trace!("Stream edit #{}", *c);
+                                        }
+                                        let _ = bot_clone
+                                            .edit_message_text(
+                                                chat_id,
+                                                msg_id,
+                                                &text_with_indicator,
+                                            )
+                                            .parse_mode(ParseMode::Html)
+                                            .await;
+                                    });
+
+                                    *last = Instant::now();
+                                }
+                            })
+                            .await;
+
+                        tracing::info!("Streaming chat result received for user {}", uid);
+                        drop(typing);
+
+                        match result {
+                            Ok(response) => {
+                                // Final edit without "..." indicator
+                                let formatted_final = to_telegram_html(&response);
+                                let _ = bot
+                                    .edit_message_text(
+                                        msg.chat.id,
+                                        placeholder_id,
+                                        &formatted_final,
+                                    )
+                                    .parse_mode(ParseMode::Html)
+                                    .await;
+
+                                set_reaction(&bot, msg.chat.id, msg.id, "✅").await;
+                                clear_reactions(&bot, msg.chat.id, msg.id).await;
+                                // Return empty - we already sent via edit
+                                String::new()
+                            }
+                            Err(e) => {
+                                // Delete placeholder and send error
+                                let _ = bot.delete_message(msg.chat.id, placeholder_id).await;
+                                set_reaction(&bot, msg.chat.id, msg.id, "❌").await;
+                                clear_reactions(&bot, msg.chat.id, msg.id).await;
+                                format!("Error: {e}")
+                            }
                         }
-                        Err(e) => {
-                            set_reaction(&bot, msg.chat.id, msg.id, "❌").await;
-                            clear_reactions(&bot, msg.chat.id, msg.id).await;
-                            format!("Error: {e}")
+                    } else {
+                        // Fallback to non-streaming if placeholder failed
+                        #[allow(clippy::cast_possible_wrap)]
+                        let result = claude.chat(text, Some(uid as i64)).await;
+
+                        tracing::info!("Chat result received for user {}", uid);
+                        drop(typing);
+
+                        match result {
+                            Ok(response) => {
+                                set_reaction(&bot, msg.chat.id, msg.id, "✅").await;
+                                clear_reactions(&bot, msg.chat.id, msg.id).await;
+                                response
+                            }
+                            Err(e) => {
+                                set_reaction(&bot, msg.chat.id, msg.id, "❌").await;
+                                clear_reactions(&bot, msg.chat.id, msg.id).await;
+                                format!("Error: {e}")
+                            }
                         }
                     }
                 };
 
-                // Send formatted response
-                let formatted = to_telegram_html(&response);
-                let mut message = bot.send_message(msg.chat.id, &formatted);
-                message = message.parse_mode(ParseMode::Html);
+                // Send formatted response (skip if empty - streaming already handled it)
+                if !response.is_empty() {
+                    let formatted = to_telegram_html(&response);
+                    let mut message = bot.send_message(msg.chat.id, &formatted);
+                    message = message.parse_mode(ParseMode::Html);
 
-                // If this is a reply to another message, preserve thread context
-                if let Some(reply_msg) = msg.reply_to_message() {
-                    message = message.reply_parameters(ReplyParameters::new(reply_msg.id));
-                }
-
-                let send_result = message.await;
-
-                // Fallback to plain text if HTML parsing fails
-                if send_result.is_err() {
-                    let mut plain_message = bot.send_message(msg.chat.id, response);
+                    // If this is a reply to another message, preserve thread context
                     if let Some(reply_msg) = msg.reply_to_message() {
-                        plain_message =
-                            plain_message.reply_parameters(ReplyParameters::new(reply_msg.id));
+                        message = message.reply_parameters(ReplyParameters::new(reply_msg.id));
                     }
-                    plain_message.await?;
+
+                    let send_result = message.await;
+
+                    // Fallback to plain text if HTML parsing fails
+                    if send_result.is_err() {
+                        let mut plain_message = bot.send_message(msg.chat.id, response);
+                        if let Some(reply_msg) = msg.reply_to_message() {
+                            plain_message =
+                                plain_message.reply_parameters(ReplyParameters::new(reply_msg.id));
+                        }
+                        plain_message.await?;
+                    }
                 }
             }
             Ok(())
