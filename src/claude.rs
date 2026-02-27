@@ -264,7 +264,7 @@ impl Claude {
                         tool_results.push(ContentBlockParam::ToolResult {
                             tool_use_id: id.clone(),
                             content: Some(result),
-                            is_error: None,
+                            is_error: Some(false),
                         });
                     }
                     _ => {}
@@ -364,7 +364,7 @@ impl Claude {
                         tool_results.push(ContentBlockParam::ToolResult {
                             tool_use_id: id.clone(),
                             content: Some(result),
-                            is_error: None,
+                            is_error: Some(false),
                         });
                     }
                     _ => {}
