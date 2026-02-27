@@ -301,21 +301,43 @@ impl Claude {
     /// Used for setup mode where we need a different system prompt and
     /// need to know when setup completes.
     ///
-    /// Note: `user_id` is accepted for API consistency but not used for memory
-    /// in setup mode since setup conversations are ephemeral.
+    /// Uses memory to maintain conversation context across setup messages.
     pub async fn chat_with_system(
         &self,
         user_message: &str,
         system_prompt: &str,
-        _user_id: Option<i64>,
+        user_id: Option<i64>,
     ) -> Result<SetupChatResult> {
         let tools = self.get_tools().await?;
 
+        // Load conversation context from memory (same as regular chat)
         let mut messages: Vec<MessageParam> = Vec::new();
+
+        if let (Some(memory), Some(uid)) = (&self.memory, user_id) {
+            let context = memory.get_context(uid).unwrap_or_default();
+            for msg in context {
+                let role = if msg.role == "user" {
+                    Role::User
+                } else {
+                    Role::Assistant
+                };
+                messages.push(MessageParam {
+                    role,
+                    content: MessageContent::Text(msg.content),
+                });
+            }
+        }
+
+        // Add current user message
         messages.push(MessageParam {
             role: Role::User,
             content: MessageContent::Text(user_message.to_string()),
         });
+
+        // Store user message in memory
+        if let (Some(memory), Some(uid)) = (&self.memory, user_id) {
+            let _ = memory.add_message(uid, "user", user_message);
+        }
 
         let mut setup_completed = false;
 
@@ -372,7 +394,11 @@ impl Claude {
             }
 
             if tool_results.is_empty() {
-                // Don't store setup conversations in memory - they're one-time
+                // Store assistant response in memory
+                if let (Some(memory), Some(uid)) = (&self.memory, user_id) {
+                    let _ = memory.add_message(uid, "assistant", &final_text);
+                }
+
                 return Ok(SetupChatResult {
                     response: final_text,
                     setup_completed,
