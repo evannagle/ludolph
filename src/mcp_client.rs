@@ -77,23 +77,41 @@ impl McpClient {
 
     /// Send Wake-on-LAN packet to wake the Mac.
     pub fn wake_mac(&self) -> Result<()> {
-        let mac_address = self
-            .mac_address
-            .as_ref()
-            .context("No MAC address configured for Wake-on-LAN")?;
+        let mac_address = self.mac_address.as_ref().context(
+            "Wake-on-LAN not configured.\n\n\
+                     No MAC address found in config.\n\n\
+                     Try:\n\
+                     • Add 'mac_address' to [mcp] section in config\n\
+                     • Find MAC address in Mac System Settings > Network\n\
+                     • Format: aa:bb:cc:dd:ee:ff",
+        )?;
 
         tracing::info!("Sending Wake-on-LAN packet to {}", mac_address);
 
         let status = Command::new("wakeonlan")
             .arg(mac_address)
             .status()
-            .context("Failed to execute wakeonlan command")?;
+            .context(
+                "Wake-on-LAN failed.\n\n\
+                     Cannot execute 'wakeonlan' command.\n\n\
+                     Try:\n\
+                     • Install wakeonlan: apt install wakeonlan\n\
+                     • Verify wakeonlan is in PATH\n\
+                     • Check command availability: which wakeonlan",
+            )?;
 
         if status.success() {
             tracing::info!("Wake-on-LAN packet sent successfully");
             Ok(())
         } else {
-            anyhow::bail!("wakeonlan command failed with status: {status}");
+            anyhow::bail!(
+                "Wake-on-LAN command failed (status: {status})\n\n\
+                Try:\n\
+                • Verify MAC address is correct\n\
+                • Check network connectivity\n\
+                • Ensure Mac is on same network\n\
+                • Enable Wake-on-LAN in Mac System Settings"
+            );
         }
     }
 
@@ -105,18 +123,34 @@ impl McpClient {
             .header("Authorization", format!("Bearer {}", self.auth_token))
             .send()
             .await
-            .context("Failed to connect to MCP server")?;
+            .map_err(|e| {
+                Self::format_connection_error(&e, &self.base_url, "get tool definitions")
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("MCP server error ({status}): {body}");
+
+            return Err(anyhow::anyhow!(
+                "MCP server error ({status})\n\n\
+                Error: {body}\n\n\
+                Try:\n\
+                • Check if the MCP server is running\n\
+                • Verify authentication token in config\n\
+                • Ensure MCP server is at: {}\n\
+                • Check server logs for details",
+                self.base_url
+            ));
         }
 
-        let defs: ToolDefinitionsResponse = response
-            .json()
-            .await
-            .context("Failed to parse tool definitions")?;
+        let defs: ToolDefinitionsResponse = response.json().await.context(
+            "Failed to parse tool definitions from MCP server.\n\n\
+                     The server may be running an incompatible version.\n\n\
+                     Try:\n\
+                     • Update the MCP server\n\
+                     • Check server logs for errors\n\
+                     • Verify server is responding correctly",
+        )?;
 
         Ok(defs
             .tools
@@ -160,9 +194,15 @@ impl McpClient {
         tokio::time::sleep(Duration::from_secs(10)).await;
 
         // Retry with longer timeout
-        self.try_call_tool_with_retry(name, input, 3)
-            .await
-            .context("Failed after Wake-on-LAN attempt")
+        self.try_call_tool_with_retry(name, input, 3).await.context(
+            "Failed to connect after Wake-on-LAN attempt.\n\n\
+                     Try:\n\
+                     • Wait longer for Mac to wake up\n\
+                     • Check Mac power/network status manually\n\
+                     • Verify Wake-on-LAN is enabled in Mac settings\n\
+                     • Ensure Mac is on same network\n\
+                     • Try pinging Mac to verify it's awake",
+        )
     }
 
     async fn try_call_tool(&self, name: &str, input: &Value) -> Result<String> {
@@ -181,23 +221,74 @@ impl McpClient {
             .json(&request)
             .send()
             .await
-            .context("Failed to connect to MCP server")?;
+            .map_err(|e| {
+                Self::format_connection_error(&e, &self.base_url, &format!("call tool '{name}'"))
+            })?;
 
         tracing::debug!("MCP: Received response with status {}", response.status());
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("MCP server error ({status}): {body}");
+
+            let error_msg = match status.as_u16() {
+                401 => format!(
+                    "Authentication failed (401)\n\n\
+                    Error: {body}\n\n\
+                    Try:\n\
+                    • Check authentication token in config\n\
+                    • Verify token matches MCP server config\n\
+                    • Regenerate token if expired"
+                ),
+                404 => format!(
+                    "Tool not found (404)\n\n\
+                    Error: Tool '{name}' not available\n\n\
+                    Try:\n\
+                    • Check tool name spelling\n\
+                    • Verify MCP server version\n\
+                    • List available tools with /tools endpoint"
+                ),
+                500..=599 => format!(
+                    "MCP server error ({status})\n\n\
+                    Error: {body}\n\n\
+                    Try:\n\
+                    • Check MCP server logs\n\
+                    • Verify vault path is accessible\n\
+                    • Restart MCP server if needed\n\
+                    • Check server resource usage"
+                ),
+                _ => format!(
+                    "MCP server error ({status})\n\n\
+                    Error: {body}\n\n\
+                    Try:\n\
+                    • Check MCP server status\n\
+                    • Verify request parameters\n\
+                    • Check server logs for details"
+                ),
+            };
+
+            return Err(anyhow::anyhow!(error_msg));
         }
 
-        let result: ToolCallResponse = response
-            .json()
-            .await
-            .context("Failed to parse tool call response")?;
+        let result: ToolCallResponse = response.json().await.context(
+            "Failed to parse tool call response from MCP server.\n\n\
+                     The server may have returned invalid data.\n\n\
+                     Try:\n\
+                     • Check MCP server logs\n\
+                     • Verify server is running correctly\n\
+                     • Update MCP server if outdated",
+        )?;
 
         if let Some(error) = result.error {
-            anyhow::bail!("Tool error: {error}");
+            return Err(anyhow::anyhow!(
+                "Tool execution failed\n\n\
+                Error: {error}\n\n\
+                Try:\n\
+                • Verify tool parameters are correct\n\
+                • Check vault path exists and is accessible\n\
+                • Ensure file/directory permissions are correct\n\
+                • Use list_dir to verify paths"
+            ));
         }
 
         Ok(result.content)
@@ -226,6 +317,67 @@ impl McpClient {
         }
 
         Err(last_error)
+    }
+
+    /// Format connection errors with helpful suggestions.
+    fn format_connection_error(error: &reqwest::Error, url: &str, action: &str) -> anyhow::Error {
+        let msg = if error.is_timeout() {
+            format!(
+                "Unable to {action} via MCP server.\n\n\
+                Error: Request timed out connecting to {url}\n\n\
+                Try:\n\
+                • Check if Mac is awake and reachable\n\
+                • Verify network connectivity\n\
+                • Ensure MCP server is running on Mac\n\
+                • Check firewall settings\n\
+                • Wake Mac with /wake command if configured"
+            )
+        } else if error.is_connect() {
+            format!(
+                "Unable to {action} via MCP server.\n\n\
+                Error: Cannot connect to MCP server at {url}\n\n\
+                Try:\n\
+                • Check if MCP server is running on Mac\n\
+                • Verify URL in config is correct\n\
+                • Ensure Mac is on network and reachable\n\
+                • Check firewall is not blocking port\n\
+                • Try waking Mac with /wake command\n\
+                • Ping Mac to verify network connectivity"
+            )
+        } else if error.is_status() {
+            let status = error.status().map_or(String::new(), |s| format!(" ({s})"));
+            format!(
+                "Unable to {action} via MCP server.\n\n\
+                Error: MCP server returned error{status}\n\n\
+                Try:\n\
+                • Check MCP server logs\n\
+                • Verify authentication token\n\
+                • Ensure server is running correctly\n\
+                • Restart MCP server if needed"
+            )
+        } else if error.is_body() || error.is_decode() {
+            format!(
+                "Unable to {action} via MCP server.\n\n\
+                Error: Invalid response from MCP server\n\n\
+                Try:\n\
+                • Check MCP server version compatibility\n\
+                • Verify server is running correctly\n\
+                • Check server logs for errors\n\
+                • Update MCP server if outdated"
+            )
+        } else {
+            format!(
+                "Unable to {action} via MCP server.\n\n\
+                Error: {error}\n\n\
+                Try:\n\
+                • Check network connectivity\n\
+                • Verify MCP server is accessible\n\
+                • Check server logs for details\n\
+                • Ensure all configuration is correct"
+            )
+        };
+
+        anyhow::anyhow!(msg)
     }
 }
 
