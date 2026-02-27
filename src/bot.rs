@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use console::style;
 use teloxide::prelude::*;
-use teloxide::types::{ChatId, MessageId, ParseMode, ReactionType};
+use teloxide::types::{ChatAction, ChatId, MessageId, ParseMode, ReactionType};
+use tokio::sync::oneshot;
+use tokio::time::{Duration, interval};
 
 use crate::claude::Claude;
 use crate::config::{Config, McpConfig, config_dir};
@@ -34,6 +36,35 @@ async fn clear_reactions(bot: &Bot, chat_id: ChatId, message_id: MessageId) {
         .set_message_reaction(chat_id, message_id)
         .reaction(vec![])
         .await;
+}
+
+/// Start showing typing indicator, refreshing every 5 seconds.
+///
+/// Returns a channel sender that stops the typing when dropped.
+fn start_typing(bot: Bot, chat_id: ChatId) -> oneshot::Sender<()> {
+    let (tx, mut rx) = oneshot::channel();
+
+    tokio::spawn(async move {
+        let mut ticker = interval(Duration::from_secs(5));
+
+        loop {
+            // Send typing action
+            let _ = bot.send_chat_action(chat_id, ChatAction::Typing).await;
+
+            // Wait for either 5 seconds or cancellation signal
+            tokio::select! {
+                _ = ticker.tick() => {
+                    // Continue loop - send typing again in 5s
+                }
+                _ = &mut rx => {
+                    // Cancellation received - stop typing
+                    break;
+                }
+            }
+        }
+    });
+
+    tx
 }
 
 /// Register bot commands with Telegram for autocomplete.
@@ -220,9 +251,7 @@ pub async fn run() -> Result<()> {
                             set_reaction(&bot, msg.chat.id, msg.id, "👀").await;
                             let thinking =
                                 bot.send_message(msg.chat.id, thinking_message()).await.ok();
-                            let _ = bot
-                                .send_chat_action(msg.chat.id, teloxide::types::ChatAction::Typing)
-                                .await;
+                            let typing = start_typing(bot.clone(), msg.chat.id);
 
                             // Start setup conversation
                             #[allow(clippy::cast_possible_wrap)]
@@ -235,6 +264,7 @@ pub async fn run() -> Result<()> {
                                 .await;
 
                             // Cleanup indicators
+                            drop(typing);
                             if let Some(thinking_msg) = thinking {
                                 let _ = bot.delete_message(msg.chat.id, thinking_msg.id).await;
                             }
@@ -286,15 +316,14 @@ pub async fn run() -> Result<()> {
                     // Continue setup conversation
                     set_reaction(&bot, msg.chat.id, msg.id, "👀").await;
                     let thinking = bot.send_message(msg.chat.id, thinking_message()).await.ok();
-                    let _ = bot
-                        .send_chat_action(msg.chat.id, teloxide::types::ChatAction::Typing)
-                        .await;
+                    let typing = start_typing(bot.clone(), msg.chat.id);
 
                     #[allow(clippy::cast_possible_wrap)]
                     let result = claude
                         .chat_with_system(text, SETUP_SYSTEM_PROMPT, Some(uid as i64))
                         .await;
 
+                    drop(typing);
                     if let Some(thinking_msg) = thinking {
                         let _ = bot.delete_message(msg.chat.id, thinking_msg.id).await;
                     }
@@ -326,13 +355,12 @@ pub async fn run() -> Result<()> {
                     // Normal chat
                     set_reaction(&bot, msg.chat.id, msg.id, "👀").await;
                     let thinking = bot.send_message(msg.chat.id, thinking_message()).await.ok();
-                    let _ = bot
-                        .send_chat_action(msg.chat.id, teloxide::types::ChatAction::Typing)
-                        .await;
+                    let typing = start_typing(bot.clone(), msg.chat.id);
 
                     #[allow(clippy::cast_possible_wrap)]
                     let result = claude.chat(text, Some(uid as i64)).await;
 
+                    drop(typing);
                     if let Some(thinking_msg) = thinking {
                         let _ = bot.delete_message(msg.chat.id, thinking_msg.id).await;
                     }
