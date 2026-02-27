@@ -240,6 +240,9 @@ pub async fn run() -> Result<()> {
                                     chat_result.response
                                 }
                                 Err(e) => {
+                                    // Log full error chain
+                                    tracing::error!("Setup failed: {e:?}");
+
                                     // Exit setup mode on error
                                     if let Ok(mut guard) = setup_users.lock() {
                                         guard.remove(&uid);
@@ -302,6 +305,9 @@ pub async fn run() -> Result<()> {
                             chat_result.response
                         }
                         Err(e) => {
+                            // Log full error chain
+                            tracing::error!("Setup failed: {e:?}");
+
                             if let Ok(mut guard) = setup_users.lock() {
                                 guard.remove(&uid);
                             }
