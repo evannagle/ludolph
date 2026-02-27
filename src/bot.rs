@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use console::style;
 use teloxide::prelude::*;
-use teloxide::types::{ParseMode, ReactionType};
+use teloxide::types::{ChatId, MessageId, ParseMode, ReactionType};
 
 use crate::claude::Claude;
 use crate::config::{Config, McpConfig, config_dir};
@@ -17,6 +17,24 @@ use crate::memory::Memory;
 use crate::setup::{SETUP_SYSTEM_PROMPT, initial_setup_message};
 use crate::telegram::{thinking_message, to_telegram_html};
 use crate::ui::StatusLine;
+
+/// Set a reaction emoji on a message.
+async fn set_reaction(bot: &Bot, chat_id: ChatId, message_id: MessageId, emoji: &str) {
+    let _ = bot
+        .set_message_reaction(chat_id, message_id)
+        .reaction(vec![ReactionType::Emoji {
+            emoji: emoji.to_string(),
+        }])
+        .await;
+}
+
+/// Clear all reactions from a message.
+async fn clear_reactions(bot: &Bot, chat_id: ChatId, message_id: MessageId) {
+    let _ = bot
+        .set_message_reaction(chat_id, message_id)
+        .reaction(vec![])
+        .await;
+}
 
 /// Register bot commands with Telegram for autocomplete.
 async fn register_commands(token: &str) -> Result<()> {
@@ -199,12 +217,7 @@ pub async fn run() -> Result<()> {
                             }
 
                             // Show thinking indicator for setup
-                            let _ = bot
-                                .set_message_reaction(msg.chat.id, msg.id)
-                                .reaction(vec![ReactionType::Emoji {
-                                    emoji: "👀".to_string(),
-                                }])
-                                .await;
+                            set_reaction(&bot, msg.chat.id, msg.id, "👀").await;
                             let thinking =
                                 bot.send_message(msg.chat.id, thinking_message()).await.ok();
                             let _ = bot
@@ -225,10 +238,6 @@ pub async fn run() -> Result<()> {
                             if let Some(thinking_msg) = thinking {
                                 let _ = bot.delete_message(msg.chat.id, thinking_msg.id).await;
                             }
-                            let _ = bot
-                                .set_message_reaction(msg.chat.id, msg.id)
-                                .reaction(vec![])
-                                .await;
 
                             match result {
                                 Ok(chat_result) => {
@@ -237,6 +246,8 @@ pub async fn run() -> Result<()> {
                                             guard.remove(&uid);
                                         }
                                     }
+                                    set_reaction(&bot, msg.chat.id, msg.id, "✅").await;
+                                    clear_reactions(&bot, msg.chat.id, msg.id).await;
                                     chat_result.response
                                 }
                                 Err(e) => {
@@ -247,6 +258,8 @@ pub async fn run() -> Result<()> {
                                     if let Ok(mut guard) = setup_users.lock() {
                                         guard.remove(&uid);
                                     }
+                                    set_reaction(&bot, msg.chat.id, msg.id, "❌").await;
+                                    clear_reactions(&bot, msg.chat.id, msg.id).await;
                                     format!("Setup error: {e}")
                                 }
                             }
@@ -271,12 +284,7 @@ pub async fn run() -> Result<()> {
                     }
                 } else if in_setup {
                     // Continue setup conversation
-                    let _ = bot
-                        .set_message_reaction(msg.chat.id, msg.id)
-                        .reaction(vec![ReactionType::Emoji {
-                            emoji: "👀".to_string(),
-                        }])
-                        .await;
+                    set_reaction(&bot, msg.chat.id, msg.id, "👀").await;
                     let thinking = bot.send_message(msg.chat.id, thinking_message()).await.ok();
                     let _ = bot
                         .send_chat_action(msg.chat.id, teloxide::types::ChatAction::Typing)
@@ -290,10 +298,6 @@ pub async fn run() -> Result<()> {
                     if let Some(thinking_msg) = thinking {
                         let _ = bot.delete_message(msg.chat.id, thinking_msg.id).await;
                     }
-                    let _ = bot
-                        .set_message_reaction(msg.chat.id, msg.id)
-                        .reaction(vec![])
-                        .await;
 
                     match result {
                         Ok(chat_result) => {
@@ -302,6 +306,8 @@ pub async fn run() -> Result<()> {
                                     guard.remove(&uid);
                                 }
                             }
+                            set_reaction(&bot, msg.chat.id, msg.id, "✅").await;
+                            clear_reactions(&bot, msg.chat.id, msg.id).await;
                             chat_result.response
                         }
                         Err(e) => {
@@ -311,37 +317,38 @@ pub async fn run() -> Result<()> {
                             if let Ok(mut guard) = setup_users.lock() {
                                 guard.remove(&uid);
                             }
+                            set_reaction(&bot, msg.chat.id, msg.id, "❌").await;
+                            clear_reactions(&bot, msg.chat.id, msg.id).await;
                             format!("Setup error: {e}")
                         }
                     }
                 } else {
                     // Normal chat
-                    let _ = bot
-                        .set_message_reaction(msg.chat.id, msg.id)
-                        .reaction(vec![ReactionType::Emoji {
-                            emoji: "👀".to_string(),
-                        }])
-                        .await;
+                    set_reaction(&bot, msg.chat.id, msg.id, "👀").await;
                     let thinking = bot.send_message(msg.chat.id, thinking_message()).await.ok();
                     let _ = bot
                         .send_chat_action(msg.chat.id, teloxide::types::ChatAction::Typing)
                         .await;
 
                     #[allow(clippy::cast_possible_wrap)]
-                    let response = claude
-                        .chat(text, Some(uid as i64))
-                        .await
-                        .unwrap_or_else(|e| format!("Error: {e}"));
+                    let result = claude.chat(text, Some(uid as i64)).await;
 
                     if let Some(thinking_msg) = thinking {
                         let _ = bot.delete_message(msg.chat.id, thinking_msg.id).await;
                     }
-                    let _ = bot
-                        .set_message_reaction(msg.chat.id, msg.id)
-                        .reaction(vec![])
-                        .await;
 
-                    response
+                    match result {
+                        Ok(response) => {
+                            set_reaction(&bot, msg.chat.id, msg.id, "✅").await;
+                            clear_reactions(&bot, msg.chat.id, msg.id).await;
+                            response
+                        }
+                        Err(e) => {
+                            set_reaction(&bot, msg.chat.id, msg.id, "❌").await;
+                            clear_reactions(&bot, msg.chat.id, msg.id).await;
+                            format!("Error: {e}")
+                        }
+                    }
                 };
 
                 // Send formatted response
