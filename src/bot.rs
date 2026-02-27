@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use console::style;
 use teloxide::prelude::*;
-use teloxide::types::{ChatAction, ChatId, MessageId, ParseMode, ReactionType};
+use teloxide::types::{ChatAction, ChatId, MessageId, ParseMode, ReactionType, ReplyParameters};
 use tokio::sync::oneshot;
 use tokio::time::{Duration, interval};
 
@@ -371,14 +371,24 @@ pub async fn run() -> Result<()> {
 
                 // Send formatted response
                 let formatted = to_telegram_html(&response);
-                let send_result = bot
-                    .send_message(msg.chat.id, &formatted)
-                    .parse_mode(ParseMode::Html)
-                    .await;
+                let mut message = bot.send_message(msg.chat.id, &formatted);
+                message = message.parse_mode(ParseMode::Html);
+
+                // If this is a reply to another message, preserve thread context
+                if let Some(reply_msg) = msg.reply_to_message() {
+                    message = message.reply_parameters(ReplyParameters::new(reply_msg.id));
+                }
+
+                let send_result = message.await;
 
                 // Fallback to plain text if HTML parsing fails
                 if send_result.is_err() {
-                    bot.send_message(msg.chat.id, response).await?;
+                    let mut plain_message = bot.send_message(msg.chat.id, response);
+                    if let Some(reply_msg) = msg.reply_to_message() {
+                        plain_message =
+                            plain_message.reply_parameters(ReplyParameters::new(reply_msg.id));
+                    }
+                    plain_message.await?;
                 }
             }
             Ok(())
