@@ -9,7 +9,7 @@ dependencies = [
 ]
 
 [tool.setuptools]
-py-modules = ["server", "security"]
+py-modules = ["server", "security", "llm"]
 packages = ["tools"]
 
 [project.optional-dependencies]
