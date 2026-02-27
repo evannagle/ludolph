@@ -161,16 +161,8 @@ impl Claude {
         Ok(tools.into_iter().map(convert_tool).collect())
     }
 
-    /// Chat with optional user context for memory.
-    ///
-    /// If `user_id` is provided and memory is configured, conversation history
-    /// will be included in context and the exchange will be stored.
-    #[allow(clippy::too_many_lines)]
-    #[allow(clippy::cognitive_complexity)]
-    pub async fn chat(&self, user_message: &str, user_id: Option<i64>) -> Result<String> {
-        let tools = self.get_tools().await?;
-
-        // Build system prompt with memory awareness
+    /// Build system prompt with memory and vault context.
+    async fn build_system_prompt(&self) -> String {
         let memory_context = if self.memory.is_some() {
             "\n\nYou have access to conversation history with this user. \
              Recent messages are included below. For older conversations, \
@@ -179,7 +171,6 @@ impl Claude {
             ""
         };
 
-        // Try to load Lu.md for vault context
         let lu_context = self
             .load_lu_context()
             .await
@@ -187,17 +178,19 @@ impl Claude {
                 format!("\n\n## Vault Context (from Lu.md)\n\n{content}")
             });
 
-        let system = format!(
+        format!(
             "You are Ludolph, a helpful assistant with access to the user's Obsidian vault at {}. \
              You can read files and search the vault to answer questions about their notes. \
              Be concise and helpful.{}{}",
             self.vault_description(),
             memory_context,
             lu_context
-        );
+        )
+    }
 
-        // Load conversation context from memory
-        let mut messages: Vec<MessageParam> = Vec::new();
+    /// Load conversation history from memory.
+    fn load_conversation_history(&self, user_id: Option<i64>) -> Vec<MessageParam> {
+        let mut messages = Vec::new();
 
         if let (Some(memory), Some(uid)) = (&self.memory, user_id) {
             let context = memory.get_context(uid).unwrap_or_default();
@@ -214,7 +207,147 @@ impl Claude {
             }
         }
 
-        // Add current user message
+        messages
+    }
+
+    /// Process Claude response blocks into assistant content and tool results.
+    async fn process_response_blocks(
+        &self,
+        blocks: &[ContentBlock],
+    ) -> (Vec<ContentBlockParam>, Vec<ContentBlockParam>, String) {
+        let mut assistant_content = Vec::new();
+        let mut tool_results = Vec::new();
+        let mut final_text = String::new();
+
+        for block in blocks {
+            match block {
+                ContentBlock::Text { text } => {
+                    final_text.clone_from(text);
+                    assistant_content.push(ContentBlockParam::Text { text: text.clone() });
+                }
+                ContentBlock::ToolUse { id, name, input } => {
+                    tracing::debug!("Executing tool: {}", name);
+                    tracing::trace!("Tool input: {:?}", input);
+
+                    assistant_content.push(ContentBlockParam::ToolUse {
+                        id: id.clone(),
+                        name: name.clone(),
+                        input: input.clone(),
+                    });
+
+                    let result = self.execute_tool(name, input).await;
+                    tracing::trace!("Tool {} returned {} bytes", name, result.len());
+
+                    tool_results.push(ContentBlockParam::ToolResult {
+                        tool_use_id: id.clone(),
+                        content: Some(result),
+                        is_error: Some(false),
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        (assistant_content, tool_results, final_text)
+    }
+
+    /// Store assistant message in memory and persist if needed.
+    async fn store_assistant_message(&self, user_id: Option<i64>, text: &str) {
+        if let (Some(memory), Some(uid)) = (&self.memory, user_id) {
+            let _ = memory.add_message(uid, "assistant", text);
+
+            if memory.should_persist(uid).unwrap_or(false) {
+                self.persist_memory(uid).await;
+            }
+        }
+    }
+
+    /// Chat with optional user context for memory.
+    ///
+    /// If `user_id` is provided and memory is configured, conversation history
+    /// will be included in context and the exchange will be stored.
+    #[allow(clippy::too_many_lines)]
+    /// Execute a single conversation turn (API call + response processing).
+    async fn execute_turn(
+        &self,
+        system: &str,
+        tools: &[Tool],
+        messages: &[MessageParam],
+    ) -> Result<(Vec<ContentBlockParam>, Vec<ContentBlockParam>, String)> {
+        tracing::debug!(
+            "Calling Claude API (turn {}, {} messages)",
+            messages.len() / 2 + 1,
+            messages.len()
+        );
+
+        let params = MessageCreateBuilder::new(&self.model, 4096)
+            .system(system)
+            .tools(tools.to_vec())
+            .build();
+
+        let mut params = params;
+        params.messages = messages.to_vec();
+
+        let response = self
+            .client
+            .messages()
+            .create(params)
+            .await
+            .context("Failed to call Claude API")?;
+
+        tracing::debug!(
+            "Received Claude response with {} content blocks",
+            response.content.len()
+        );
+
+        Ok(self.process_response_blocks(&response.content).await)
+    }
+
+    /// Execute the tool loop until no more tools need to be called.
+    async fn execute_tool_loop(
+        &self,
+        system: &str,
+        tools: &[Tool],
+        messages: &mut Vec<MessageParam>,
+    ) -> Result<String> {
+        loop {
+            let (assistant_content, tool_results, final_text) =
+                self.execute_turn(system, tools, messages).await?;
+
+            if tool_results.is_empty() {
+                tracing::debug!(
+                    "Conversation complete, returning {} chars",
+                    final_text.len()
+                );
+                return Ok(final_text);
+            }
+
+            tracing::debug!(
+                "Tool execution loop continuing with {} results",
+                tool_results.len()
+            );
+
+            messages.push(MessageParam {
+                role: Role::Assistant,
+                content: MessageContent::Blocks(assistant_content),
+            });
+            messages.push(MessageParam {
+                role: Role::User,
+                content: MessageContent::Blocks(tool_results),
+            });
+        }
+    }
+
+    /// Chat with optional user context for memory.
+    ///
+    /// If `user_id` is provided and memory is configured, conversation history
+    /// will be included in context and the exchange will be stored.
+    pub async fn chat(&self, user_message: &str, user_id: Option<i64>) -> Result<String> {
+        let tools = self.get_tools().await?;
+        let system = self.build_system_prompt().await;
+
+        // Load conversation history and add current message
+        let mut messages = self.load_conversation_history(user_id);
         messages.push(MessageParam {
             role: Role::User,
             content: MessageContent::Text(user_message.to_string()),
@@ -225,102 +358,15 @@ impl Claude {
             let _ = memory.add_message(uid, "user", user_message);
         }
 
-        // Tool execution loop
-        loop {
-            tracing::debug!(
-                "Calling Claude API (turn {}, {} messages)",
-                messages.len() / 2 + 1,
-                messages.len()
-            );
+        // Execute tool loop and get final response
+        let final_text = self
+            .execute_tool_loop(&system, &tools, &mut messages)
+            .await?;
 
-            let params = MessageCreateBuilder::new(&self.model, 4096)
-                .system(&system)
-                .tools(tools.clone())
-                .build();
+        // Store assistant response
+        self.store_assistant_message(user_id, &final_text).await;
 
-            // Manually set messages since builder doesn't support pre-built Vec<MessageParam>
-            let mut params = params;
-            params.messages.clone_from(&messages);
-
-            let response = self
-                .client
-                .messages()
-                .create(params)
-                .await
-                .context("Failed to call Claude API")?;
-
-            tracing::debug!(
-                "Received Claude response with {} content blocks",
-                response.content.len()
-            );
-
-            // Process response
-            let mut assistant_content: Vec<ContentBlockParam> = Vec::new();
-            let mut tool_results: Vec<ContentBlockParam> = Vec::new();
-            let mut final_text = String::new();
-
-            for block in &response.content {
-                match block {
-                    ContentBlock::Text { text } => {
-                        final_text.clone_from(text);
-                        assistant_content.push(ContentBlockParam::Text { text: text.clone() });
-                    }
-                    ContentBlock::ToolUse { id, name, input } => {
-                        tracing::debug!("Executing tool: {}", name);
-                        tracing::trace!("Tool input: {:?}", input);
-
-                        assistant_content.push(ContentBlockParam::ToolUse {
-                            id: id.clone(),
-                            name: name.clone(),
-                            input: input.clone(),
-                        });
-
-                        let result = self.execute_tool(name, input).await;
-                        tracing::trace!("Tool {} returned {} bytes", name, result.len());
-
-                        tool_results.push(ContentBlockParam::ToolResult {
-                            tool_use_id: id.clone(),
-                            content: Some(result),
-                            is_error: Some(false),
-                        });
-                    }
-                    _ => {}
-                }
-            }
-
-            if tool_results.is_empty() {
-                tracing::debug!(
-                    "Conversation complete, returning {} chars",
-                    final_text.len()
-                );
-
-                // Store assistant response in memory
-                if let (Some(memory), Some(uid)) = (&self.memory, user_id) {
-                    let _ = memory.add_message(uid, "assistant", &final_text);
-
-                    // Check if we should persist to long-term storage
-                    if memory.should_persist(uid).unwrap_or(false) {
-                        self.persist_memory(uid).await;
-                    }
-                }
-                return Ok(final_text);
-            }
-
-            tracing::debug!(
-                "Tool execution loop continuing with {} results",
-                tool_results.len()
-            );
-
-            // Add assistant message and tool results, continue loop
-            messages.push(MessageParam {
-                role: Role::Assistant,
-                content: MessageContent::Blocks(assistant_content),
-            });
-            messages.push(MessageParam {
-                role: Role::User,
-                content: MessageContent::Blocks(tool_results),
-            });
-        }
+        Ok(final_text)
     }
 
     /// Chat with a custom system prompt, tracking if `complete_setup` is called.
