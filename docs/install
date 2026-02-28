@@ -215,7 +215,7 @@ echo
 info "If you understand, type the first five digits of pi after 3.14"
 echo
 printf "${CYAN}π${NC} "
-read -r PI_ANSWER
+read -r PI_ANSWER < /dev/tty
 
 if [ "$PI_ANSWER" != "15926" ]; then
     echo
