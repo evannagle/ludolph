@@ -257,11 +257,13 @@ if [ -f "$LOCAL_DIR/config.toml" ]; then
     SAVED_TELEGRAM_USER=$(grep '^allowed_users' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | tr -d '[]' | cut -d'=' -f2 | tr -d ' ' || true)
     SAVED_CLAUDE_KEY=$(grep '^api_key' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2 || true)
     SAVED_LLM_PROVIDER=$(grep '^provider' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2 || true)
+    SAVED_LLM_MODEL=$(grep '^model' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2 || true)
 fi
 
 # Initialize LLM variables from saved config (used in Step 5 before Step 7 runs)
 LLM_API_KEY="${SAVED_CLAUDE_KEY:-}"
 LLM_PROVIDER="${SAVED_LLM_PROVIDER:-anthropic}"
+LLM_MODEL="${SAVED_LLM_MODEL:-claude-sonnet-4-20250514}"
 
 # =============================================================================
 # Platform Detection
@@ -926,12 +928,14 @@ section "Step 7: API Keys"
 
 # Check if we have saved credentials
 if [ -n "$SAVED_TELEGRAM_TOKEN" ] && [ -n "$SAVED_CLAUDE_KEY" ]; then
-    ok "Found saved API keys"
+    ok "Found saved API keys (provider: $LLM_PROVIDER)"
     echo
-    if confirm "Use existing API keys?"; then
+    if confirm "Use existing API keys and provider?"; then
         TELEGRAM_TOKEN="$SAVED_TELEGRAM_TOKEN"
         TELEGRAM_USER_ID="$SAVED_TELEGRAM_USER"
         CLAUDE_API_KEY="$SAVED_CLAUDE_KEY"
+        LLM_API_KEY="$SAVED_CLAUDE_KEY"
+        # LLM_PROVIDER and LLM_MODEL already set from saved config
     else
         SAVED_TELEGRAM_TOKEN=""
         SAVED_CLAUDE_KEY=""
@@ -1163,7 +1167,8 @@ allowed_users = [$TELEGRAM_USER_ID]
 
 [claude]
 api_key = "$CLAUDE_API_KEY"
-model = "claude-sonnet-4-20250514"
+provider = "$LLM_PROVIDER"
+model = "$LLM_MODEL"
 
 [vault]
 path = "$VAULT_PATH"
