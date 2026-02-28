@@ -1005,21 +1005,17 @@ if [ -z "$SAVED_TELEGRAM_TOKEN" ]; then
             echo
 
             if confirm "Continue with Claude Code authentication?"; then
-                spinner_start "Running claude setup-token..."
-                CLAUDE_TOKEN_OUTPUT=$(claude setup-token 2>&1 || true)
+                echo
+                info "Running claude setup-token..."
+                info "A browser will open for authentication."
+                info "After authenticating, copy the token shown."
+                echo
 
-                # Check if we got a token
-                if echo "$CLAUDE_TOKEN_OUTPUT" | grep -q "sk-ant-"; then
-                    LLM_API_KEY=$(echo "$CLAUDE_TOKEN_OUTPUT" | grep -o 'sk-ant-[a-zA-Z0-9_-]*' | head -1)
-                    spinner_stop "ok" "Token generated"
-                else
-                    spinner_stop "warn" "Token may need manual entry"
-                    echo
-                    info "If a token was displayed, enter it below."
-                    info "Otherwise, check the browser window that opened."
-                    echo
-                    LLM_API_KEY=$(ask_secret "OAuth token (starts with sk-ant-):")
-                fi
+                # Run interactively - don't capture output
+                claude setup-token < /dev/tty || true
+
+                echo
+                LLM_API_KEY=$(ask_secret "Paste the token (starts with sk-ant-):")
             else
                 err "Authentication cancelled"
                 exit 1
