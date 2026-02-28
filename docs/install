@@ -234,6 +234,7 @@ SAVED_PI_USER=""
 SAVED_TELEGRAM_TOKEN=""
 SAVED_TELEGRAM_USER=""
 SAVED_CLAUDE_KEY=""
+SAVED_LLM_PROVIDER=""
 
 if [ -f "$LOCAL_DIR/config.toml" ]; then
     # Extract values from TOML (handles both Mac and Linux sed)
@@ -243,7 +244,12 @@ if [ -f "$LOCAL_DIR/config.toml" ]; then
     SAVED_TELEGRAM_TOKEN=$(grep '^bot_token' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2)
     SAVED_TELEGRAM_USER=$(grep '^allowed_users' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | tr -d '[]' | cut -d'=' -f2 | tr -d ' ')
     SAVED_CLAUDE_KEY=$(grep '^api_key' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2)
+    SAVED_LLM_PROVIDER=$(grep '^provider' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2)
 fi
+
+# Initialize LLM variables from saved config (used in Step 5 before Step 7 runs)
+LLM_API_KEY="${SAVED_CLAUDE_KEY:-}"
+LLM_PROVIDER="${SAVED_LLM_PROVIDER:-anthropic}"
 
 # =============================================================================
 # Platform Detection
@@ -740,6 +746,8 @@ if ! $IS_PI; then
     PYTHON_PATH=$(which python3)
 
     # Determine which API key env var to set based on provider
+    # Default to anthropic if not set (re-run with existing config)
+    LLM_PROVIDER="${LLM_PROVIDER:-anthropic}"
     API_KEY_NAME="ANTHROPIC_API_KEY"
     case "$LLM_PROVIDER" in
         openai) API_KEY_NAME="OPENAI_API_KEY" ;;
