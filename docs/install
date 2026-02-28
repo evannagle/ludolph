@@ -732,6 +732,14 @@ if ! $IS_PI; then
     PYTHON_USER_SITE=$(python3 -c 'import site; print(site.getusersitepackages())' 2>/dev/null || echo "$HOME/.local/lib/python3/site-packages")
     PYTHON_PATH=$(which python3)
 
+    # Determine which API key env var to set based on provider
+    API_KEY_NAME="ANTHROPIC_API_KEY"
+    case "$LLM_PROVIDER" in
+        openai) API_KEY_NAME="OPENAI_API_KEY" ;;
+        gemini) API_KEY_NAME="GEMINI_API_KEY" ;;
+        *) API_KEY_NAME="ANTHROPIC_API_KEY" ;;
+    esac
+
     cat > "$PLIST_PATH" << PLISTEOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -759,6 +767,8 @@ if ! $IS_PI; then
         <string>/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin</string>
         <key>PYTHONPATH</key>
         <string>$LOCAL_DIR:$PYTHON_USER_SITE</string>
+        <key>$API_KEY_NAME</key>
+        <string>$LLM_API_KEY</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>
@@ -895,64 +905,103 @@ if [ -z "$SAVED_TELEGRAM_TOKEN" ]; then
 
     # LLM Provider Selection
     echo
-    printf "${BOLD}How would you like to authenticate with Claude?${NC}\n"
+    printf "${BOLD}Which AI provider would you like to use?${NC}\n"
     echo
     info "  1. Claude Code subscription (uses your Max plan credits)"
-    info "  2. Anthropic API key (pay-per-use, billed separately)"
+    info "  2. Anthropic API (Claude, pay-per-use)"
+    info "  3. OpenAI API (GPT-4, ChatGPT)"
+    info "  4. Google Gemini API"
     echo
 
-    LLM_CHOICE=$(ask "Enter 1 or 2:" "2")
+    LLM_CHOICE=$(ask "Enter 1-4:" "2")
+    LLM_PROVIDER="anthropic"
+    LLM_MODEL="claude-sonnet-4-20250514"
 
-    if [ "$LLM_CHOICE" = "1" ]; then
-        # Claude Code subscription
-        if ! command -v claude &>/dev/null; then
-            err "Claude Code CLI not found"
-            echo
-            info "Install it first:"
-            info "  npm install -g @anthropic-ai/claude-code"
-            echo
-            info "Then re-run this installer."
-            exit 1
-        fi
-
-        echo
-        info "This will open a browser to authenticate with your Claude subscription."
-        info "The generated token will be saved for Ludolph to use."
-        echo
-
-        if confirm "Continue with Claude Code authentication?"; then
-            spinner_start "Running claude setup-token..."
-            CLAUDE_TOKEN_OUTPUT=$(claude setup-token 2>&1 || true)
-
-            # Check if we got a token
-            if echo "$CLAUDE_TOKEN_OUTPUT" | grep -q "sk-ant-"; then
-                CLAUDE_API_KEY=$(echo "$CLAUDE_TOKEN_OUTPUT" | grep -o 'sk-ant-[a-zA-Z0-9_-]*' | head -1)
-                spinner_stop "ok" "Token generated"
-            else
-                spinner_stop "warn" "Token may need manual entry"
+    case "$LLM_CHOICE" in
+        1)
+            # Claude Code subscription
+            if ! command -v claude &>/dev/null; then
+                err "Claude Code CLI not found"
                 echo
-                info "If a token was displayed, enter it below."
-                info "Otherwise, check the browser window that opened."
+                info "Install it first:"
+                info "  npm install -g @anthropic-ai/claude-code"
                 echo
-                CLAUDE_API_KEY=$(ask_secret "OAuth token (starts with sk-ant-):")
+                info "Then re-run this installer."
+                exit 1
             fi
-        else
-            err "Authentication cancelled"
-            exit 1
-        fi
 
-        [ -z "$CLAUDE_API_KEY" ] && { err "Token required"; exit 1; }
-        ok "Using Claude Code subscription"
-    else
-        # Anthropic API key
-        echo
-        info "  Claude API Key - powers the AI"
-        info "  Get one from: console.anthropic.com"
-        echo
-        CLAUDE_API_KEY=$(ask_secret "Claude API Key:")
-        [ -z "$CLAUDE_API_KEY" ] && { err "API key required"; exit 1; }
-        ok "Using Anthropic API"
-    fi
+            echo
+            info "This will open a browser to authenticate with your Claude subscription."
+            info "The generated token will be saved for Ludolph to use."
+            echo
+
+            if confirm "Continue with Claude Code authentication?"; then
+                spinner_start "Running claude setup-token..."
+                CLAUDE_TOKEN_OUTPUT=$(claude setup-token 2>&1 || true)
+
+                # Check if we got a token
+                if echo "$CLAUDE_TOKEN_OUTPUT" | grep -q "sk-ant-"; then
+                    LLM_API_KEY=$(echo "$CLAUDE_TOKEN_OUTPUT" | grep -o 'sk-ant-[a-zA-Z0-9_-]*' | head -1)
+                    spinner_stop "ok" "Token generated"
+                else
+                    spinner_stop "warn" "Token may need manual entry"
+                    echo
+                    info "If a token was displayed, enter it below."
+                    info "Otherwise, check the browser window that opened."
+                    echo
+                    LLM_API_KEY=$(ask_secret "OAuth token (starts with sk-ant-):")
+                fi
+            else
+                err "Authentication cancelled"
+                exit 1
+            fi
+
+            [ -z "$LLM_API_KEY" ] && { err "Token required"; exit 1; }
+            LLM_PROVIDER="anthropic"
+            LLM_MODEL="claude-sonnet-4-20250514"
+            ok "Using Claude Code subscription"
+            ;;
+        2)
+            # Anthropic API key
+            echo
+            info "  Get your API key from: console.anthropic.com"
+            echo
+            LLM_API_KEY=$(ask_secret "Anthropic API Key:")
+            [ -z "$LLM_API_KEY" ] && { err "API key required"; exit 1; }
+            LLM_PROVIDER="anthropic"
+            LLM_MODEL="claude-sonnet-4-20250514"
+            ok "Using Anthropic API (Claude)"
+            ;;
+        3)
+            # OpenAI API key
+            echo
+            info "  Get your API key from: platform.openai.com/api-keys"
+            echo
+            LLM_API_KEY=$(ask_secret "OpenAI API Key:")
+            [ -z "$LLM_API_KEY" ] && { err "API key required"; exit 1; }
+            LLM_PROVIDER="openai"
+            LLM_MODEL="gpt-4o"
+            ok "Using OpenAI API (GPT-4)"
+            ;;
+        4)
+            # Google Gemini API key
+            echo
+            info "  Get your API key from: aistudio.google.com/apikey"
+            echo
+            LLM_API_KEY=$(ask_secret "Google Gemini API Key:")
+            [ -z "$LLM_API_KEY" ] && { err "API key required"; exit 1; }
+            LLM_PROVIDER="gemini"
+            LLM_MODEL="gemini/gemini-1.5-pro"
+            ok "Using Google Gemini API"
+            ;;
+        *)
+            err "Invalid choice"
+            exit 1
+            ;;
+    esac
+
+    # For backward compatibility, also set CLAUDE_API_KEY
+    CLAUDE_API_KEY="$LLM_API_KEY"
 fi
 
 # =============================================================================
@@ -961,14 +1010,22 @@ fi
 
 section "Step 8: Starting Ludolph"
 
+# Set default values if not set (for saved credentials case)
+LLM_MODEL="${LLM_MODEL:-claude-sonnet-4-20250514}"
+LLM_PROVIDER="${LLM_PROVIDER:-anthropic}"
+LLM_API_KEY="${LLM_API_KEY:-$CLAUDE_API_KEY}"
+
 # Pi config includes MCP connection details
 PI_CONFIG="[telegram]
 bot_token = \"$TELEGRAM_TOKEN\"
 allowed_users = [$TELEGRAM_USER_ID]
 
 [claude]
-api_key = \"$CLAUDE_API_KEY\"
-model = \"claude-sonnet-4-20250514\"
+api_key = \"$LLM_API_KEY\"
+model = \"$LLM_MODEL\"
+
+[llm]
+model = \"$LLM_MODEL\"
 
 [mcp]
 url = \"http://$MAC_IP:$MCP_PORT\"

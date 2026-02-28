@@ -28,6 +28,10 @@ pub enum LlmProvider {
     ClaudeCode,
     /// Use Anthropic API key (pay-per-use)
     AnthropicApi,
+    /// Use `OpenAI` API (GPT-4, `ChatGPT`)
+    OpenAI,
+    /// Use Google Gemini API
+    Gemini,
 }
 
 /// Collected credentials from setup wizard.
@@ -68,20 +72,24 @@ fn print_warning() {
 fn select_llm_provider() -> Result<LlmProvider> {
     println!();
     println!(
-        "{} How would you like to authenticate with Claude?",
+        "{} Which AI provider would you like to use?",
         style("π").bold()
     );
     println!();
 
     let options = &[
         "Claude Code subscription (uses your Max plan credits)",
-        "Anthropic API key (pay-per-use, billed separately)",
+        "Anthropic API (Claude, pay-per-use)",
+        "OpenAI API (GPT-4, ChatGPT)",
+        "Google Gemini API",
     ];
 
     let selection = Select::new().items(options).default(0).interact()?;
 
     Ok(match selection {
         0 => LlmProvider::ClaudeCode,
+        2 => LlmProvider::OpenAI,
+        3 => LlmProvider::Gemini,
         _ => LlmProvider::AnthropicApi,
     })
 }
@@ -148,6 +156,60 @@ fn get_claude_code_token() -> Result<String> {
     Ok(manual_token)
 }
 
+/// Collect LLM provider credentials based on selected provider.
+async fn collect_llm_key(provider: LlmProvider, existing: Option<&Config>) -> Result<String> {
+    match provider {
+        LlmProvider::ClaudeCode => get_claude_code_token(),
+        LlmProvider::AnthropicApi => {
+            let config = PromptConfig::new("Anthropic API key", "Powers the AI responses.")
+                .with_url("https://console.anthropic.com/settings/keys");
+            let key = ui::prompt::prompt_validated(
+                &config,
+                existing.map(|c| c.claude.api_key.as_str()),
+                ui::prompt::validate_claude_key,
+            )?;
+            let existing_key = existing.map_or("", |c| c.claude.api_key.as_str());
+            if key != existing_key {
+                let spinner = Spinner::new("Validating API key...");
+                match ui::prompt::validate_claude_key_api(&key).await {
+                    Ok(()) => spinner.finish(),
+                    Err(e) => {
+                        spinner.finish_error();
+                        anyhow::bail!("API key validation failed: {e}");
+                    }
+                }
+            }
+            Ok(key)
+        }
+        LlmProvider::OpenAI => {
+            let config = PromptConfig::new("OpenAI API key", "Powers GPT-4 responses.")
+                .with_url("https://platform.openai.com/api-keys");
+            ui::prompt::prompt_validated(&config, None, |key| {
+                if key.is_empty() {
+                    return Err("API key cannot be empty");
+                }
+                if !key.starts_with("sk-") {
+                    return Err("Should start with 'sk-'");
+                }
+                Ok(())
+            })
+        }
+        LlmProvider::Gemini => {
+            let config = PromptConfig::new("Google Gemini API key", "Powers Gemini responses.")
+                .with_url("https://aistudio.google.com/apikey");
+            ui::prompt::prompt_validated(&config, None, |key| {
+                if key.is_empty() {
+                    return Err("API key cannot be empty");
+                }
+                if key.len() < 20 {
+                    return Err("Key looks too short");
+                }
+                Ok(())
+            })
+        }
+    }
+}
+
 /// Collect API credentials and vault path from user.
 pub async fn collect_credentials(existing: Option<&Config>) -> Result<Credentials> {
     // Telegram bot token
@@ -193,38 +255,7 @@ pub async fn collect_credentials(existing: Option<&Config>) -> Result<Credential
 
     // LLM provider selection
     let llm_provider = select_llm_provider()?;
-
-    let claude_key = match llm_provider {
-        LlmProvider::ClaudeCode => {
-            // Use Claude Code subscription via OAuth token
-            get_claude_code_token()?
-        }
-        LlmProvider::AnthropicApi => {
-            // Traditional API key flow
-            let claude_config = PromptConfig::new("Claude API key", "Powers the AI responses.")
-                .with_url("https://console.anthropic.com/settings/keys");
-
-            let key = ui::prompt::prompt_validated(
-                &claude_config,
-                existing.map(|c| c.claude.api_key.as_str()),
-                ui::prompt::validate_claude_key,
-            )?;
-
-            // Validate Claude key against API
-            let existing_key = existing.map_or("", |c| c.claude.api_key.as_str());
-            if key != existing_key {
-                let spinner = Spinner::new("Validating API key...");
-                match ui::prompt::validate_claude_key_api(&key).await {
-                    Ok(()) => spinner.finish(),
-                    Err(e) => {
-                        spinner.finish_error();
-                        anyhow::bail!("API key validation failed: {e}");
-                    }
-                }
-            }
-            key
-        }
-    };
+    let claude_key = collect_llm_key(llm_provider, existing).await?;
 
     // Vault path
     let vault_config = PromptConfig::new(
@@ -396,6 +427,8 @@ pub async fn setup() -> Result<()> {
     let provider_name = match creds.llm_provider {
         LlmProvider::ClaudeCode => "Claude Code subscription",
         LlmProvider::AnthropicApi => "Anthropic API",
+        LlmProvider::OpenAI => "OpenAI API",
+        LlmProvider::Gemini => "Google Gemini",
     };
     StatusLine::ok(format!("LLM: {provider_name}")).print();
     if let Some(ref pi) = cfg.pi {
