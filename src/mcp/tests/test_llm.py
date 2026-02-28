@@ -110,3 +110,28 @@ def test_chat_raises_on_api_error():
         status_code=500,
     )), pytest.raises(LlmApiError):
         chat(model="claude-sonnet-4", messages=[{"role": "user", "content": "Hi"}])
+
+
+def test_chat_stream_yields_chunks():
+    """Streaming chat yields content chunks."""
+    from llm import chat_stream
+
+    mock_chunk1 = MagicMock()
+    mock_chunk1.choices = [MagicMock()]
+    mock_chunk1.choices[0].delta.content = "Hello"
+    mock_chunk1.choices[0].delta.tool_calls = None
+
+    mock_chunk2 = MagicMock()
+    mock_chunk2.choices = [MagicMock()]
+    mock_chunk2.choices[0].delta.content = " world!"
+    mock_chunk2.choices[0].delta.tool_calls = None
+
+    with patch("llm.completion", return_value=iter([mock_chunk1, mock_chunk2])):
+        chunks = list(chat_stream(
+            model="claude-sonnet-4",
+            messages=[{"role": "user", "content": "Hi"}],
+        ))
+
+    assert len(chunks) == 2
+    assert chunks[0]["content"] == "Hello"
+    assert chunks[1]["content"] == " world!"

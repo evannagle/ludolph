@@ -163,3 +163,22 @@ def test_chat_rejects_missing_messages(client):
     assert response.status_code == 400
     data = response.get_json()
     assert data["error"] == "invalid_input"
+
+
+def test_chat_stream_returns_sse(client):
+    """Chat stream returns Server-Sent Events."""
+    with patch("mcp.server.llm_chat_stream", return_value=iter([
+        {"content": "Hello", "tool_calls": None},
+        {"content": " world", "tool_calls": None},
+    ])):
+        response = client.post(
+            "/chat/stream",
+            json={"model": "claude-sonnet-4", "messages": [{"role": "user", "content": "Hi"}]},
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+    assert response.status_code == 200
+    assert response.content_type == "text/event-stream; charset=utf-8"
+    data = response.data.decode("utf-8")
+    assert 'data: {"content": "Hello"' in data
+    assert "[DONE]" in data

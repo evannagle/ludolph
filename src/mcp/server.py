@@ -18,7 +18,9 @@ import os
 import signal
 from pathlib import Path
 
-from flask import Flask, jsonify, request
+import json
+
+from flask import Flask, Response, jsonify, request
 
 from .llm import (
     LlmApiError,
@@ -28,6 +30,7 @@ from .llm import (
 )
 from .llm import (
     chat as llm_chat,
+    chat_stream as llm_chat_stream,
 )
 from .security import get_vault_path, init_security, is_git_repo, require_auth
 from .tools import call_tool, get_tool_definitions, reload_tools
@@ -103,6 +106,35 @@ def chat():
         return jsonify({"error": "api_error", "message": str(e)}), 502
     except Exception as e:
         return jsonify({"error": "internal_error", "message": "An unexpected error occurred"}), 500
+
+
+@app.route("/chat/stream", methods=["POST"])
+@require_auth
+def chat_stream():
+    """Stream chat response via Server-Sent Events."""
+    data = request.json or {}
+    model = data.get("model", "claude-sonnet-4")
+    messages = data.get("messages", [])
+    tools = data.get("tools")
+
+    if not messages or not isinstance(messages, list):
+        return jsonify({"error": "invalid_input", "message": "messages must be a non-empty list"}), 400
+
+    def generate():
+        try:
+            for chunk in llm_chat_stream(model=model, messages=messages, tools=tools):
+                yield f"data: {json.dumps(chunk)}\n\n"
+            yield "data: [DONE]\n\n"
+        except LlmAuthError as e:
+            yield f"data: {json.dumps({'error': 'auth_failed', 'message': str(e)})}\n\n"
+        except LlmBudgetError as e:
+            yield f"data: {json.dumps({'error': 'budget_exceeded', 'message': str(e)})}\n\n"
+        except LlmRateLimitError as e:
+            yield f"data: {json.dumps({'error': 'rate_limit', 'message': str(e)})}\n\n"
+        except LlmApiError as e:
+            yield f"data: {json.dumps({'error': 'api_error', 'message': str(e)})}\n\n"
+
+    return Response(generate(), mimetype="text/event-stream")
 
 
 def main():
