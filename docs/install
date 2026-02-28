@@ -814,13 +814,16 @@ PLISTEOF
     spinner_start "Starting vault server..."
 
     # Stop any existing ludolph server
-    launchctl unload "$PLIST_PATH" 2>/dev/null || true
+    USER_ID=$(id -u)
+    launchctl bootout gui/$USER_ID/dev.ludolph.mcp 2>/dev/null || true
     pkill -f "mcp.server" 2>/dev/null || true
     # Kill anything on our port
     lsof -ti :$MCP_PORT 2>/dev/null | xargs kill -9 2>/dev/null || true
     sleep 2
 
-    launchctl load "$PLIST_PATH" 2>/dev/null
+    # Load and start the service
+    launchctl bootstrap gui/$USER_ID "$PLIST_PATH" 2>/dev/null || true
+    launchctl kickstart gui/$USER_ID/dev.ludolph.mcp 2>/dev/null || true
 
     # Wait for server to respond (retry up to 5 times)
     SERVER_OK=false
@@ -873,8 +876,9 @@ PLISTEOF
         fi
         echo
         info "After fixing, restart with:"
-        info "  launchctl unload ~/Library/LaunchAgents/dev.ludolph.mcp.plist"
-        info "  launchctl load ~/Library/LaunchAgents/dev.ludolph.mcp.plist"
+        info "  launchctl bootout gui/\$(id -u)/dev.ludolph.mcp"
+        info "  launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/dev.ludolph.mcp.plist"
+        info "  launchctl kickstart gui/\$(id -u)/dev.ludolph.mcp"
         exit 1
     fi
 fi
