@@ -137,14 +137,36 @@ def chat_stream():
     return Response(generate(), mimetype="text/event-stream")
 
 
+def _load_env_file():
+    """Load .env file if it exists."""
+    env_file = Path(__file__).parent / ".env"
+    if env_file.exists():
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key not in os.environ:  # Don't override existing env vars
+                    os.environ[key] = value
+
+
 def main():
     """Run the server."""
+    # Load .env file first
+    _load_env_file()
+
     vault_path = Path(os.environ.get("VAULT_PATH", "~/vault")).expanduser().resolve()
     auth_token = os.environ.get("AUTH_TOKEN", "")
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     port = int(os.environ.get("PORT", 8200))
 
     if not auth_token:
         print("Warning: AUTH_TOKEN not set - server is unprotected!")
+
+    if not api_key:
+        print("Warning: ANTHROPIC_API_KEY not set - LLM proxy won't work!")
+        print("Run 'python -m setup_llm' to configure credentials.")
 
     if not vault_path.exists():
         print(f"Warning: Vault path does not exist: {vault_path}")

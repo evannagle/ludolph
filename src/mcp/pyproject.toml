@@ -9,8 +9,12 @@ dependencies = [
 ]
 
 [tool.setuptools]
-py-modules = ["server", "security", "llm"]
+py-modules = ["server", "security", "llm", "setup_llm"]
 packages = ["tools"]
+
+[project.scripts]
+ludolph-mcp = "server:main"
+ludolph-mcp-setup = "setup_llm:main"
 
 [project.optional-dependencies]
 dev = [
