@@ -46,6 +46,62 @@ struct ToolDefinition {
     input_schema: Value,
 }
 
+/// Chat request to the LLM proxy.
+#[derive(Serialize)]
+pub struct ChatRequest {
+    pub model: String,
+    pub messages: Vec<ChatMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Value>>,
+}
+
+/// A chat message.
+#[derive(Serialize, Clone)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: ChatContent,
+}
+
+/// Content can be text or a list of content blocks.
+#[derive(Serialize, Clone)]
+#[serde(untagged)]
+pub enum ChatContent {
+    Text(String),
+    Blocks(Vec<Value>),
+}
+
+/// Chat response from the LLM proxy.
+#[derive(Deserialize)]
+pub struct ChatResponse {
+    pub content: Option<String>,
+    pub tool_calls: Option<Vec<ToolCall>>,
+    #[serde(default)]
+    pub usage: Value,
+}
+
+/// A tool call from the LLM.
+#[derive(Deserialize, Clone)]
+pub struct ToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub call_type: String,
+    pub function: ToolCallFunction,
+}
+
+/// Tool call function details.
+#[derive(Deserialize, Clone)]
+pub struct ToolCallFunction {
+    pub name: String,
+    pub arguments: String,
+}
+
+/// Error response from the chat endpoint.
+#[derive(Deserialize)]
+struct ChatError {
+    error: String,
+    message: String,
+}
+
 impl McpClient {
     /// Create a new MCP client from configuration.
     #[must_use]
@@ -378,6 +434,45 @@ impl McpClient {
         };
 
         anyhow::anyhow!(msg)
+    }
+
+    /// Send a chat request to the MCP server's LLM proxy.
+    pub async fn chat(&self, request: &ChatRequest) -> Result<ChatResponse> {
+        let response = self
+            .client
+            .post(format!("{}/chat", self.base_url))
+            .header("Authorization", format!("Bearer {}", self.auth_token))
+            .header("Content-Type", "application/json")
+            .json(request)
+            .send()
+            .await
+            .map_err(|e| Self::format_connection_error(&e, &self.base_url, "chat"))?;
+
+        let status = response.status();
+
+        if !status.is_success() {
+            let error: ChatError = response.json().await.unwrap_or(ChatError {
+                error: "unknown".to_string(),
+                message: format!("HTTP {status}"),
+            });
+
+            let msg = match error.error.as_str() {
+                "auth_failed" => "Invalid API credentials. Check MCP server config.".to_string(),
+                "budget_exceeded" => {
+                    "Credits exhausted. Add credits or switch models.".to_string()
+                }
+                "rate_limit" => "Rate limited. Wait and retry.".to_string(),
+                "invalid_input" => error.message,
+                _ => error.message,
+            };
+
+            return Err(anyhow::anyhow!(msg));
+        }
+
+        response
+            .json()
+            .await
+            .context("Failed to parse chat response")
     }
 }
 
