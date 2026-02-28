@@ -44,13 +44,22 @@ fn print_warning() {
     println!();
     println!("{}", style("Before you continue:").bold());
     println!();
-    println!("  {} Ludolph gives Claude AI read access to your vault.", style("1.").dim());
+    println!(
+        "  {} Ludolph gives Claude AI read access to your vault.",
+        style("1.").dim()
+    );
     println!("     Your notes are sent to Anthropic's servers for processing.");
     println!();
-    println!("  {} AI can make mistakes. Don't rely on it for critical decisions.", style("2.").dim());
+    println!(
+        "  {} AI can make mistakes. Don't rely on it for critical decisions.",
+        style("2.").dim()
+    );
     println!("     Always verify important information yourself.");
     println!();
-    println!("  {} API usage incurs costs. Monitor your usage at", style("3.").dim());
+    println!(
+        "  {} API usage incurs costs. Monitor your usage at",
+        style("3.").dim()
+    );
     println!("     https://console.anthropic.com/settings/usage");
     println!();
 }
@@ -58,7 +67,10 @@ fn print_warning() {
 /// Prompt user to select their LLM provider.
 fn select_llm_provider() -> Result<LlmProvider> {
     println!();
-    println!("{} {}", style("π").bold(), "How would you like to authenticate with Claude?");
+    println!(
+        "{} How would you like to authenticate with Claude?",
+        style("π").bold()
+    );
     println!();
 
     let options = &[
@@ -66,10 +78,7 @@ fn select_llm_provider() -> Result<LlmProvider> {
         "Anthropic API key (pay-per-use, billed separately)",
     ];
 
-    let selection = Select::new()
-        .items(options)
-        .default(0)
-        .interact()?;
+    let selection = Select::new().items(options).default(0).interact()?;
 
     Ok(match selection {
         0 => LlmProvider::ClaudeCode,
@@ -78,7 +87,7 @@ fn select_llm_provider() -> Result<LlmProvider> {
 }
 
 /// Get Claude Code OAuth token using `claude setup-token`.
-async fn get_claude_code_token() -> Result<String> {
+fn get_claude_code_token() -> Result<String> {
     use std::process::Command;
 
     // Check if claude CLI is available
@@ -188,7 +197,7 @@ pub async fn collect_credentials(existing: Option<&Config>) -> Result<Credential
     let claude_key = match llm_provider {
         LlmProvider::ClaudeCode => {
             // Use Claude Code subscription via OAuth token
-            get_claude_code_token().await?
+            get_claude_code_token()?
         }
         LlmProvider::AnthropicApi => {
             // Traditional API key flow

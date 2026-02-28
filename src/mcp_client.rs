@@ -451,18 +451,15 @@ impl McpClient {
         let status = response.status();
 
         if !status.is_success() {
-            let error: ChatError = response.json().await.unwrap_or(ChatError {
+            let error: ChatError = response.json().await.unwrap_or_else(|_| ChatError {
                 error: "unknown".to_string(),
                 message: format!("HTTP {status}"),
             });
 
             let msg = match error.error.as_str() {
                 "auth_failed" => "Invalid API credentials. Check MCP server config.".to_string(),
-                "budget_exceeded" => {
-                    "Credits exhausted. Add credits or switch models.".to_string()
-                }
+                "budget_exceeded" => "Credits exhausted. Add credits or switch models.".to_string(),
                 "rate_limit" => "Rate limited. Wait and retry.".to_string(),
-                "invalid_input" => error.message,
                 _ => error.message,
             };
 

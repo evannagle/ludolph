@@ -13,8 +13,8 @@ use teloxide::types::{ChatAction, ChatId, MessageId, ParseMode, ReactionType, Re
 use tokio::sync::oneshot;
 use tokio::time::{Duration, interval};
 
-use crate::llm::Llm;
 use crate::config::{Config, McpConfig, config_dir};
+use crate::llm::Llm;
 use crate::mcp_client::McpClient;
 use crate::memory::Memory;
 use crate::setup::{SETUP_SYSTEM_PROMPT, initial_setup_message};

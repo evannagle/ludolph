@@ -1,18 +1,18 @@
 //! LLM client that proxies through MCP server.
 //!
 //! Replaces direct Anthropic API calls with MCP-proxied requests,
-//! enabling multi-provider support via LiteLLM on the server.
+//! enabling multi-provider support via `LiteLLM` on the server.
 
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::config::Config;
 use crate::mcp_client::{ChatContent, ChatMessage, ChatRequest, McpClient, ToolCall};
 use crate::memory::Memory;
 use crate::setup::SETUP_COMPLETE_MARKER;
-use crate::tools::{execute_tool_local, Tool};
+use crate::tools::{Tool, execute_tool_local};
 
 /// Result of a setup-aware chat session.
 pub struct SetupChatResult {
@@ -64,22 +64,20 @@ impl Llm {
 
         let mcp_client = McpClient::from_config(mcp_config);
 
-        let tool_backend = if let Some(vault) = &config.vault {
-            ToolBackend::Local {
-                vault_path: vault.path.clone(),
-            }
-        } else {
-            ToolBackend::Mcp {
+        let tool_backend = config.vault.as_ref().map_or_else(
+            || ToolBackend::Mcp {
                 client: mcp_client.clone(),
-            }
-        };
+            },
+            |vault| ToolBackend::Local {
+                vault_path: vault.path.clone(),
+            },
+        );
 
         // Get model from [llm] section, fall back to [claude] for backward compatibility
         let model = config
             .llm
             .as_ref()
-            .map(|l| l.model.clone())
-            .unwrap_or_else(|| config.claude.model.clone());
+            .map_or_else(|| config.claude.model.clone(), |l| l.model.clone());
 
         Ok(Self {
             mcp_client,
@@ -203,7 +201,7 @@ impl Llm {
 
         for tc in tool_calls {
             let input: Value = serde_json::from_str(&tc.function.arguments)
-                .unwrap_or(Value::Object(Default::default()));
+                .unwrap_or_else(|_| Value::Object(Map::default()));
 
             tracing::debug!("Executing tool: {}", tc.function.name);
             tracing::trace!("Tool input: {:?}", input);
@@ -269,13 +267,11 @@ impl Llm {
 
             tracing::debug!("Calling MCP chat endpoint");
             let response = self.mcp_client.chat(&request).await?;
+            tracing::debug!("LLM usage: {:?}", response.usage);
 
             if let Some(tool_calls) = &response.tool_calls {
                 if !tool_calls.is_empty() {
-                    tracing::debug!(
-                        "Received {} tool calls, continuing loop",
-                        tool_calls.len()
-                    );
+                    tracing::debug!("Received {} tool calls, continuing loop", tool_calls.len());
 
                     // Add assistant message with tool calls
                     messages.push(ChatMessage {
@@ -377,6 +373,7 @@ impl Llm {
             };
 
             let response = self.mcp_client.chat(&request).await?;
+            tracing::debug!("LLM usage: {:?}", response.usage);
 
             if let Some(tool_calls) = &response.tool_calls {
                 if !tool_calls.is_empty() {
@@ -391,7 +388,7 @@ impl Llm {
                     let mut results = Vec::new();
                     for tc in tool_calls {
                         let input: Value = serde_json::from_str(&tc.function.arguments)
-                            .unwrap_or(Value::Object(Default::default()));
+                            .unwrap_or_else(|_| Value::Object(Map::default()));
 
                         let result = self.execute_tool(&tc.function.name, &input).await;
 
