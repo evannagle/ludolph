@@ -72,6 +72,7 @@ fn print_warning() {
     );
     println!("     your provider's dashboard.");
     println!();
+    println!("If you understand, type the first five digits of pi after 3.14");
 }
 
 /// Prompt user to select their LLM provider.
@@ -381,8 +382,9 @@ pub async fn setup() -> Result<()> {
     // Warning about AI limitations and privacy
     print_warning();
 
-    let proceed = ui::prompt::confirm("I understand and want to continue")?;
-    if !proceed {
+    let answer: String = dialoguer::Input::new().with_prompt("π").interact_text()?;
+
+    if answer.trim() != "15926" {
         println!();
         println!("  Setup cancelled.");
         println!();

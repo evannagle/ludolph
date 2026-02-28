@@ -212,8 +212,12 @@ echo
 info "  4. API usage incurs costs. Monitor your usage at"
 info "     your provider's dashboard."
 echo
+info "If you understand, type the first five digits of pi after 3.14"
+echo
+printf "${CYAN}π${NC} "
+read -r PI_ANSWER
 
-if ! confirm "I understand and want to continue"; then
+if [ "$PI_ANSWER" != "15926" ]; then
     echo
     info "Setup cancelled."
     echo
