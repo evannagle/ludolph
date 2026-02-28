@@ -1298,7 +1298,7 @@ info "Everything is connected and ready."
 echo
 rule
 echo
-info "Test it now - send /poke in Telegram"
+info "Test it now - send /setup in Telegram"
 echo
 rule
 echo
