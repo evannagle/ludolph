@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub telegram: TelegramConfig,
     pub claude: ClaudeConfig,
+    /// LLM configuration (new style - uses MCP proxy)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm: Option<LlmConfig>,
     /// Local vault path (only needed on Mac, not on Pi with MCP)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vault: Option<VaultConfig>,
@@ -35,6 +38,22 @@ pub struct ClaudeConfig {
     pub api_key: String,
     #[serde(default = "default_model")]
     pub model: String,
+}
+
+/// LLM configuration (new style - provider-agnostic).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmConfig {
+    /// Model identifier (e.g., "claude-sonnet-4", "gpt-4o", "ollama/llama3")
+    #[serde(default = "default_model")]
+    pub model: String,
+}
+
+impl Default for LlmConfig {
+    fn default() -> Self {
+        Self {
+            model: default_model(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,6 +181,7 @@ impl Config {
                 api_key: claude_api_key,
                 model: default_model(),
             },
+            llm: None, // Uses claude config by default for backward compatibility
             vault: vault_path.map(|path| VaultConfig { path }),
             pi,
             mcp,
