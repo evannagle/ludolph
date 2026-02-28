@@ -815,8 +815,10 @@ PLISTEOF
 
     # Stop any existing ludolph server
     launchctl unload "$PLIST_PATH" 2>/dev/null || true
-    pkill -f "ludolph/mcp/server.py" 2>/dev/null || true
-    sleep 1
+    pkill -f "mcp.server" 2>/dev/null || true
+    # Kill anything on our port
+    lsof -ti :$MCP_PORT 2>/dev/null | xargs kill -9 2>/dev/null || true
+    sleep 2
 
     launchctl load "$PLIST_PATH" 2>/dev/null
 
@@ -838,11 +840,7 @@ PLISTEOF
 
         # Try to get the actual error by running the server directly
         info "Diagnosing..."
-        SERVER_ERROR=$(cd "$LOCAL_DIR" && $PYTHON_PATH -m mcp.server 2>&1 &
-            SERVER_PID=$!
-            sleep 2
-            kill $SERVER_PID 2>/dev/null
-        ) 2>&1 || true
+        SERVER_ERROR=$(cd "$LOCAL_DIR" && timeout 3 $PYTHON_PATH -m mcp.server 2>&1) || true
 
         if echo "$SERVER_ERROR" | grep -q "ModuleNotFoundError"; then
             MISSING_MODULE=$(echo "$SERVER_ERROR" | grep "ModuleNotFoundError" | sed "s/.*No module named '\([^']*\)'.*/\1/")
@@ -850,6 +848,15 @@ PLISTEOF
             echo
             info "Install it with:"
             info "  pip3 install --user --break-system-packages $MISSING_MODULE"
+        elif echo "$SERVER_ERROR" | grep -qi "Address already in use"; then
+            err "Port $MCP_PORT is already in use"
+            echo
+            info "Kill the process using it:"
+            info "  lsof -ti :$MCP_PORT | xargs kill -9"
+            info "Then re-run this installer"
+        elif echo "$SERVER_ERROR" | grep -qi "error\|traceback\|exception"; then
+            info "Error output:"
+            echo "$SERVER_ERROR" | tail -10
         elif [ -f "$LOCAL_DIR/mcp/server.log" ] && [ -s "$LOCAL_DIR/mcp/server.log" ]; then
             info "Server log:"
             tail -5 "$LOCAL_DIR/mcp/server.log"
