@@ -80,7 +80,7 @@ pub struct ChatResponse {
 }
 
 /// A tool call from the LLM.
-#[derive(Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct ToolCall {
     pub id: String,
     #[serde(rename = "type")]
@@ -89,7 +89,7 @@ pub struct ToolCall {
 }
 
 /// Tool call function details.
-#[derive(Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct ToolCallFunction {
     pub name: String,
     pub arguments: String,

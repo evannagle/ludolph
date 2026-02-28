@@ -2,6 +2,7 @@ mod bot;
 mod claude;
 mod cli;
 mod config;
+mod llm;
 mod mcp_client;
 mod memory;
 mod setup;
