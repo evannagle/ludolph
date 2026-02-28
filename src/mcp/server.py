@@ -20,6 +20,15 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request
 
+from .llm import (
+    LlmApiError,
+    LlmAuthError,
+    LlmBudgetError,
+    LlmRateLimitError,
+)
+from .llm import (
+    chat as llm_chat,
+)
 from .security import get_vault_path, init_security, is_git_repo, require_auth
 from .tools import call_tool, get_tool_definitions, reload_tools
 
@@ -66,6 +75,34 @@ def tools_call():
 
     result = call_tool(name, arguments)
     return jsonify(result)
+
+
+@app.route("/chat", methods=["POST"])
+@require_auth
+def chat():
+    """Proxy chat request to LLM provider via LiteLLM."""
+    data = request.json or {}
+    model = data.get("model", "claude-sonnet-4")
+    messages = data.get("messages", [])
+    tools = data.get("tools")
+
+    # Validate required fields
+    if not messages or not isinstance(messages, list):
+        return jsonify({"error": "invalid_input", "message": "messages must be a non-empty list"}), 400
+
+    try:
+        result = llm_chat(model=model, messages=messages, tools=tools)
+        return jsonify(result)
+    except LlmAuthError as e:
+        return jsonify({"error": "auth_failed", "message": str(e)}), 401
+    except LlmBudgetError as e:
+        return jsonify({"error": "budget_exceeded", "message": str(e)}), 402
+    except LlmRateLimitError as e:
+        return jsonify({"error": "rate_limit", "message": str(e)}), 429
+    except LlmApiError as e:
+        return jsonify({"error": "api_error", "message": str(e)}), 502
+    except Exception as e:
+        return jsonify({"error": "internal_error", "message": "An unexpected error occurred"}), 500
 
 
 def main():
