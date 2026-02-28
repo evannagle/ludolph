@@ -724,17 +724,17 @@ if ! $IS_PI; then
     MCP_VERSION=$(cat "$LOCAL_DIR/mcp/VERSION" 2>/dev/null || echo "unknown")
     ok "MCP server version: $MCP_VERSION"
 
-    # Install Flask
-    spinner_start "Installing Flask..."
-    if pip3 install --user -q flask 2>/dev/null; then
-        spinner_stop "ok" "Flask installed"
-    elif python3 -m pip install --user -q flask 2>/dev/null; then
-        spinner_stop "ok" "Flask installed"
-    elif pip3 install --break-system-packages -q flask 2>/dev/null; then
-        spinner_stop "ok" "Flask installed"
+    # Install Python dependencies
+    spinner_start "Installing Python dependencies..."
+    if pip3 install --user -q flask litellm 2>/dev/null; then
+        spinner_stop "ok" "Dependencies installed"
+    elif python3 -m pip install --user -q flask litellm 2>/dev/null; then
+        spinner_stop "ok" "Dependencies installed"
+    elif pip3 install --break-system-packages -q flask litellm 2>/dev/null; then
+        spinner_stop "ok" "Dependencies installed"
     else
-        spinner_stop "err" "Could not install Flask"
-        info "Run: pip3 install flask"
+        spinner_stop "err" "Could not install dependencies"
+        info "Run: pip3 install flask litellm"
         info "Then re-run this installer"
         exit 1
     fi
