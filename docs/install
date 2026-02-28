@@ -194,6 +194,30 @@ if ! confirm "Ready to begin?"; then
 fi
 
 # =============================================================================
+# Warning / Disclaimer
+# =============================================================================
+
+echo
+printf "${BOLD}Before you continue:${NC}\n"
+echo
+info "  1. Ludolph gives Claude AI read access to your vault."
+info "     Your notes are sent to Anthropic's servers for processing."
+echo
+info "  2. AI can make mistakes. Don't rely on it for critical decisions."
+info "     Always verify important information yourself."
+echo
+info "  3. API usage incurs costs. Monitor your usage at"
+info "     https://console.anthropic.com/settings/usage"
+echo
+
+if ! confirm "I understand and want to continue"; then
+    echo
+    info "Setup cancelled."
+    echo
+    exit 0
+fi
+
+# =============================================================================
 # Load Existing Config (for re-runs)
 # =============================================================================
 
@@ -840,16 +864,13 @@ if [ -n "$SAVED_TELEGRAM_TOKEN" ] && [ -n "$SAVED_CLAUDE_KEY" ]; then
 fi
 
 if [ -z "$SAVED_TELEGRAM_TOKEN" ]; then
-    info "Ludolph needs two API keys to work:"
-    echo
-    info "  1. Telegram Bot Token - creates your bot"
-    info "     Get one from @BotFather: t.me/BotFather"
-    echo
-    info "  2. Claude API Key - powers the AI"
-    info "     Get one from: console.anthropic.com"
+    info "Ludolph needs a Telegram bot and Claude credentials."
     echo
 
-    pause
+    # Telegram Bot Token
+    info "  Telegram Bot Token - creates your bot"
+    info "  Get one from @BotFather: t.me/BotFather"
+    echo
 
     TELEGRAM_TOKEN=$(ask_secret "Telegram Bot Token:")
     [ -z "$TELEGRAM_TOKEN" ] && { err "Token required"; exit 1; }
@@ -872,9 +893,66 @@ if [ -z "$SAVED_TELEGRAM_TOKEN" ]; then
     TELEGRAM_USER_ID=$(ask "Your Telegram User ID (get from @userinfobot):" "$SAVED_TELEGRAM_USER")
     [ -z "$TELEGRAM_USER_ID" ] && { err "User ID required"; exit 1; }
 
+    # LLM Provider Selection
     echo
-    CLAUDE_API_KEY=$(ask_secret "Claude API Key:")
-    [ -z "$CLAUDE_API_KEY" ] && { err "API key required"; exit 1; }
+    printf "${BOLD}How would you like to authenticate with Claude?${NC}\n"
+    echo
+    info "  1. Claude Code subscription (uses your Max plan credits)"
+    info "  2. Anthropic API key (pay-per-use, billed separately)"
+    echo
+
+    LLM_CHOICE=$(ask "Enter 1 or 2:" "2")
+
+    if [ "$LLM_CHOICE" = "1" ]; then
+        # Claude Code subscription
+        if ! command -v claude &>/dev/null; then
+            err "Claude Code CLI not found"
+            echo
+            info "Install it first:"
+            info "  npm install -g @anthropic-ai/claude-code"
+            echo
+            info "Then re-run this installer."
+            exit 1
+        fi
+
+        echo
+        info "This will open a browser to authenticate with your Claude subscription."
+        info "The generated token will be saved for Ludolph to use."
+        echo
+
+        if confirm "Continue with Claude Code authentication?"; then
+            spinner_start "Running claude setup-token..."
+            CLAUDE_TOKEN_OUTPUT=$(claude setup-token 2>&1 || true)
+
+            # Check if we got a token
+            if echo "$CLAUDE_TOKEN_OUTPUT" | grep -q "sk-ant-"; then
+                CLAUDE_API_KEY=$(echo "$CLAUDE_TOKEN_OUTPUT" | grep -o 'sk-ant-[a-zA-Z0-9_-]*' | head -1)
+                spinner_stop "ok" "Token generated"
+            else
+                spinner_stop "warn" "Token may need manual entry"
+                echo
+                info "If a token was displayed, enter it below."
+                info "Otherwise, check the browser window that opened."
+                echo
+                CLAUDE_API_KEY=$(ask_secret "OAuth token (starts with sk-ant-):")
+            fi
+        else
+            err "Authentication cancelled"
+            exit 1
+        fi
+
+        [ -z "$CLAUDE_API_KEY" ] && { err "Token required"; exit 1; }
+        ok "Using Claude Code subscription"
+    else
+        # Anthropic API key
+        echo
+        info "  Claude API Key - powers the AI"
+        info "  Get one from: console.anthropic.com"
+        echo
+        CLAUDE_API_KEY=$(ask_secret "Claude API Key:")
+        [ -z "$CLAUDE_API_KEY" ] && { err "API key required"; exit 1; }
+        ok "Using Anthropic API"
+    fi
 fi
 
 # =============================================================================
