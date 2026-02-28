@@ -36,11 +36,7 @@ dirs = "5"
 rand = "0.9"
 rusqlite = { version = "0.31", features = ["bundled"] }
 chrono = { version = "0.4", features = ["serde"] }
-anthropic-sdk-rust = "0.1"
 futures = "0.3"
-# Required for ARM cross-compilation - anthropic-sdk-rust pulls native-tls which needs OpenSSL.
-# Vendored feature compiles OpenSSL from source, avoiding system library requirements in CI.
-openssl = { version = "0.10", features = ["vendored"] }
 
 [dev-dependencies]
 cargo-husky = { version = "1", default-features = false, features = ["prepush-hook", "run-cargo-check", "run-cargo-clippy", "run-cargo-fmt", "run-cargo-test"] }

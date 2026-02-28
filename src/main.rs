@@ -1,5 +1,4 @@
 mod bot;
-mod claude;
 mod cli;
 mod config;
 mod llm;
