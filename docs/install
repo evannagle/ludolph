@@ -1025,6 +1025,54 @@ if [ -z "$SAVED_TELEGRAM_TOKEN" ]; then
             ;;
     esac
 
+    # Validate API key works
+    spinner_start "Validating API key..."
+    VALIDATION_OK=false
+
+    case "$LLM_PROVIDER" in
+        anthropic)
+            # Test Anthropic API with minimal request
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "https://api.anthropic.com/v1/messages" \
+                -H "x-api-key: $LLM_API_KEY" \
+                -H "anthropic-version: 2023-06-01" \
+                -H "content-type: application/json" \
+                -d '{"model":"claude-sonnet-4-20250514","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' 2>/dev/null)
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            if [ "$HTTP_CODE" = "200" ]; then
+                VALIDATION_OK=true
+            elif [ "$HTTP_CODE" = "401" ]; then
+                spinner_stop "err" "Invalid API key"
+                err "API key was rejected by Anthropic"
+                echo
+                info "Make sure you're using an API key from console.anthropic.com"
+                info "NOT a Claude Code subscription token (sk-ant-oat...)"
+                exit 1
+            fi
+            ;;
+        openai)
+            # Test OpenAI API
+            RESPONSE=$(curl -s -w "\n%{http_code}" "https://api.openai.com/v1/models" \
+                -H "Authorization: Bearer $LLM_API_KEY" 2>/dev/null)
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            [ "$HTTP_CODE" = "200" ] && VALIDATION_OK=true
+            ;;
+        gemini)
+            # Test Gemini API
+            RESPONSE=$(curl -s -w "\n%{http_code}" "https://generativelanguage.googleapis.com/v1/models?key=$LLM_API_KEY" 2>/dev/null)
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            [ "$HTTP_CODE" = "200" ] && VALIDATION_OK=true
+            ;;
+    esac
+
+    if $VALIDATION_OK; then
+        spinner_stop "ok" "API key valid"
+    else
+        spinner_stop "err" "Could not validate API key (HTTP $HTTP_CODE)"
+        if ! confirm "Continue anyway?"; then
+            exit 1
+        fi
+    fi
+
     # For backward compatibility, also set CLAUDE_API_KEY
     CLAUDE_API_KEY="$LLM_API_KEY"
 fi
