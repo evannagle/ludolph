@@ -214,10 +214,21 @@ info "     your provider's dashboard."
 echo
 info "If you understand, type the first five digits of pi after 3.14"
 echo
-printf "${CYAN}π${NC} "
-read -r PI_ANSWER < /dev/tty
 
-if [ "$PI_ANSWER" != "15926" ]; then
+PI_CONFIRMED=false
+for attempt in 1 2 3; do
+    printf "${CYAN}π${NC} "
+    read -r PI_ANSWER < /dev/tty
+    if [ "$PI_ANSWER" = "15926" ]; then
+        PI_CONFIRMED=true
+        break
+    fi
+    if [ "$attempt" -lt 3 ]; then
+        info "Try again (hint: 3.14___)"
+    fi
+done
+
+if ! $PI_CONFIRMED; then
     echo
     info "Setup cancelled."
     echo
