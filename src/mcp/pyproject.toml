@@ -1,6 +1,6 @@
 [project]
 name = "ludolph-mcp"
-version = "0.5.0"
+version = "0.8.0"
 description = "MCP server for Ludolph - general-purpose filesystem access"
 requires-python = ">=3.11"
 dependencies = [
