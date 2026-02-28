@@ -13,7 +13,7 @@ use teloxide::types::{ChatAction, ChatId, MessageId, ParseMode, ReactionType, Re
 use tokio::sync::oneshot;
 use tokio::time::{Duration, interval};
 
-use crate::claude::Claude;
+use crate::llm::Llm;
 use crate::config::{Config, McpConfig, config_dir};
 use crate::mcp_client::McpClient;
 use crate::memory::Memory;
@@ -204,7 +204,7 @@ pub async fn run() -> Result<()> {
 
     // Run bot
     let bot = Bot::new(&config.telegram.bot_token);
-    let claude = Claude::from_config_with_memory(&config, memory);
+    let llm = Llm::from_config_with_memory(&config, memory)?;
     let allowed_users: HashSet<u64> = config.telegram.allowed_users.iter().copied().collect();
     let mcp_config = config.mcp.clone();
     let bot_name = bot_info.name.clone();
@@ -213,7 +213,7 @@ pub async fn run() -> Result<()> {
     let setup_users: Arc<Mutex<HashSet<u64>>> = Arc::new(Mutex::new(HashSet::new()));
 
     Box::pin(teloxide::repl(bot, move |bot: Bot, msg: Message| {
-        let claude = claude.clone();
+        let llm = llm.clone();
         let allowed_users = allowed_users.clone();
         let mcp_config = mcp_config.clone();
         let bot_name = bot_name.clone();
@@ -255,7 +255,7 @@ pub async fn run() -> Result<()> {
 
                             // Start setup conversation
                             #[allow(clippy::cast_possible_wrap)]
-                            let result = claude
+                            let result = llm
                                 .chat_with_system(
                                     &initial_setup_message(&bot_name),
                                     SETUP_SYSTEM_PROMPT,
@@ -287,7 +287,7 @@ pub async fn run() -> Result<()> {
                                     }
                                     set_reaction(&bot, msg.chat.id, msg.id, "❌").await;
                                     clear_reactions(&bot, msg.chat.id, msg.id).await;
-                                    format!("Setup error: {e}")
+                                    format!("Setup error: {}", format_api_error(&e))
                                 }
                             }
                         }
@@ -315,7 +315,7 @@ pub async fn run() -> Result<()> {
                     let typing = start_typing(bot.clone(), msg.chat.id);
 
                     #[allow(clippy::cast_possible_wrap)]
-                    let result = claude
+                    let result = llm
                         .chat_with_system(text, SETUP_SYSTEM_PROMPT, Some(uid as i64))
                         .await;
 
@@ -341,7 +341,7 @@ pub async fn run() -> Result<()> {
                             }
                             set_reaction(&bot, msg.chat.id, msg.id, "❌").await;
                             clear_reactions(&bot, msg.chat.id, msg.id).await;
-                            format!("Setup error: {e}")
+                            format!("Setup error: {}", format_api_error(&e))
                         }
                     }
                 } else {
@@ -361,7 +361,7 @@ pub async fn run() -> Result<()> {
                         let edit_counter = Arc::new(Mutex::new(0u32));
 
                         #[allow(clippy::cast_possible_wrap)]
-                        let result = claude
+                        let result = llm
                             .chat_streaming(text, Some(uid as i64), |partial: &str| {
                                 // Debounce edits to every 500ms
                                 let mut last = last_edit.lock().unwrap();
@@ -421,13 +421,13 @@ pub async fn run() -> Result<()> {
                                 let _ = bot.delete_message(msg.chat.id, placeholder_id).await;
                                 set_reaction(&bot, msg.chat.id, msg.id, "❌").await;
                                 clear_reactions(&bot, msg.chat.id, msg.id).await;
-                                format!("Error: {e}")
+                                format_api_error(&e)
                             }
                         }
                     } else {
                         // Fallback to non-streaming if placeholder failed
                         #[allow(clippy::cast_possible_wrap)]
-                        let result = claude.chat(text, Some(uid as i64)).await;
+                        let result = llm.chat(text, Some(uid as i64)).await;
 
                         tracing::info!("Chat result received for user {}", uid);
                         drop(typing);
@@ -441,7 +441,7 @@ pub async fn run() -> Result<()> {
                             Err(e) => {
                                 set_reaction(&bot, msg.chat.id, msg.id, "❌").await;
                                 clear_reactions(&bot, msg.chat.id, msg.id).await;
-                                format!("Error: {e}")
+                                format_api_error(&e)
                             }
                         }
                     }
@@ -482,6 +482,46 @@ pub async fn run() -> Result<()> {
     println!();
 
     Ok(())
+}
+
+/// Format API errors with user-friendly messages.
+///
+/// Extracts the root cause from anyhow error chains and provides
+/// clear, actionable messages for common API errors.
+fn format_api_error(error: &anyhow::Error) -> String {
+    // Get full error chain as string
+    let full_error = format!("{error:?}");
+
+    // Check for credit/billing errors
+    if full_error.contains("credit balance is too low") {
+        return "API credits exhausted. Add credits at console.anthropic.com/settings/billing"
+            .to_string();
+    }
+
+    // Check for rate limit errors
+    if full_error.contains("rate_limit") || full_error.contains("Rate limit") {
+        return "Rate limited. Please wait a moment and try again.".to_string();
+    }
+
+    // Check for auth errors
+    if full_error.contains("authentication") || full_error.contains("invalid_api_key") {
+        return "Invalid API key. Check your config.".to_string();
+    }
+
+    // Check for network errors
+    if full_error.contains("connection") || full_error.contains("timeout") {
+        return "Network error. Check your internet connection.".to_string();
+    }
+
+    // Default: show the error chain more clearly
+    let mut msg = String::from("Error: ");
+    for (i, cause) in error.chain().enumerate() {
+        if i > 0 {
+            msg.push_str(" → ");
+        }
+        msg.push_str(&cause.to_string());
+    }
+    msg
 }
 
 /// Handle bot commands (messages starting with /).
