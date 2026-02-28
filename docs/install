@@ -835,12 +835,32 @@ PLISTEOF
     else
         spinner_stop "err" "Server failed to start"
         echo
-        info "Check the error:"
-        tail -5 "$LOCAL_DIR/mcp/server.log" 2>/dev/null || echo "  (no log file)"
+
+        # Try to get the actual error by running the server directly
+        info "Diagnosing..."
+        SERVER_ERROR=$(cd "$LOCAL_DIR" && $PYTHON_PATH -m mcp.server 2>&1 &
+            SERVER_PID=$!
+            sleep 2
+            kill $SERVER_PID 2>/dev/null
+        ) 2>&1 || true
+
+        if echo "$SERVER_ERROR" | grep -q "ModuleNotFoundError"; then
+            MISSING_MODULE=$(echo "$SERVER_ERROR" | grep "ModuleNotFoundError" | sed "s/.*No module named '\([^']*\)'.*/\1/")
+            err "Missing Python module: $MISSING_MODULE"
+            echo
+            info "Install it with:"
+            info "  pip3 install --user --break-system-packages $MISSING_MODULE"
+        elif [ -f "$LOCAL_DIR/mcp/server.log" ] && [ -s "$LOCAL_DIR/mcp/server.log" ]; then
+            info "Server log:"
+            tail -5 "$LOCAL_DIR/mcp/server.log"
+        else
+            info "No specific error found. Try running manually:"
+            info "  cd ~/.ludolph && python3 -m mcp.server"
+        fi
         echo
-        info "Fix the issue and restart:"
-        info "  launchctl stop dev.ludolph.mcp"
-        info "  launchctl start dev.ludolph.mcp"
+        info "After fixing, restart with:"
+        info "  launchctl unload ~/Library/LaunchAgents/dev.ludolph.mcp.plist"
+        info "  launchctl load ~/Library/LaunchAgents/dev.ludolph.mcp.plist"
         exit 1
     fi
 fi
