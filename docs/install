@@ -840,7 +840,14 @@ PLISTEOF
 
         # Try to get the actual error by running the server directly
         info "Diagnosing..."
-        SERVER_ERROR=$(cd "$LOCAL_DIR" && timeout 3 $PYTHON_PATH -m mcp.server 2>&1) || true
+        SERVER_ERROR_FILE=$(mktemp)
+        (cd "$LOCAL_DIR" && $PYTHON_PATH -m mcp.server 2>&1) > "$SERVER_ERROR_FILE" &
+        SERVER_PID=$!
+        sleep 3
+        kill $SERVER_PID 2>/dev/null
+        wait $SERVER_PID 2>/dev/null || true
+        SERVER_ERROR=$(cat "$SERVER_ERROR_FILE")
+        rm -f "$SERVER_ERROR_FILE"
 
         if echo "$SERVER_ERROR" | grep -q "ModuleNotFoundError"; then
             MISSING_MODULE=$(echo "$SERVER_ERROR" | grep "ModuleNotFoundError" | sed "s/.*No module named '\([^']*\)'.*/\1/")
