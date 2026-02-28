@@ -200,14 +200,17 @@ fi
 echo
 printf "${BOLD}Before you continue:${NC}\n"
 echo
-info "  1. Ludolph gives Claude AI read access to your vault."
-info "     Your notes are sent to Anthropic's servers for processing."
+info "  1. Ludolph gives AI read and write access to your vault."
+info "     Your notes are sent to your AI provider for processing."
 echo
-info "  2. AI can make mistakes. Don't rely on it for critical decisions."
+info "  2. AI can modify files. Content could be lost."
+info "     Use source control (git) to help with recovery."
+echo
+info "  3. AI can make mistakes. Don't rely on it for critical decisions."
 info "     Always verify important information yourself."
 echo
-info "  3. API usage incurs costs. Monitor your usage at"
-info "     https://console.anthropic.com/settings/usage"
+info "  4. API usage incurs costs. Monitor your usage at"
+info "     your provider's dashboard."
 echo
 
 if ! confirm "I understand and want to continue"; then

@@ -49,22 +49,28 @@ fn print_warning() {
     println!("{}", style("Before you continue:").bold());
     println!();
     println!(
-        "  {} Ludolph gives Claude AI read access to your vault.",
+        "  {} Ludolph gives AI read and write access to your vault.",
         style("1.").dim()
     );
-    println!("     Your notes are sent to Anthropic's servers for processing.");
+    println!("     Your notes are sent to your AI provider for processing.");
+    println!();
+    println!(
+        "  {} AI can modify files. Content could be lost.",
+        style("2.").dim()
+    );
+    println!("     Use source control (git) to help with recovery.");
     println!();
     println!(
         "  {} AI can make mistakes. Don't rely on it for critical decisions.",
-        style("2.").dim()
+        style("3.").dim()
     );
     println!("     Always verify important information yourself.");
     println!();
     println!(
         "  {} API usage incurs costs. Monitor your usage at",
-        style("3.").dim()
+        style("4.").dim()
     );
-    println!("     https://console.anthropic.com/settings/usage");
+    println!("     your provider's dashboard.");
     println!();
 }
 
