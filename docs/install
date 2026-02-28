@@ -217,14 +217,14 @@ echo
 
 PI_CONFIRMED=false
 for attempt in 1 2 3; do
-    printf "${CYAN}π${NC} "
+    printf "${CYAN}π${NC} 3.14"
     read -r PI_ANSWER < /dev/tty
     if [ "$PI_ANSWER" = "15926" ]; then
         PI_CONFIRMED=true
         break
     fi
     if [ "$attempt" -lt 3 ]; then
-        info "Try again (hint: 3.14___)"
+        info "Try again"
     fi
 done
 
