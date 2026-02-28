@@ -249,13 +249,14 @@ SAVED_LLM_PROVIDER=""
 
 if [ -f "$LOCAL_DIR/config.toml" ]; then
     # Extract values from TOML (handles both Mac and Linux sed)
-    SAVED_VAULT=$(grep '^path' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2)
-    SAVED_PI_HOST=$(grep '^host' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2)
-    SAVED_PI_USER=$(grep '^user' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2)
-    SAVED_TELEGRAM_TOKEN=$(grep '^bot_token' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2)
-    SAVED_TELEGRAM_USER=$(grep '^allowed_users' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | tr -d '[]' | cut -d'=' -f2 | tr -d ' ')
-    SAVED_CLAUDE_KEY=$(grep '^api_key' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2)
-    SAVED_LLM_PROVIDER=$(grep '^provider' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2)
+    # Use || true to prevent pipefail from triggering on missing keys
+    SAVED_VAULT=$(grep '^path' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2 || true)
+    SAVED_PI_HOST=$(grep '^host' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2 || true)
+    SAVED_PI_USER=$(grep '^user' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2 || true)
+    SAVED_TELEGRAM_TOKEN=$(grep '^bot_token' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2 || true)
+    SAVED_TELEGRAM_USER=$(grep '^allowed_users' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | tr -d '[]' | cut -d'=' -f2 | tr -d ' ' || true)
+    SAVED_CLAUDE_KEY=$(grep '^api_key' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2 || true)
+    SAVED_LLM_PROVIDER=$(grep '^provider' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2 || true)
 fi
 
 # Initialize LLM variables from saved config (used in Step 5 before Step 7 runs)
