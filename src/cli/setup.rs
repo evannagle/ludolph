@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use console::style;
+use dialoguer::Select;
 
 use crate::config::{Config, PiConfig, VaultConfig};
 
@@ -20,12 +21,122 @@ use crate::ssh;
 use crate::ui::prompt::PromptConfig;
 use crate::ui::{self, Spinner, StatusLine};
 
+/// LLM provider choice from setup wizard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LlmProvider {
+    /// Use Claude Code subscription (OAuth token via `claude setup-token`)
+    ClaudeCode,
+    /// Use Anthropic API key (pay-per-use)
+    AnthropicApi,
+}
+
 /// Collected credentials from setup wizard.
 pub struct Credentials {
     pub telegram_token: String,
     pub user_id: u64,
     pub claude_key: String,
     pub vault_path: std::path::PathBuf,
+    pub llm_provider: LlmProvider,
+}
+
+/// Display warning about AI limitations and privacy.
+fn print_warning() {
+    println!();
+    println!("{}", style("Before you continue:").bold());
+    println!();
+    println!("  {} Ludolph gives Claude AI read access to your vault.", style("1.").dim());
+    println!("     Your notes are sent to Anthropic's servers for processing.");
+    println!();
+    println!("  {} AI can make mistakes. Don't rely on it for critical decisions.", style("2.").dim());
+    println!("     Always verify important information yourself.");
+    println!();
+    println!("  {} API usage incurs costs. Monitor your usage at", style("3.").dim());
+    println!("     https://console.anthropic.com/settings/usage");
+    println!();
+}
+
+/// Prompt user to select their LLM provider.
+fn select_llm_provider() -> Result<LlmProvider> {
+    println!();
+    println!("{} {}", style("π").bold(), "How would you like to authenticate with Claude?");
+    println!();
+
+    let options = &[
+        "Claude Code subscription (uses your Max plan credits)",
+        "Anthropic API key (pay-per-use, billed separately)",
+    ];
+
+    let selection = Select::new()
+        .items(options)
+        .default(0)
+        .interact()?;
+
+    Ok(match selection {
+        0 => LlmProvider::ClaudeCode,
+        _ => LlmProvider::AnthropicApi,
+    })
+}
+
+/// Get Claude Code OAuth token using `claude setup-token`.
+async fn get_claude_code_token() -> Result<String> {
+    use std::process::Command;
+
+    // Check if claude CLI is available
+    let check = Command::new("claude").arg("--version").output();
+
+    if check.is_err() || !check.as_ref().is_ok_and(|o| o.status.success()) {
+        anyhow::bail!(
+            "Claude Code CLI not found. Install it first:\n  \
+             npm install -g @anthropic-ai/claude-code"
+        );
+    }
+
+    println!();
+    println!("  This will open a browser to authenticate with your Claude subscription.");
+    println!("  The generated token will be saved for Ludolph to use.");
+    println!();
+
+    let proceed = ui::prompt::confirm("Continue with Claude Code authentication?")?;
+    if !proceed {
+        anyhow::bail!("Authentication cancelled");
+    }
+
+    println!();
+    let spinner = Spinner::new("Running claude setup-token...");
+
+    let output = Command::new("claude")
+        .arg("setup-token")
+        .output()
+        .map_err(|e| anyhow::anyhow!("Failed to run claude setup-token: {e}"))?;
+
+    if !output.status.success() {
+        spinner.finish_error();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("claude setup-token failed: {stderr}");
+    }
+
+    let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    // Validate the token format
+    if token.starts_with("sk-ant-") && token.len() > 40 {
+        spinner.finish();
+        return Ok(token);
+    }
+
+    // Token might need manual entry (interactive mode)
+    spinner.finish();
+    println!();
+    println!("  If a token was displayed, enter it below.");
+    println!("  Otherwise, check the browser window that opened.");
+    println!();
+
+    let manual_token = ui::prompt::prompt_validated(
+        &PromptConfig::new("OAuth token", "Paste the token from claude setup-token"),
+        None,
+        ui::prompt::validate_claude_key,
+    )?;
+
+    Ok(manual_token)
 }
 
 /// Collect API credentials and vault path from user.
@@ -71,28 +182,40 @@ pub async fn collect_credentials(existing: Option<&Config>) -> Result<Credential
         ui::prompt::validate_telegram_user_id,
     )?;
 
-    // Claude API key
-    let claude_config = PromptConfig::new("Claude API key", "Powers the AI responses.")
-        .with_url("https://console.anthropic.com/settings/keys");
+    // LLM provider selection
+    let llm_provider = select_llm_provider()?;
 
-    let claude_key = ui::prompt::prompt_validated(
-        &claude_config,
-        existing.map(|c| c.claude.api_key.as_str()),
-        ui::prompt::validate_claude_key,
-    )?;
-
-    // Validate Claude key against API
-    let existing_key = existing.map_or("", |c| c.claude.api_key.as_str());
-    if claude_key != existing_key {
-        let spinner = Spinner::new("Validating API key...");
-        match ui::prompt::validate_claude_key_api(&claude_key).await {
-            Ok(()) => spinner.finish(),
-            Err(e) => {
-                spinner.finish_error();
-                anyhow::bail!("API key validation failed: {e}");
-            }
+    let claude_key = match llm_provider {
+        LlmProvider::ClaudeCode => {
+            // Use Claude Code subscription via OAuth token
+            get_claude_code_token().await?
         }
-    }
+        LlmProvider::AnthropicApi => {
+            // Traditional API key flow
+            let claude_config = PromptConfig::new("Claude API key", "Powers the AI responses.")
+                .with_url("https://console.anthropic.com/settings/keys");
+
+            let key = ui::prompt::prompt_validated(
+                &claude_config,
+                existing.map(|c| c.claude.api_key.as_str()),
+                ui::prompt::validate_claude_key,
+            )?;
+
+            // Validate Claude key against API
+            let existing_key = existing.map_or("", |c| c.claude.api_key.as_str());
+            if key != existing_key {
+                let spinner = Spinner::new("Validating API key...");
+                match ui::prompt::validate_claude_key_api(&key).await {
+                    Ok(()) => spinner.finish(),
+                    Err(e) => {
+                        spinner.finish_error();
+                        anyhow::bail!("API key validation failed: {e}");
+                    }
+                }
+            }
+            key
+        }
+    };
 
     // Vault path
     let vault_config = PromptConfig::new(
@@ -121,6 +244,7 @@ pub async fn collect_credentials(existing: Option<&Config>) -> Result<Credential
         user_id,
         claude_key,
         vault_path,
+        llm_provider,
     })
 }
 
@@ -207,7 +331,17 @@ pub async fn setup() -> Result<()> {
     println!();
     println!("A real brain for your second brain.");
     println!("Talk to your vault, from anywhere, anytime.");
-    println!();
+
+    // Warning about AI limitations and privacy
+    print_warning();
+
+    let proceed = ui::prompt::confirm("I understand and want to continue")?;
+    if !proceed {
+        println!();
+        println!("  Setup cancelled.");
+        println!();
+        return Ok(());
+    }
 
     // System check
     let spinner = Spinner::new("Checking system");
@@ -250,6 +384,11 @@ pub async fn setup() -> Result<()> {
         StatusLine::ok(format!("Vault: {}", vault.path.display())).print();
     }
     StatusLine::ok(format!("Authorized user: {}", creds.user_id)).print();
+    let provider_name = match creds.llm_provider {
+        LlmProvider::ClaudeCode => "Claude Code subscription",
+        LlmProvider::AnthropicApi => "Anthropic API",
+    };
+    StatusLine::ok(format!("LLM: {provider_name}")).print();
     if let Some(ref pi) = cfg.pi {
         StatusLine::ok(format!("Pi: {}@{}", pi.user, pi.host)).print();
     }
