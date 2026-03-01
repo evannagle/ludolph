@@ -263,7 +263,7 @@ fi
 # Initialize LLM variables from saved config (used in Step 5 before Step 7 runs)
 LLM_API_KEY="${SAVED_CLAUDE_KEY:-}"
 LLM_PROVIDER="${SAVED_LLM_PROVIDER:-anthropic}"
-LLM_MODEL="${SAVED_LLM_MODEL:-claude-sonnet-4-20250514}"
+LLM_MODEL="${SAVED_LLM_MODEL:-claude-sonnet-4-6}"
 
 # =============================================================================
 # Platform Detection
@@ -983,7 +983,7 @@ if [ -z "$SAVED_TELEGRAM_TOKEN" ]; then
 
     LLM_CHOICE=$(ask "Enter 1-3:" "1")
     LLM_PROVIDER="anthropic"
-    LLM_MODEL="claude-sonnet-4-20250514"
+    LLM_MODEL="claude-sonnet-4-6"
 
     case "$LLM_CHOICE" in
         1)
@@ -994,7 +994,7 @@ if [ -z "$SAVED_TELEGRAM_TOKEN" ]; then
             LLM_API_KEY=$(ask_secret "Anthropic API Key:")
             [ -z "$LLM_API_KEY" ] && { err "API key required"; exit 1; }
             LLM_PROVIDER="anthropic"
-            LLM_MODEL="claude-sonnet-4-20250514"
+            LLM_MODEL="claude-sonnet-4-6"
             ok "Using Anthropic API (Claude)"
             ;;
         2)
@@ -1036,7 +1036,7 @@ if [ -z "$SAVED_TELEGRAM_TOKEN" ]; then
                 -H "x-api-key: $LLM_API_KEY" \
                 -H "anthropic-version: 2023-06-01" \
                 -H "content-type: application/json" \
-                -d '{"model":"claude-sonnet-4-20250514","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' 2>/dev/null)
+                -d '{"model":"claude-sonnet-4-6","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' 2>/dev/null)
             HTTP_CODE=$(echo "$RESPONSE" | tail -1)
             if [ "$HTTP_CODE" = "200" ]; then
                 VALIDATION_OK=true
@@ -1084,7 +1084,7 @@ fi
 section "Step 8: Starting Ludolph"
 
 # Set default values if not set (for saved credentials case)
-LLM_MODEL="${LLM_MODEL:-claude-sonnet-4-20250514}"
+LLM_MODEL="${LLM_MODEL:-claude-sonnet-4-6}"
 LLM_PROVIDER="${LLM_PROVIDER:-anthropic}"
 LLM_API_KEY="${LLM_API_KEY:-$CLAUDE_API_KEY}"
 
