@@ -530,44 +530,45 @@ async fn handle_command(text: &str, bot_name: &str, mcp_config: Option<&McpConfi
 
     match command {
         "/mcp" | "/start" => {
-            let version = env!("CARGO_PKG_VERSION");
-
             if let Some(mcp) = mcp_config {
                 let client = McpClient::from_config(mcp);
+                let status = client.get_status().await;
 
-                // Check connection
-                let connection_status = match client.health_check().await {
-                    Ok(true) => "✓ Connected to vault",
-                    Ok(false) => "⚠ Having trouble reaching vault",
-                    Err(_) => "✗ Unable to connect to vault",
-                };
+                if status.connected {
+                    let tools_list = if status.tools.is_empty() {
+                        String::new()
+                    } else {
+                        let mut list = String::from("\n\nAvailable Tools:\n");
+                        for tool in &status.tools {
+                            list.push_str("  - ");
+                            list.push_str(&tool.name);
+                            list.push('\n');
+                        }
+                        list
+                    };
 
-                // Get available tools
-                let tools_list = client
-                    .get_tool_definitions()
-                    .await
-                    .map_or_else(
-                        |_| String::new(),
-                        |tools| {
-                            let mut list = String::from("\n\n**Available Tools:**\n");
-                            for tool in tools {
-                                list.push_str("• ");
-                                list.push_str(&tool.name);
-                                list.push_str(" - ");
-                                list.push_str(&tool.description);
-                                list.push('\n');
-                            }
-                            list
-                        },
-                    );
-
-                format!(
-                    "{bot_name} v{version}\n{connection_status}{tools_list}"
-                )
+                    format!(
+                        "MCP Connection\n\n\
+                        Status: Connected\n\
+                        Endpoint: {}\n\
+                        Latency: {}ms\
+                        {tools_list}",
+                        status.endpoint, status.latency_ms
+                    )
+                } else {
+                    format!(
+                        "MCP Connection\n\n\
+                        Status: Disconnected\n\
+                        Endpoint: {}\n\n\
+                        Unable to reach MCP server. Check that the server is running.",
+                        status.endpoint
+                    )
+                }
             } else {
-                format!(
-                    "{bot_name} v{version}\n✓ Connected to local vault"
-                )
+                "MCP Connection\n\n\
+                Status: Not configured\n\n\
+                No MCP server configured. Using local vault."
+                    .to_string()
             }
         }
         "/help" => format!(

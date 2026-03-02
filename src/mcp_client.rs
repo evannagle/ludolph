@@ -104,7 +104,6 @@ struct ChatError {
 
 /// Information about a tool available on the MCP server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)] // Used by get_status() for Task #2 (/mcp handler)
 pub struct ToolInfo {
     /// Name of the tool.
     pub name: String,
@@ -114,7 +113,6 @@ pub struct ToolInfo {
 
 /// Status information from the MCP server.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Used by get_status() for Task #2 (/mcp handler)
 pub struct McpStatus {
     /// Whether the server is connected and responding.
     pub connected: bool,
@@ -153,23 +151,10 @@ impl McpClient {
         }
     }
 
-    /// Check if the MCP server is reachable.
-    pub async fn health_check(&self) -> Result<bool> {
-        let response = self
-            .client
-            .get(format!("{}/health", self.base_url))
-            .header("Authorization", format!("Bearer {}", self.auth_token))
-            .send()
-            .await;
-
-        response.map_or(Ok(false), |resp| Ok(resp.status().is_success()))
-    }
-
     /// Get detailed status information from the MCP server.
     ///
     /// Returns status including connection state, latency, and available tools.
     /// If the server is unreachable, returns `McpStatus` with `connected: false`.
-    #[allow(dead_code)] // Will be used by Task #2 (/mcp handler)
     pub async fn get_status(&self) -> McpStatus {
         let start = Instant::now();
         let endpoint = format!("{}/status", self.base_url);
