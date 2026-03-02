@@ -111,6 +111,17 @@ pub struct ToolInfo {
     pub description: String,
 }
 
+/// Information about an available MCP in the registry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpRegistryEntry {
+    /// Unique identifier for the MCP.
+    pub name: String,
+    /// Description of what the MCP provides.
+    pub description: String,
+    /// Whether this MCP is currently enabled for the user.
+    pub enabled: bool,
+}
+
 /// Status information from the MCP server.
 #[derive(Debug, Clone)]
 pub struct McpStatus {
@@ -169,25 +180,23 @@ impl McpClient {
         let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
         match response {
-            Ok(resp) if resp.status().is_success() => {
-                match resp.json::<StatusResponse>().await {
-                    Ok(status) => McpStatus {
-                        connected: true,
+            Ok(resp) if resp.status().is_success() => match resp.json::<StatusResponse>().await {
+                Ok(status) => McpStatus {
+                    connected: true,
+                    endpoint: self.base_url.clone(),
+                    latency_ms,
+                    tools: status.tools,
+                },
+                Err(e) => {
+                    tracing::warn!("Failed to parse status response: {}", e);
+                    McpStatus {
+                        connected: false,
                         endpoint: self.base_url.clone(),
                         latency_ms,
-                        tools: status.tools,
-                    },
-                    Err(e) => {
-                        tracing::warn!("Failed to parse status response: {}", e);
-                        McpStatus {
-                            connected: false,
-                            endpoint: self.base_url.clone(),
-                            latency_ms,
-                            tools: Vec::new(),
-                        }
+                        tools: Vec::new(),
                     }
                 }
-            }
+            },
             Ok(resp) => {
                 tracing::warn!("Status endpoint returned error: {}", resp.status());
                 McpStatus {
@@ -207,6 +216,41 @@ impl McpClient {
                 }
             }
         }
+    }
+
+    /// List available MCPs from the registry with their enabled status.
+    ///
+    /// Returns a list of all MCPs that can be enabled, along with
+    /// whether each one is currently enabled for the user.
+    ///
+    /// Note: This currently returns mock data. The actual endpoints
+    /// will be implemented in a future task.
+    #[allow(clippy::unused_async)] // Will be async when real endpoints are added
+    pub async fn list_mcps(&self) -> Vec<McpRegistryEntry> {
+        // TODO: Call actual MCP server endpoints when available
+        // For now, return mock data to demonstrate the UI
+        vec![
+            McpRegistryEntry {
+                name: "vault".to_string(),
+                description: "File operations for Obsidian vault".to_string(),
+                enabled: true,
+            },
+            McpRegistryEntry {
+                name: "memory".to_string(),
+                description: "Conversation memory and search".to_string(),
+                enabled: true,
+            },
+            McpRegistryEntry {
+                name: "slack".to_string(),
+                description: "Read and send Slack messages".to_string(),
+                enabled: false,
+            },
+            McpRegistryEntry {
+                name: "calendar".to_string(),
+                description: "Google Calendar integration".to_string(),
+                enabled: false,
+            },
+        ]
     }
 
     /// Send Wake-on-LAN packet to wake the Mac.

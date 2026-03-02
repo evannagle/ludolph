@@ -3,6 +3,7 @@
 #![allow(clippy::too_many_lines)]
 
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -526,49 +527,26 @@ fn format_api_error(error: &anyhow::Error) -> String {
 
 /// Handle bot commands (messages starting with /).
 async fn handle_command(text: &str, bot_name: &str, mcp_config: Option<&McpConfig>) -> String {
-    let command = text.split_whitespace().next().unwrap_or("");
+    let parts: Vec<&str> = text.split_whitespace().collect();
+    let command = parts.first().copied().unwrap_or("");
 
     match command {
         "/mcp" | "/start" => {
-            if let Some(mcp) = mcp_config {
-                let client = McpClient::from_config(mcp);
-                let status = client.get_status().await;
+            // Check for subcommands
+            let subcommand = parts.get(1).copied();
 
-                if status.connected {
-                    let tools_list = if status.tools.is_empty() {
-                        String::new()
-                    } else {
-                        let mut list = String::from("\n\nAvailable Tools:\n");
-                        for tool in &status.tools {
-                            list.push_str("  - ");
-                            list.push_str(&tool.name);
-                            list.push('\n');
-                        }
-                        list
-                    };
-
-                    format!(
-                        "MCP Connection\n\n\
-                        Status: Connected\n\
-                        Endpoint: {}\n\
-                        Latency: {}ms\
-                        {tools_list}",
-                        status.endpoint, status.latency_ms
-                    )
-                } else {
-                    format!(
-                        "MCP Connection\n\n\
-                        Status: Disconnected\n\
-                        Endpoint: {}\n\n\
-                        Unable to reach MCP server. Check that the server is running.",
-                        status.endpoint
-                    )
+            match subcommand {
+                Some("list") => handle_mcp_list(mcp_config).await,
+                Some("add") => {
+                    let mcp_name = parts.get(2).copied();
+                    handle_mcp_add(mcp_name)
                 }
-            } else {
-                "MCP Connection\n\n\
-                Status: Not configured\n\n\
-                No MCP server configured. Using local vault."
-                    .to_string()
+                Some("remove") => {
+                    let mcp_name = parts.get(2).copied();
+                    handle_mcp_remove(mcp_name)
+                }
+                // No subcommand - show status (existing behavior)
+                None | Some(_) => handle_mcp_status(mcp_config).await,
             }
         }
         "/help" => format!(
@@ -576,11 +554,115 @@ async fn handle_command(text: &str, bot_name: &str, mcp_config: Option<&McpConfi
             Commands:\n\
             /setup - Configure your assistant (creates Lu.md)\n\
             /version - Show version info\n\
-            /mcp - Show MCP connection details and tools\n\
+            /mcp - Show MCP connection status\n\
+            /mcp list - Show available MCPs\n\
+            /mcp add <name> - Enable an MCP\n\
+            /mcp remove <name> - Disable an MCP\n\
             /cancel - Cancel setup in progress\n\
             /help - Show this message\n\n\
             Or just send me a message and I'll search your vault to help answer it."
         ),
         _ => "I don't recognize that command.\n\nSend /help to see what I can do, or just ask me a question about your vault.".to_string(),
     }
+}
+
+/// Handle /mcp (no subcommand) - show MCP connection status.
+async fn handle_mcp_status(mcp_config: Option<&McpConfig>) -> String {
+    if let Some(mcp) = mcp_config {
+        let client = McpClient::from_config(mcp);
+        let status = client.get_status().await;
+
+        if status.connected {
+            let tools_list = if status.tools.is_empty() {
+                String::new()
+            } else {
+                let mut list = String::from("\n\nAvailable Tools:\n");
+                for tool in &status.tools {
+                    list.push_str("  - ");
+                    list.push_str(&tool.name);
+                    list.push('\n');
+                }
+                list
+            };
+
+            format!(
+                "MCP Connection\n\n\
+                Status: Connected\n\
+                Endpoint: {}\n\
+                Latency: {}ms\
+                {tools_list}",
+                status.endpoint, status.latency_ms
+            )
+        } else {
+            format!(
+                "MCP Connection\n\n\
+                Status: Disconnected\n\
+                Endpoint: {}\n\n\
+                Unable to reach MCP server. Check that the server is running.",
+                status.endpoint
+            )
+        }
+    } else {
+        "MCP Connection\n\n\
+        Status: Not configured\n\n\
+        No MCP server configured. Using local vault."
+            .to_string()
+    }
+}
+
+/// Handle /mcp list - show available and enabled MCPs.
+async fn handle_mcp_list(mcp_config: Option<&McpConfig>) -> String {
+    let Some(mcp) = mcp_config else {
+        return "MCP not configured.\n\n\
+            Configure [mcp] in config.toml to use MCP features."
+            .to_string();
+    };
+
+    let client = McpClient::from_config(mcp);
+    let mcps = client.list_mcps().await;
+
+    if mcps.is_empty() {
+        return "No MCPs available in registry.".to_string();
+    }
+
+    let mut output = String::from("Available MCPs:\n\n");
+
+    for entry in &mcps {
+        let status = if entry.enabled { "[enabled]" } else { "[--]" };
+        let _ = writeln!(output, "  {status} {} - {}", entry.name, entry.description);
+    }
+
+    output.push_str("\nUse /mcp add <name> to enable an MCP");
+
+    output
+}
+
+/// Handle /mcp add <name> - enable an MCP.
+fn handle_mcp_add(mcp_name: Option<&str>) -> String {
+    let Some(name) = mcp_name else {
+        return "Usage: /mcp add <name>\n\n\
+            Use /mcp list to see available MCPs."
+            .to_string();
+    };
+
+    // TODO: Call actual add endpoint when available (Task 8)
+    format!(
+        "MCP '{name}' would be enabled.\n\n\
+        (Note: /mcp add is not yet implemented)"
+    )
+}
+
+/// Handle /mcp remove <name> - disable an MCP.
+fn handle_mcp_remove(mcp_name: Option<&str>) -> String {
+    let Some(name) = mcp_name else {
+        return "Usage: /mcp remove <name>\n\n\
+            Use /mcp list to see enabled MCPs."
+            .to_string();
+    };
+
+    // TODO: Call actual remove endpoint when available (Task 8)
+    format!(
+        "MCP '{name}' would be disabled.\n\n\
+        (Note: /mcp remove is not yet implemented)"
+    )
 }
