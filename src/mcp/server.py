@@ -61,6 +61,22 @@ def health():
     return jsonify({"status": "ok", "vault": str(vault), "git_repo": is_git_repo()})
 
 
+@app.route("/status")
+@require_auth
+def status():
+    """Return server status with simplified tool list."""
+    tool_defs = get_tool_definitions()
+    tools_summary = [
+        {"name": t["name"], "description": t.get("description", "")}
+        for t in tool_defs
+    ]
+    return jsonify({
+        "status": "ok",
+        "tools": tools_summary,
+        "version": VERSION,
+    })
+
+
 @app.route("/tools")
 @require_auth
 def tools():
