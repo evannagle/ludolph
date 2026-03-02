@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::config::McpConfig;
 use crate::tools::Tool;
@@ -102,6 +102,40 @@ struct ChatError {
     message: String,
 }
 
+/// Information about a tool available on the MCP server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)] // Used by get_status() for Task #2 (/mcp handler)
+pub struct ToolInfo {
+    /// Name of the tool.
+    pub name: String,
+    /// Description of what the tool does.
+    pub description: String,
+}
+
+/// Status information from the MCP server.
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // Used by get_status() for Task #2 (/mcp handler)
+pub struct McpStatus {
+    /// Whether the server is connected and responding.
+    pub connected: bool,
+    /// The endpoint URL being checked.
+    pub endpoint: String,
+    /// Round-trip latency in milliseconds.
+    pub latency_ms: u64,
+    /// Tools available on the server.
+    pub tools: Vec<ToolInfo>,
+}
+
+/// Response from the /status endpoint.
+#[derive(Deserialize)]
+struct StatusResponse {
+    #[allow(dead_code)]
+    status: String,
+    tools: Vec<ToolInfo>,
+    #[allow(dead_code)]
+    version: String,
+}
+
 impl McpClient {
     /// Create a new MCP client from configuration.
     #[must_use]
@@ -129,6 +163,65 @@ impl McpClient {
             .await;
 
         response.map_or(Ok(false), |resp| Ok(resp.status().is_success()))
+    }
+
+    /// Get detailed status information from the MCP server.
+    ///
+    /// Returns status including connection state, latency, and available tools.
+    /// If the server is unreachable, returns `McpStatus` with `connected: false`.
+    #[allow(dead_code)] // Will be used by Task #2 (/mcp handler)
+    pub async fn get_status(&self) -> McpStatus {
+        let start = Instant::now();
+        let endpoint = format!("{}/status", self.base_url);
+
+        let response = self
+            .client
+            .get(&endpoint)
+            .header("Authorization", format!("Bearer {}", self.auth_token))
+            .send()
+            .await;
+
+        let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+
+        match response {
+            Ok(resp) if resp.status().is_success() => {
+                match resp.json::<StatusResponse>().await {
+                    Ok(status) => McpStatus {
+                        connected: true,
+                        endpoint: self.base_url.clone(),
+                        latency_ms,
+                        tools: status.tools,
+                    },
+                    Err(e) => {
+                        tracing::warn!("Failed to parse status response: {}", e);
+                        McpStatus {
+                            connected: false,
+                            endpoint: self.base_url.clone(),
+                            latency_ms,
+                            tools: Vec::new(),
+                        }
+                    }
+                }
+            }
+            Ok(resp) => {
+                tracing::warn!("Status endpoint returned error: {}", resp.status());
+                McpStatus {
+                    connected: false,
+                    endpoint: self.base_url.clone(),
+                    latency_ms,
+                    tools: Vec::new(),
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to connect to MCP server: {}", e);
+                McpStatus {
+                    connected: false,
+                    endpoint: self.base_url.clone(),
+                    latency_ms,
+                    tools: Vec::new(),
+                }
+            }
+        }
     }
 
     /// Send Wake-on-LAN packet to wake the Mac.
@@ -503,5 +596,41 @@ mod tests {
         let client = McpClient::from_config(&config);
 
         assert_eq!(client.base_url, "http://localhost:8200");
+    }
+
+    #[tokio::test]
+    async fn get_status_returns_disconnected_for_unreachable_server() {
+        let config = McpConfig {
+            url: "http://127.0.0.1:1".to_string(), // Unreachable port
+            auth_token: "test-token".to_string(),
+            mac_address: None,
+        };
+
+        let client = McpClient::from_config(&config);
+        let status = client.get_status().await;
+
+        assert!(!status.connected);
+        assert_eq!(status.endpoint, "http://127.0.0.1:1");
+        assert!(status.tools.is_empty());
+    }
+
+    #[test]
+    fn mcp_status_struct_has_expected_fields() {
+        let status = McpStatus {
+            connected: true,
+            endpoint: "http://localhost:8200".to_string(),
+            latency_ms: 42,
+            tools: vec![ToolInfo {
+                name: "test_tool".to_string(),
+                description: "A test tool".to_string(),
+            }],
+        };
+
+        assert!(status.connected);
+        assert_eq!(status.endpoint, "http://localhost:8200");
+        assert_eq!(status.latency_ms, 42);
+        assert_eq!(status.tools.len(), 1);
+        assert_eq!(status.tools[0].name, "test_tool");
+        assert_eq!(status.tools[0].description, "A test tool");
     }
 }
