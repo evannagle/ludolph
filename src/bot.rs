@@ -74,7 +74,7 @@ async fn register_commands(token: &str) -> Result<()> {
         "commands": [
             {"command": "setup", "description": "Configure your vault assistant"},
             {"command": "version", "description": "Show version info"},
-            {"command": "poke", "description": "Show connection status and available tools"},
+            {"command": "mcp", "description": "Show MCP connection details and tools"},
             {"command": "help", "description": "Show available commands"},
             {"command": "cancel", "description": "Cancel setup in progress"},
         ]
@@ -529,7 +529,7 @@ async fn handle_command(text: &str, bot_name: &str, mcp_config: Option<&McpConfi
     let command = text.split_whitespace().next().unwrap_or("");
 
     match command {
-        "/poke" | "/start" => {
+        "/mcp" | "/start" => {
             let version = env!("CARGO_PKG_VERSION");
 
             if let Some(mcp) = mcp_config {
@@ -575,7 +575,7 @@ async fn handle_command(text: &str, bot_name: &str, mcp_config: Option<&McpConfi
             Commands:\n\
             /setup - Configure your assistant (creates Lu.md)\n\
             /version - Show version info\n\
-            /poke - Show connection status and available tools\n\
+            /mcp - Show MCP connection details and tools\n\
             /cancel - Cancel setup in progress\n\
             /help - Show this message\n\n\
             Or just send me a message and I'll search your vault to help answer it."
