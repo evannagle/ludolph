@@ -14,6 +14,8 @@ Environment Variables:
     PORT: Server port (default: 8200)
 """
 
+import asyncio
+import logging
 import os
 import signal
 from pathlib import Path
@@ -32,10 +34,133 @@ from .llm import (
     chat as llm_chat,
     chat_stream as llm_chat_stream,
 )
+from .process_manager import get_process_manager
+from .registry import Registry
 from .security import get_vault_path, init_security, is_git_repo, require_auth
 from .tools import call_tool, get_tool_definitions, reload_tools
 
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__)
+
+# MCP Registry paths
+MCPS_PATH = Path.home() / ".ludolph" / "mcps"
+REGISTRY_PATH = MCPS_PATH / "registry.toml"
+USERS_PATH = MCPS_PATH / "users"
+
+# Initialize registry (lazy loaded to allow paths to be configured)
+_registry: Registry | None = None
+
+
+def get_registry() -> Registry:
+    """Get or create the MCP registry instance."""
+    global _registry
+    if _registry is None:
+        _registry = Registry(REGISTRY_PATH, USERS_PATH)
+    return _registry
+
+
+# External MCP tool naming convention: {mcp_name}__{tool_name}
+EXTERNAL_TOOL_SEPARATOR = "__"
+
+
+def parse_external_tool_name(name: str) -> tuple[str, str] | None:
+    """
+    Parse an external MCP tool name into (mcp_name, tool_name).
+
+    External tools use double underscore separator: slack__send_message
+
+    Args:
+        name: Tool name to parse
+
+    Returns:
+        Tuple of (mcp_name, tool_name) if external, None if builtin
+    """
+    if EXTERNAL_TOOL_SEPARATOR not in name:
+        return None
+
+    parts = name.split(EXTERNAL_TOOL_SEPARATOR, 1)
+    if len(parts) != 2:
+        return None
+
+    mcp_name, tool_name = parts
+    if not mcp_name or not tool_name:
+        return None
+
+    return (mcp_name, tool_name)
+
+
+async def _call_external_tool(
+    mcp_name: str,
+    tool_name: str,
+    arguments: dict,
+    user_id: int | None = None,
+) -> dict:
+    """
+    Call a tool on an external MCP.
+
+    Args:
+        mcp_name: Name of the external MCP (e.g., "slack")
+        tool_name: Name of the tool on that MCP (e.g., "send_message")
+        arguments: Arguments to pass to the tool
+        user_id: Optional user ID for credential lookup
+
+    Returns:
+        Result dict with 'content' and optional 'error' keys
+    """
+    registry = get_registry()
+    defn = registry.get_definition(mcp_name)
+
+    if defn is None:
+        return {"content": "", "error": f"Unknown MCP: {mcp_name}"}
+
+    if defn.type != "external":
+        return {"content": "", "error": f"MCP '{mcp_name}' is not external"}
+
+    if not defn.package:
+        return {"content": "", "error": f"MCP '{mcp_name}' has no package defined"}
+
+    # Build environment from user credentials if available
+    env = {}
+    if user_id is not None:
+        user_config = registry.get_user_config(user_id)
+        user_env = user_config.get("env", {})
+        for var in defn.env_vars:
+            if var in user_env:
+                env[var] = user_env[var]
+
+    # Get or spawn the MCP process
+    manager = get_process_manager()
+    try:
+        mcp_proc = await manager.get_or_spawn(mcp_name, defn.package, env if env else None)
+        result = await manager.call_tool(mcp_proc, tool_name, arguments)
+
+        # MCP returns {content: [...], isError: bool}
+        # Normalize to our format
+        content_items = result.get("content", [])
+        if isinstance(content_items, list):
+            # Extract text from content items
+            texts = []
+            for item in content_items:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    texts.append(item.get("text", ""))
+                elif isinstance(item, str):
+                    texts.append(item)
+            content = "\n".join(texts)
+        else:
+            content = str(content_items)
+
+        if result.get("isError"):
+            return {"content": content, "error": content}
+
+        return {"content": content, "error": None}
+
+    except RuntimeError as e:
+        logger.error(f"External MCP call failed: {e}")
+        return {"content": "", "error": str(e)}
+    except Exception as e:
+        logger.exception(f"Unexpected error calling external MCP: {e}")
+        return {"content": "", "error": f"Internal error: {e}"}
 
 
 def _handle_sighup(signum, frame):
@@ -87,12 +212,31 @@ def tools():
 @app.route("/tools/call", methods=["POST"])
 @require_auth
 def tools_call():
-    """Execute a tool and return the result."""
+    """
+    Execute a tool and return the result.
+
+    For external MCP tools, use naming convention: {mcp_name}__{tool_name}
+    Example: slack__send_message, github__list_repos
+
+    Optional body fields:
+        user_id: Telegram user ID (for credential lookup on external MCPs)
+    """
     data = request.json or {}
     name = data.get("name", "")
     arguments = data.get("arguments", {})
+    user_id = data.get("user_id")
 
-    result = call_tool(name, arguments)
+    # Check if this is an external MCP tool
+    external_parts = parse_external_tool_name(name)
+
+    if external_parts:
+        mcp_name, tool_name = external_parts
+        # Use asyncio.run() to bridge sync Flask with async ProcessManager
+        result = asyncio.run(_call_external_tool(mcp_name, tool_name, arguments, user_id))
+    else:
+        # Builtin tool
+        result = call_tool(name, arguments)
+
     return jsonify(result)
 
 
@@ -151,6 +295,90 @@ def chat_stream():
             yield f"data: {json.dumps({'error': 'api_error', 'message': str(e)})}\n\n"
 
     return Response(generate(), mimetype="text/event-stream")
+
+
+# -----------------------------------------------------------------------------
+# MCP Management Endpoints
+# -----------------------------------------------------------------------------
+
+
+@app.route("/mcp/registry", methods=["GET"])
+@require_auth
+def list_registry():
+    """List all available MCPs from registry."""
+    registry = get_registry()
+    mcps = registry.list_available()
+
+    return jsonify({
+        "mcps": [
+            {
+                "name": mcp.name,
+                "description": mcp.description,
+                "type": mcp.type,
+                "package": mcp.package,
+                "env_vars": mcp.env_vars,
+            }
+            for mcp in mcps
+        ]
+    })
+
+
+@app.route("/mcp/user/<int:user_id>", methods=["GET"])
+@require_auth
+def get_user_mcps(user_id: int):
+    """Get user's enabled MCPs."""
+    registry = get_registry()
+    enabled = registry.get_user_enabled_mcps(user_id)
+
+    return jsonify({"user_id": user_id, "enabled": enabled})
+
+
+@app.route("/mcp/user/<int:user_id>/enable/<name>", methods=["POST"])
+@require_auth
+def enable_mcp(user_id: int, name: str):
+    """Enable an MCP for a user."""
+    registry = get_registry()
+
+    # Get credentials from request body if provided
+    data = request.json or {}
+    credentials = data.get("credentials")
+
+    success = registry.enable_mcp(user_id, name, credentials)
+
+    if not success:
+        return jsonify({
+            "error": "not_found",
+            "message": f"MCP '{name}' not found in registry"
+        }), 404
+
+    return jsonify({
+        "status": "ok",
+        "user_id": user_id,
+        "mcp": name,
+        "enabled": True
+    })
+
+
+@app.route("/mcp/user/<int:user_id>/disable/<name>", methods=["POST"])
+@require_auth
+def disable_mcp(user_id: int, name: str):
+    """Disable an MCP for a user."""
+    registry = get_registry()
+
+    success = registry.disable_mcp(user_id, name)
+
+    if not success:
+        return jsonify({
+            "error": "not_found",
+            "message": f"MCP '{name}' not found in registry"
+        }), 404
+
+    return jsonify({
+        "status": "ok",
+        "user_id": user_id,
+        "mcp": name,
+        "enabled": False
+    })
 
 
 def _load_env_file():

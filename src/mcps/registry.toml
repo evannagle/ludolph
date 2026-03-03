@@ -1,0 +1,87 @@
+# Ludolph MCP Registry
+# Known MCP servers with helpful metadata for easy setup.
+#
+# NOTE: This is NOT an exhaustive list. Users can add ANY npx/uvx MCP package:
+#   /mcp add mcp-server-anything
+# Unknown packages are auto-discovered by running them.
+#
+# Types:
+#   - builtin: Core functionality, always available
+#   - external: User-installable via npx/uvx packages
+#
+# Fields:
+#   - name: Friendly identifier (can differ from package name)
+#   - description: Human-readable description
+#   - type: "builtin" or "external"
+#   - enabled: Whether this MCP is active (builtins default true)
+#   - package: npx/uvx package name (external only)
+#   - env_vars: Known required environment variables (helps with setup prompts)
+#   - test_tool: Tool name to verify MCP is working
+
+# -----------------------------------------------------------------------------
+# Built-in MCPs (always available)
+# -----------------------------------------------------------------------------
+
+[mcps.vault]
+name = "vault"
+description = "File operations for Obsidian vault"
+type = "builtin"
+enabled = true
+
+[mcps.memory]
+name = "memory"
+description = "Conversation memory and search"
+type = "builtin"
+enabled = true
+
+# -----------------------------------------------------------------------------
+# External MCPs (user-installable)
+# -----------------------------------------------------------------------------
+
+[mcps.slack]
+name = "slack"
+description = "Read and send Slack messages"
+type = "external"
+package = "mcp-server-slack"
+env_vars = ["SLACK_BOT_TOKEN", "SLACK_TEAM_ID"]
+test_tool = "slack_list_channels"
+
+[mcps.calendar]
+name = "calendar"
+description = "Google Calendar integration"
+type = "external"
+package = "mcp-server-google-calendar"
+env_vars = ["GOOGLE_CALENDAR_CREDENTIALS"]
+test_tool = "list_calendars"
+
+[mcps.github]
+name = "github"
+description = "GitHub issues and PRs"
+type = "external"
+package = "mcp-server-github"
+env_vars = ["GITHUB_TOKEN"]
+test_tool = "list_repos"
+
+[mcps.linear]
+name = "linear"
+description = "Linear issue tracking"
+type = "external"
+package = "mcp-server-linear"
+env_vars = ["LINEAR_API_KEY"]
+test_tool = "list_issues"
+
+[mcps.notion]
+name = "notion"
+description = "Notion workspace integration"
+type = "external"
+package = "mcp-server-notion"
+env_vars = ["NOTION_TOKEN"]
+test_tool = "search_pages"
+
+[mcps.todoist]
+name = "todoist"
+description = "Todoist task management"
+type = "external"
+package = "mcp-server-todoist"
+env_vars = ["TODOIST_API_TOKEN"]
+test_tool = "list_projects"

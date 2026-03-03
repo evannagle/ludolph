@@ -1,0 +1,39 @@
+# Example User MCP Configuration
+# Copy this file to <telegram_user_id>.toml (e.g., 8235491344.toml)
+#
+# Each user can enable/disable MCPs and provide their own credentials.
+# The registry.toml defines what's available; this file controls what's active.
+
+# User's enabled MCPs (overrides registry defaults)
+# Only list MCPs you want to change from registry defaults
+[enabled]
+slack = true
+calendar = false
+github = true
+
+# User-specific environment variables for external MCPs
+# These override system environment variables
+[env]
+SLACK_BOT_TOKEN = "xoxb-your-token-here"
+SLACK_TEAM_ID = "T0123456789"
+GITHUB_TOKEN = "ghp_your_token_here"
+
+# Optional: User-specific MCP settings
+[settings]
+# Maximum tools per request (default: 10)
+max_tools = 10
+# Timeout for external MCP calls in seconds (default: 30)
+timeout = 30
+
+# Custom MCPs not in main registry
+# Add any npx/uvx package here - will be auto-discovered when spawned
+[custom_mcps.my-custom-mcp]
+package = "mcp-server-my-custom"
+description = "My custom MCP server"
+env_vars = ["MY_API_KEY"]
+
+# Another example: a local MCP
+[custom_mcps.local-tools]
+package = "@myorg/mcp-local-tools"
+description = "Organization-specific tools"
+env_vars = []

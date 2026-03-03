@@ -245,6 +245,29 @@ pub async fn run() -> Result<()> {
                     // Handle commands
                     match text.split_whitespace().next().unwrap_or("") {
                         "/setup" => {
+                            // Check MCP connectivity first
+                            if let Some(mcp) = &mcp_config {
+                                let client = McpClient::from_config(mcp);
+                                let status = client.get_status().await;
+                                if !status.connected {
+                                    set_reaction(&bot, msg.chat.id, msg.id, "❌").await;
+                                    clear_reactions(&bot, msg.chat.id, msg.id).await;
+                                    bot.send_message(
+                                        msg.chat.id,
+                                        format!(
+                                            "Setup requires MCP connection.\n\n\
+                                            Status: Disconnected\n\
+                                            Endpoint: {}\n\n\
+                                            Check that the MCP server is running on your Mac:\n\
+                                              launchctl kickstart gui/$(id -u)/dev.ludolph.mcp",
+                                            status.endpoint
+                                        ),
+                                    )
+                                    .await?;
+                                    return Ok(());
+                                }
+                            }
+
                             // Enter setup mode
                             if let Ok(mut guard) = setup_users.lock() {
                                 guard.insert(uid);

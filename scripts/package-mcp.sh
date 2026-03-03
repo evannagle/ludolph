@@ -27,8 +27,8 @@ echo "Packaging MCP server ${VERSION}..."
 # Write VERSION file (strip the leading 'v' for the file content)
 echo "${VERSION#v}" > src/mcp/VERSION
 
-# Create tarball
-tar -czf "$OUTFILE" -C src mcp/
+# Create tarball (include mcp/ and mcps/)
+tar -czf "$OUTFILE" -C src mcp/ mcps/
 
 echo "Created $OUTFILE"
 echo
