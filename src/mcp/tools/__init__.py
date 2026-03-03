@@ -24,6 +24,7 @@ from . import (
     metadata,
     periodic,
     search,
+    semantic,
     tags,
     tasks,
     text,
@@ -46,6 +47,7 @@ _CORE_TOOLS = (
     + analytics.TOOLS
     + memory.TOOLS
     + meta.TOOLS
+    + semantic.TOOLS
 )
 
 # Aggregate core handlers
@@ -65,6 +67,7 @@ _CORE_HANDLERS = {
     **analytics.HANDLERS,
     **memory.HANDLERS,
     **meta.HANDLERS,
+    **semantic.HANDLERS,
 }
 
 
