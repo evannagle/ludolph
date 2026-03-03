@@ -253,6 +253,72 @@ impl McpClient {
         ]
     }
 
+    /// Enable an MCP for a user.
+    ///
+    /// # Arguments
+    /// * `user_id` - Telegram user ID
+    /// * `name` - Name of the MCP to enable
+    ///
+    /// # Returns
+    /// * `Ok(true)` - MCP was successfully enabled
+    /// * `Ok(false)` - MCP not found in registry
+    /// * `Err` - Network or server error
+    pub async fn enable_mcp(&self, user_id: i64, name: &str) -> Result<bool> {
+        let url = format!("{}/mcp/user/{}/enable/{}", self.base_url, user_id, name);
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.auth_token))
+            .send()
+            .await
+            .map_err(|e| Self::format_connection_error(&e, &self.base_url, "enable MCP"))?;
+
+        match response.status().as_u16() {
+            200 => Ok(true),
+            404 => Ok(false),
+            status => {
+                let body = response.text().await.unwrap_or_default();
+                Err(anyhow::anyhow!(
+                    "Failed to enable MCP ({status}): {body}"
+                ))
+            }
+        }
+    }
+
+    /// Disable an MCP for a user.
+    ///
+    /// # Arguments
+    /// * `user_id` - Telegram user ID
+    /// * `name` - Name of the MCP to disable
+    ///
+    /// # Returns
+    /// * `Ok(true)` - MCP was successfully disabled
+    /// * `Ok(false)` - MCP not found in registry
+    /// * `Err` - Network or server error
+    pub async fn disable_mcp(&self, user_id: i64, name: &str) -> Result<bool> {
+        let url = format!("{}/mcp/user/{}/disable/{}", self.base_url, user_id, name);
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.auth_token))
+            .send()
+            .await
+            .map_err(|e| Self::format_connection_error(&e, &self.base_url, "disable MCP"))?;
+
+        match response.status().as_u16() {
+            200 => Ok(true),
+            404 => Ok(false),
+            status => {
+                let body = response.text().await.unwrap_or_default();
+                Err(anyhow::anyhow!(
+                    "Failed to disable MCP ({status}): {body}"
+                ))
+            }
+        }
+    }
+
     /// Send Wake-on-LAN packet to wake the Mac.
     pub fn wake_mac(&self) -> Result<()> {
         let mac_address = self.mac_address.as_ref().context(
@@ -661,5 +727,33 @@ mod tests {
         assert_eq!(status.tools.len(), 1);
         assert_eq!(status.tools[0].name, "test_tool");
         assert_eq!(status.tools[0].description, "A test tool");
+    }
+
+    #[tokio::test]
+    async fn enable_mcp_returns_error_for_unreachable_server() {
+        let config = McpConfig {
+            url: "http://127.0.0.1:1".to_string(), // Unreachable port
+            auth_token: "test-token".to_string(),
+            mac_address: None,
+        };
+
+        let client = McpClient::from_config(&config);
+        let result = client.enable_mcp(123, "slack").await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn disable_mcp_returns_error_for_unreachable_server() {
+        let config = McpConfig {
+            url: "http://127.0.0.1:1".to_string(), // Unreachable port
+            auth_token: "test-token".to_string(),
+            mac_address: None,
+        };
+
+        let client = McpClient::from_config(&config);
+        let result = client.disable_mcp(123, "slack").await;
+
+        assert!(result.is_err());
     }
 }

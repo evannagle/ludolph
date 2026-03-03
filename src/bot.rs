@@ -307,7 +307,8 @@ pub async fn run() -> Result<()> {
                         }
                         _ => {
                             // Other commands handled by handle_command
-                            handle_command(text, &bot_name, mcp_config.as_ref()).await
+                            #[allow(clippy::cast_possible_wrap)]
+                            handle_command(text, &bot_name, mcp_config.as_ref(), uid as i64).await
                         }
                     }
                 } else if in_setup {
@@ -526,7 +527,12 @@ fn format_api_error(error: &anyhow::Error) -> String {
 }
 
 /// Handle bot commands (messages starting with /).
-async fn handle_command(text: &str, bot_name: &str, mcp_config: Option<&McpConfig>) -> String {
+async fn handle_command(
+    text: &str,
+    bot_name: &str,
+    mcp_config: Option<&McpConfig>,
+    user_id: i64,
+) -> String {
     let parts: Vec<&str> = text.split_whitespace().collect();
     let command = parts.first().copied().unwrap_or("");
 
@@ -539,11 +545,11 @@ async fn handle_command(text: &str, bot_name: &str, mcp_config: Option<&McpConfi
                 Some("list") => handle_mcp_list(mcp_config).await,
                 Some("add") => {
                     let mcp_name = parts.get(2).copied();
-                    handle_mcp_add(mcp_name)
+                    handle_mcp_add(mcp_name, mcp_config, user_id).await
                 }
                 Some("remove") => {
                     let mcp_name = parts.get(2).copied();
-                    handle_mcp_remove(mcp_name)
+                    handle_mcp_remove(mcp_name, mcp_config, user_id).await
                 }
                 // No subcommand - show status (existing behavior)
                 None | Some(_) => handle_mcp_status(mcp_config).await,
@@ -638,31 +644,71 @@ async fn handle_mcp_list(mcp_config: Option<&McpConfig>) -> String {
 }
 
 /// Handle /mcp add <name> - enable an MCP.
-fn handle_mcp_add(mcp_name: Option<&str>) -> String {
+async fn handle_mcp_add(
+    mcp_name: Option<&str>,
+    mcp_config: Option<&McpConfig>,
+    user_id: i64,
+) -> String {
     let Some(name) = mcp_name else {
         return "Usage: /mcp add <name>\n\n\
             Use /mcp list to see available MCPs."
             .to_string();
     };
 
-    // TODO: Call actual add endpoint when available (Task 8)
-    format!(
-        "MCP '{name}' would be enabled.\n\n\
-        (Note: /mcp add is not yet implemented)"
-    )
+    let Some(mcp) = mcp_config else {
+        return "MCP not configured.\n\n\
+            Configure [mcp] in config.toml to use MCP features."
+            .to_string();
+    };
+
+    let client = McpClient::from_config(mcp);
+
+    match client.enable_mcp(user_id, name).await {
+        Ok(true) => format!(
+            "{name} enabled!\n\n\
+            To use {name} tools, you may need to set credentials.\n\
+            Use /mcp setup {name} to configure."
+        ),
+        Ok(false) => format!(
+            "MCP '{name}' not found in registry.\n\n\
+            Use /mcp list to see available MCPs."
+        ),
+        Err(e) => {
+            tracing::error!("Failed to enable MCP '{}': {}", name, e);
+            format!("Failed to enable MCP '{name}': {e}")
+        }
+    }
 }
 
 /// Handle /mcp remove <name> - disable an MCP.
-fn handle_mcp_remove(mcp_name: Option<&str>) -> String {
+async fn handle_mcp_remove(
+    mcp_name: Option<&str>,
+    mcp_config: Option<&McpConfig>,
+    user_id: i64,
+) -> String {
     let Some(name) = mcp_name else {
         return "Usage: /mcp remove <name>\n\n\
             Use /mcp list to see enabled MCPs."
             .to_string();
     };
 
-    // TODO: Call actual remove endpoint when available (Task 8)
-    format!(
-        "MCP '{name}' would be disabled.\n\n\
-        (Note: /mcp remove is not yet implemented)"
-    )
+    let Some(mcp) = mcp_config else {
+        return "MCP not configured.\n\n\
+            Configure [mcp] in config.toml to use MCP features."
+            .to_string();
+    };
+
+    let client = McpClient::from_config(mcp);
+
+    match client.disable_mcp(user_id, name).await {
+        Ok(true) => format!("{name} disabled"),
+        Ok(false) => format!(
+            "MCP '{name}' not found in registry.\n\n\
+            Use /mcp list to see available MCPs."
+        ),
+        Err(e) => {
+            tracing::error!("Failed to disable MCP '{}': {}", name, e);
+            format!("Failed to disable MCP '{name}': {e}")
+        }
+    }
 }
