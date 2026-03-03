@@ -279,9 +279,7 @@ impl McpClient {
             404 => Ok(false),
             status => {
                 let body = response.text().await.unwrap_or_default();
-                Err(anyhow::anyhow!(
-                    "Failed to enable MCP ({status}): {body}"
-                ))
+                Err(anyhow::anyhow!("Failed to enable MCP ({status}): {body}"))
             }
         }
     }
@@ -312,9 +310,7 @@ impl McpClient {
             404 => Ok(false),
             status => {
                 let body = response.text().await.unwrap_or_default();
-                Err(anyhow::anyhow!(
-                    "Failed to disable MCP ({status}): {body}"
-                ))
+                Err(anyhow::anyhow!("Failed to disable MCP ({status}): {body}"))
             }
         }
     }
