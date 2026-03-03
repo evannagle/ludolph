@@ -32,3 +32,4 @@ __pycache__/
 .claude/*
 !.claude/commands/
 !.claude/skills/
+ludolph-mcp-*.tar.gz
