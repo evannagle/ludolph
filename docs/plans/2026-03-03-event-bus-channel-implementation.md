@@ -1306,12 +1306,21 @@ git commit -m "feat: complete event bus and channel implementation"
 
 ## Verification Checklist
 
-- [ ] Event bus tests pass
-- [ ] Channel tests pass
-- [ ] Server endpoint tests pass
-- [ ] MCP tools load correctly
-- [ ] Pi builds without errors
-- [ ] Pi connects to SSE stream
-- [ ] Channel messages flow CC → Lu
-- [ ] Lu responses flow back to vault log
-- [ ] Vault log searchable
+- [x] Event bus tests pass
+- [x] Channel tests pass
+- [x] Server endpoint tests pass
+- [x] MCP tools load correctly
+- [x] Pi builds without errors
+- [x] Pi connects to SSE stream
+- [x] Channel messages flow CC → Lu
+- [x] Lu responses flow back to vault log
+- [x] Vault log searchable
+
+## Completion
+
+**Status: COMPLETE** - Implemented 2026-03-04
+
+All 13 tasks completed successfully:
+- Part 1-4 (Mac MCP): Event Bus, Channel, SSE endpoint, REST endpoints, MCP tools
+- Part 5 (Pi Bot): SSE client, event handler, channel_send integration
+- Part 6 (Deploy): Mac MCP deployed, Pi Bot deployed, end-to-end verified
