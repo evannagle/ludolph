@@ -210,6 +210,11 @@ pub async fn run() -> Result<()> {
     let mcp_config = config.mcp.clone();
     let bot_name = bot_info.name.clone();
 
+    // Spawn SSE event listener if MCP is configured
+    if let Some(ref mcp) = mcp_config {
+        spawn_sse_listener(mcp, llm.clone());
+    }
+
     // Track users currently in setup mode
     let setup_users: Arc<Mutex<HashSet<u64>>> = Arc::new(Mutex::new(HashSet::new()));
 
@@ -626,25 +631,45 @@ async fn handle_mcp_status(mcp_config: Option<&McpConfig>) -> String {
                 list
             };
 
+            let fallback_warning = if status.using_fallback {
+                "\n\nNote: Using fallback URL (primary unreachable).\n\
+                Check Tailscale or primary network connection."
+            } else {
+                ""
+            };
+
             format!(
                 "MCP Connection\n\n\
                 Status: Connected\n\
                 Endpoint: {}\n\
                 Latency: {}ms\
-                {tools_list}",
+                {tools_list}{fallback_warning}",
                 status.endpoint, status.latency_ms
             )
         } else {
-            // Check if using Tailscale IP (100.x.x.x)
+            // Build troubleshooting hint based on config
             let is_tailscale = status.endpoint.contains("100.");
-            let hint = if is_tailscale {
-                "This looks like a Tailscale IP. Check:\n\
-                • Tailscale running on Mac\n\
-                • Tailscale running on Pi\n\
-                • MCP server running on Mac"
+            let has_fallback = mcp.fallback_url.is_some();
+
+            let mut hint = String::new();
+
+            if is_tailscale {
+                hint.push_str(
+                    "This looks like a Tailscale IP. Check:\n\
+                    • Tailscale running on Mac\n\
+                    • Tailscale running on Pi\n\
+                    • MCP server running on Mac",
+                );
             } else {
-                "Unable to reach MCP server. Check that the server is running."
-            };
+                hint.push_str("Unable to reach MCP server. Check that the server is running.");
+            }
+
+            if !has_fallback && is_tailscale {
+                hint.push_str(
+                    "\n\nTip: Add fallback_url to config.toml with your\n\
+                    LAN IP so Lu works when Tailscale is down.",
+                );
+            }
 
             format!(
                 "MCP Connection\n\n\
@@ -757,4 +782,48 @@ async fn handle_mcp_remove(
             format!("Failed to disable MCP '{name}': {e}")
         }
     }
+}
+
+/// Spawn background task to listen for SSE events from the MCP server.
+///
+/// This connects to the MCP event stream and processes channel messages,
+/// allowing the bot to respond to messages sent via the Mac's channel system.
+fn spawn_sse_listener(mcp_config: &McpConfig, llm: Llm) {
+    let sse_config = crate::sse_client::SseConfig {
+        url: mcp_config.url.clone(),
+        auth_token: mcp_config.auth_token.clone(),
+        subscriber_id: "pi_bot".to_string(),
+    };
+
+    let mcp_client = McpClient::from_config(mcp_config);
+
+    tokio::spawn(async move {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+
+        // Spawn SSE connection (runs forever with reconnection)
+        let sse_config_clone = sse_config.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::sse_client::connect(sse_config_clone, tx).await {
+                tracing::error!("SSE client fatal error: {}", e);
+            }
+        });
+
+        tracing::info!("SSE event listener started for {}", sse_config.url);
+
+        // Process events as they arrive
+        while let Some(event) = rx.recv().await {
+            tracing::debug!(
+                "Processing event: type={}, id={}",
+                event.event_type,
+                event.id
+            );
+
+            if let Err(e) = crate::event_handler::handle_event(event, &llm, &mcp_client).await {
+                tracing::error!("Event handler error: {}", e);
+                // Continue processing - don't let one error crash the listener
+            }
+        }
+
+        tracing::warn!("SSE event channel closed - listener shutting down");
+    });
 }
