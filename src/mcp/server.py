@@ -34,6 +34,7 @@ from .llm import (
     chat as llm_chat,
     chat_stream as llm_chat_stream,
 )
+from .event_bus import get_event_bus
 from .process_manager import get_process_manager
 from .registry import Registry
 from .security import get_vault_path, init_security, is_git_repo, require_auth
@@ -379,6 +380,55 @@ def disable_mcp(user_id: int, name: str):
         "mcp": name,
         "enabled": False
     })
+
+
+# -----------------------------------------------------------------------------
+# Event Bus SSE Endpoint
+# -----------------------------------------------------------------------------
+
+
+@app.route("/events", methods=["GET"])
+@require_auth
+def events():
+    """
+    SSE stream of events for a subscriber.
+
+    Query parameters:
+        subscriber: Unique identifier for this subscriber (required)
+
+    Returns:
+        Server-Sent Events stream with events from the event bus.
+        Each event is JSON-encoded in the data field.
+        Keepalive comments are sent periodically.
+    """
+    subscriber = request.args.get("subscriber")
+    if not subscriber:
+        return jsonify({"error": "subscriber parameter required"}), 400
+
+    bus = get_event_bus()
+    bus.subscribe(subscriber)
+
+    def generate():
+        import time
+
+        last_id = 0
+        while True:
+            events_list = bus.receive(subscriber, since_id=last_id)
+            for event in events_list:
+                last_id = event.id
+                data = {
+                    "id": event.id,
+                    "type": event.type,
+                    "timestamp": event.timestamp,
+                    "data": event.data,
+                }
+                yield f"data: {json.dumps(data)}\n\n"
+
+            # Keepalive comment (SSE spec: lines starting with : are comments)
+            yield ": keepalive\n\n"
+            time.sleep(1)
+
+    return Response(generate(), mimetype="text/event-stream")
 
 
 def _load_env_file():
