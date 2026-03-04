@@ -72,8 +72,11 @@ pub struct PiConfig {
 /// MCP server connection configuration (for Pi thin client).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpConfig {
-    /// MCP server URL (e.g., `http://mac.local:8200`)
+    /// MCP server URL (e.g., `http://mac.local:8200` or Tailscale IP)
     pub url: String,
+    /// Fallback URL if primary fails (e.g., LAN IP when Tailscale is down)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_url: Option<String>,
     /// Authentication token for MCP server
     pub auth_token: String,
     /// MAC address for Wake-on-LAN (e.g., "a4:83:e7:xx:xx:xx")
