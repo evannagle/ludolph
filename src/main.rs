@@ -5,6 +5,7 @@ mod llm;
 mod mcp_client;
 mod memory;
 mod setup;
+mod sse_client;
 mod ssh;
 mod telegram;
 mod tools;
