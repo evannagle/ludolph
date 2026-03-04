@@ -34,6 +34,7 @@ from .llm import (
     chat as llm_chat,
     chat_stream as llm_chat_stream,
 )
+from .channel import get_channel
 from .event_bus import get_event_bus
 from .process_manager import get_process_manager
 from .registry import Registry
@@ -429,6 +430,60 @@ def events():
             time.sleep(1)
 
     return Response(generate(), mimetype="text/event-stream")
+
+
+# -----------------------------------------------------------------------------
+# Channel Messaging Endpoints
+# -----------------------------------------------------------------------------
+
+
+@app.route("/channel/send", methods=["POST"])
+@require_auth
+def channel_send():
+    """Send a message to the channel."""
+    data = request.json or {}
+    sender = data.get("from")
+    content = data.get("content")
+    reply_to = data.get("reply_to")
+
+    if not sender or not content:
+        return jsonify({"error": "from and content required"}), 400
+
+    bus = get_event_bus()
+    channel = get_channel(bus, get_vault_path())
+
+    msg = channel.send(sender, content, reply_to)
+
+    return jsonify({
+        "status": "sent",
+        "id": msg.id,
+        "timestamp": msg.timestamp,
+    })
+
+
+@app.route("/channel/history", methods=["GET"])
+@require_auth
+def channel_history():
+    """Get recent channel message history."""
+    limit = request.args.get("limit", 20, type=int)
+
+    bus = get_event_bus()
+    channel = get_channel(bus, get_vault_path())
+
+    messages = channel.history(limit)
+
+    return jsonify({
+        "messages": [
+            {
+                "id": m.id,
+                "from": m.sender,
+                "content": m.content,
+                "timestamp": m.timestamp,
+                "reply_to": m.reply_to,
+            }
+            for m in messages
+        ]
+    })
 
 
 def _load_env_file():
