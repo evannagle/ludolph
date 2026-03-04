@@ -27,6 +27,7 @@ from . import (
     semantic,
     tags,
     tasks,
+    telegram,
     text,
 )
 
@@ -48,6 +49,7 @@ _CORE_TOOLS = (
     + memory.TOOLS
     + meta.TOOLS
     + semantic.TOOLS
+    + telegram.TOOLS
 )
 
 # Aggregate core handlers
@@ -68,6 +70,7 @@ _CORE_HANDLERS = {
     **memory.HANDLERS,
     **meta.HANDLERS,
     **semantic.HANDLERS,
+    **telegram.HANDLERS,
 }
 
 
