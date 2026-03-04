@@ -252,14 +252,26 @@ pub async fn run() -> Result<()> {
                                 if !status.connected {
                                     set_reaction(&bot, msg.chat.id, msg.id, "❌").await;
                                     clear_reactions(&bot, msg.chat.id, msg.id).await;
+
+                                    // Check if using Tailscale IP (100.x.x.x)
+                                    let is_tailscale = status.endpoint.contains("100.");
+                                    let hint = if is_tailscale {
+                                        "This looks like a Tailscale IP. Check:\n\
+                                        • Tailscale running on Mac\n\
+                                        • Tailscale running on Pi\n\
+                                        • MCP server running on Mac"
+                                    } else {
+                                        "Check that the MCP server is running on your Mac:\n\
+                                          launchctl kickstart gui/$(id -u)/dev.ludolph.mcp"
+                                    };
+
                                     bot.send_message(
                                         msg.chat.id,
                                         format!(
                                             "Setup requires MCP connection.\n\n\
                                             Status: Disconnected\n\
                                             Endpoint: {}\n\n\
-                                            Check that the MCP server is running on your Mac:\n\
-                                              launchctl kickstart gui/$(id -u)/dev.ludolph.mcp",
+                                            {hint}",
                                             status.endpoint
                                         ),
                                     )
@@ -623,11 +635,22 @@ async fn handle_mcp_status(mcp_config: Option<&McpConfig>) -> String {
                 status.endpoint, status.latency_ms
             )
         } else {
+            // Check if using Tailscale IP (100.x.x.x)
+            let is_tailscale = status.endpoint.contains("100.");
+            let hint = if is_tailscale {
+                "This looks like a Tailscale IP. Check:\n\
+                • Tailscale running on Mac\n\
+                • Tailscale running on Pi\n\
+                • MCP server running on Mac"
+            } else {
+                "Unable to reach MCP server. Check that the server is running."
+            };
+
             format!(
                 "MCP Connection\n\n\
                 Status: Disconnected\n\
                 Endpoint: {}\n\n\
-                Unable to reach MCP server. Check that the server is running.",
+                {hint}",
                 status.endpoint
             )
         }
