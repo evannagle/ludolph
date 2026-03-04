@@ -1,6 +1,7 @@
 mod bot;
 mod cli;
 mod config;
+mod event_handler;
 mod llm;
 mod mcp_client;
 mod memory;
