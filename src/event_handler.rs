@@ -67,11 +67,7 @@ pub async fn handle_event(event: Event, llm: &Llm, mcp: &McpClient) -> Result<()
 ///
 /// Parses the message, skips our own messages, processes through LLM,
 /// and sends the response back to the channel.
-async fn handle_channel_message(
-    data: serde_json::Value,
-    llm: &Llm,
-    _mcp: &McpClient,
-) -> Result<()> {
+async fn handle_channel_message(data: serde_json::Value, llm: &Llm, mcp: &McpClient) -> Result<()> {
     let msg: ChannelMessageData =
         serde_json::from_value(data).context("Failed to parse channel message data")?;
 
@@ -96,14 +92,12 @@ async fn handle_channel_message(
         .await
         .context("Failed to get LLM response")?;
 
-    info!(
-        "LLM response: {}",
-        truncate_for_log(&response, 100)
-    );
+    info!("LLM response: {}", truncate_for_log(&response, 100));
 
-    // TODO: Send response back to channel via MCP client
-    // This will be implemented in Task 5.4 when channel_send is added to McpClient:
-    // mcp.channel_send(BOT_SENDER_ID, &response, Some(msg.id)).await?;
+    // Send response back to channel
+    mcp.channel_send(BOT_SENDER_ID, &response, Some(msg.id))
+        .await
+        .context("Failed to send response to channel")?;
 
     Ok(())
 }

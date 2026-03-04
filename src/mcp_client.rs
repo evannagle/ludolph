@@ -17,6 +17,7 @@ use crate::tools::Tool;
 pub struct McpClient {
     client: reqwest::Client,
     base_url: String,
+    fallback_url: Option<String>,
     auth_token: String,
     mac_address: Option<String>,
 }
@@ -133,6 +134,8 @@ pub struct McpStatus {
     pub latency_ms: u64,
     /// Tools available on the server.
     pub tools: Vec<ToolInfo>,
+    /// Whether we connected via fallback URL (primary failed).
+    pub using_fallback: bool,
 }
 
 /// Response from the /status endpoint.
@@ -157,6 +160,10 @@ impl McpClient {
         Self {
             client,
             base_url: config.url.trim_end_matches('/').to_string(),
+            fallback_url: config
+                .fallback_url
+                .as_ref()
+                .map(|u| u.trim_end_matches('/').to_string()),
             auth_token: config.auth_token.clone(),
             mac_address: config.mac_address.clone(),
         }
@@ -165,15 +172,42 @@ impl McpClient {
     /// Get detailed status information from the MCP server.
     ///
     /// Returns status including connection state, latency, and available tools.
-    /// If the server is unreachable, returns `McpStatus` with `connected: false`.
+    /// Tries primary URL first, then fallback URL if configured.
+    /// If both are unreachable, returns `McpStatus` with `connected: false`.
     pub async fn get_status(&self) -> McpStatus {
+        // Try primary URL first
+        if let Some(status) = self.try_status(&self.base_url, false).await {
+            return status;
+        }
+
+        // Try fallback if configured
+        if let Some(fallback) = &self.fallback_url {
+            if let Some(status) = self.try_status(fallback, true).await {
+                return status;
+            }
+        }
+
+        // Both failed
+        McpStatus {
+            connected: false,
+            endpoint: self.base_url.clone(),
+            latency_ms: 0,
+            tools: Vec::new(),
+            using_fallback: false,
+        }
+    }
+
+    /// Try to get status from a specific URL.
+    /// Returns `Some(McpStatus)` if connected, `None` if failed.
+    async fn try_status(&self, base_url: &str, is_fallback: bool) -> Option<McpStatus> {
         let start = Instant::now();
-        let endpoint = format!("{}/status", self.base_url);
+        let endpoint = format!("{base_url}/status");
 
         let response = self
             .client
             .get(&endpoint)
             .header("Authorization", format!("Bearer {}", self.auth_token))
+            .timeout(Duration::from_secs(5)) // Shorter timeout for status check
             .send()
             .await;
 
@@ -181,39 +215,29 @@ impl McpClient {
 
         match response {
             Ok(resp) if resp.status().is_success() => match resp.json::<StatusResponse>().await {
-                Ok(status) => McpStatus {
+                Ok(status) => Some(McpStatus {
                     connected: true,
-                    endpoint: self.base_url.clone(),
+                    endpoint: base_url.to_string(),
                     latency_ms,
                     tools: status.tools,
-                },
+                    using_fallback: is_fallback,
+                }),
                 Err(e) => {
-                    tracing::warn!("Failed to parse status response: {}", e);
-                    McpStatus {
-                        connected: false,
-                        endpoint: self.base_url.clone(),
-                        latency_ms,
-                        tools: Vec::new(),
-                    }
+                    tracing::warn!("Failed to parse status response from {}: {}", base_url, e);
+                    None
                 }
             },
             Ok(resp) => {
-                tracing::warn!("Status endpoint returned error: {}", resp.status());
-                McpStatus {
-                    connected: false,
-                    endpoint: self.base_url.clone(),
-                    latency_ms,
-                    tools: Vec::new(),
-                }
+                tracing::warn!(
+                    "Status endpoint {} returned error: {}",
+                    base_url,
+                    resp.status()
+                );
+                None
             }
             Err(e) => {
-                tracing::warn!("Failed to connect to MCP server: {}", e);
-                McpStatus {
-                    connected: false,
-                    endpoint: self.base_url.clone(),
-                    latency_ms,
-                    tools: Vec::new(),
-                }
+                tracing::debug!("Failed to connect to {}: {}", base_url, e);
+                None
             }
         }
     }
@@ -620,6 +644,54 @@ impl McpClient {
         anyhow::anyhow!(msg)
     }
 
+    /// Send a message to the channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `from` - Sender identifier (e.g., "lu" for the bot)
+    /// * `content` - Message content to send
+    /// * `reply_to` - Optional ID of message this is replying to
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails or the server returns an error status.
+    pub async fn channel_send(
+        &self,
+        from: &str,
+        content: &str,
+        reply_to: Option<u64>,
+    ) -> Result<()> {
+        let url = format!("{}/channel/send", self.base_url);
+
+        let mut body = serde_json::json!({
+            "from": from,
+            "content": content,
+        });
+
+        if let Some(id) = reply_to {
+            body["reply_to"] = serde_json::json!(id);
+        }
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.auth_token))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| {
+                Self::format_connection_error(&e, &self.base_url, "send channel message")
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            anyhow::bail!("Channel send failed: {status} - {text}");
+        }
+
+        Ok(())
+    }
+
     /// Send a chat request to the MCP server's LLM proxy.
     pub async fn chat(&self, request: &ChatRequest) -> Result<ChatResponse> {
         let response = self
@@ -665,6 +737,7 @@ mod tests {
     fn from_config_creates_client() {
         let config = McpConfig {
             url: "http://localhost:8200".to_string(),
+            fallback_url: None,
             auth_token: "test-token".to_string(),
             mac_address: Some("aa:bb:cc:dd:ee:ff".to_string()),
         };
@@ -680,6 +753,7 @@ mod tests {
     fn from_config_strips_trailing_slash() {
         let config = McpConfig {
             url: "http://localhost:8200/".to_string(),
+            fallback_url: None,
             auth_token: "test-token".to_string(),
             mac_address: None,
         };
@@ -693,6 +767,7 @@ mod tests {
     async fn get_status_returns_disconnected_for_unreachable_server() {
         let config = McpConfig {
             url: "http://127.0.0.1:1".to_string(), // Unreachable port
+            fallback_url: None,
             auth_token: "test-token".to_string(),
             mac_address: None,
         };
@@ -715,6 +790,7 @@ mod tests {
                 name: "test_tool".to_string(),
                 description: "A test tool".to_string(),
             }],
+            using_fallback: false,
         };
 
         assert!(status.connected);
@@ -723,12 +799,14 @@ mod tests {
         assert_eq!(status.tools.len(), 1);
         assert_eq!(status.tools[0].name, "test_tool");
         assert_eq!(status.tools[0].description, "A test tool");
+        assert!(!status.using_fallback);
     }
 
     #[tokio::test]
     async fn enable_mcp_returns_error_for_unreachable_server() {
         let config = McpConfig {
             url: "http://127.0.0.1:1".to_string(), // Unreachable port
+            fallback_url: None,
             auth_token: "test-token".to_string(),
             mac_address: None,
         };
@@ -743,6 +821,7 @@ mod tests {
     async fn disable_mcp_returns_error_for_unreachable_server() {
         let config = McpConfig {
             url: "http://127.0.0.1:1".to_string(), // Unreachable port
+            fallback_url: None,
             auth_token: "test-token".to_string(),
             mac_address: None,
         };
