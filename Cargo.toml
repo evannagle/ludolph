@@ -37,6 +37,7 @@ rand = "0.9"
 rusqlite = { version = "0.31", features = ["bundled"] }
 chrono = { version = "0.4", features = ["serde"] }
 futures = "0.3"
+eventsource-client = "0.13"
 
 [dev-dependencies]
 cargo-husky = { version = "1", default-features = false, features = ["prepush-hook", "run-cargo-check", "run-cargo-clippy", "run-cargo-fmt", "run-cargo-test"] }
