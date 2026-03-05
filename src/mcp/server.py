@@ -242,6 +242,63 @@ def tools_call():
     return jsonify(result)
 
 
+def transform_messages_for_openai(messages: list) -> list:
+    """
+    Transform Anthropic-style messages to OpenAI-style for LiteLLM.
+
+    Anthropic uses content blocks: [{"type": "tool_use", ...}]
+    OpenAI uses tool_calls field on assistant messages and role="tool" for results.
+    """
+    result = []
+
+    for msg in messages:
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+
+        # String content passes through unchanged
+        if isinstance(content, str):
+            result.append(msg)
+            continue
+
+        # List content needs transformation
+        if not isinstance(content, list):
+            result.append(msg)
+            continue
+
+        # Check what types of blocks we have
+        block_types = {b.get("type") for b in content if isinstance(b, dict)}
+
+        # Assistant message with tool_use -> extract tool_calls
+        if role == "assistant" and "tool_use" in block_types:
+            for block in content:
+                if block.get("type") == "tool_use":
+                    tool_calls = block.get("tool_calls", [])
+                    if tool_calls:
+                        result.append({
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": tool_calls,
+                        })
+                    break
+            continue
+
+        # User message with tool_result -> convert to tool role messages
+        if role == "user" and "tool_result" in block_types:
+            for block in content:
+                if block.get("type") == "tool_result":
+                    result.append({
+                        "role": "tool",
+                        "tool_call_id": block.get("tool_use_id", ""),
+                        "content": block.get("content", ""),
+                    })
+            continue
+
+        # Unknown format - pass through
+        result.append(msg)
+
+    return result
+
+
 @app.route("/chat", methods=["POST"])
 @require_auth
 def chat():
@@ -255,8 +312,11 @@ def chat():
     if not messages or not isinstance(messages, list):
         return jsonify({"error": "invalid_input", "message": "messages must be a non-empty list"}), 400
 
+    # Transform Anthropic-style messages to OpenAI-style for LiteLLM
+    transformed_messages = transform_messages_for_openai(messages)
+
     try:
-        result = llm_chat(model=model, messages=messages, tools=tools)
+        result = llm_chat(model=model, messages=transformed_messages, tools=tools)
         return jsonify(result)
     except LlmAuthError as e:
         return jsonify({"error": "auth_failed", "message": str(e)}), 401
@@ -267,7 +327,8 @@ def chat():
     except LlmApiError as e:
         return jsonify({"error": "api_error", "message": str(e)}), 502
     except Exception as e:
-        return jsonify({"error": "internal_error", "message": "An unexpected error occurred"}), 500
+        logger.exception("Unexpected error in /chat endpoint")
+        return jsonify({"error": "internal_error", "message": str(e)}), 500
 
 
 @app.route("/chat/stream", methods=["POST"])
@@ -528,11 +589,26 @@ def admin_health():
             "fix": "Get a new key from console.anthropic.com/account/keys",
         })
     except Exception as e:
-        return jsonify({
-            "api_key_valid": False,
-            "error": str(e),
-            "fix": "Check MCP server logs for details",
-        })
+        error_str = str(e).lower()
+        # Parse common errors into user-friendly messages
+        if "credit balance" in error_str or "budget" in error_str:
+            return jsonify({
+                "api_key_valid": True,  # Key is valid, just no credits
+                "error": "API credits exhausted",
+                "fix": "Add credits at console.anthropic.com/settings/billing",
+            })
+        elif "rate limit" in error_str:
+            return jsonify({
+                "api_key_valid": True,
+                "error": "Rate limited",
+                "fix": "Wait a moment and try again",
+            })
+        else:
+            return jsonify({
+                "api_key_valid": False,
+                "error": str(e),
+                "fix": "Check MCP server logs for details",
+            })
 
 
 @app.route("/admin/update-api-key", methods=["POST"])
@@ -619,6 +695,12 @@ def _load_env_file():
 
 def main():
     """Run the server."""
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
     # Load .env file first
     _load_env_file()
 
