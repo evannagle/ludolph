@@ -7,8 +7,11 @@
 // Module is prepared for integration in Task 5.5
 #![allow(dead_code)]
 
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use tokio::time::sleep;
 use tracing::{debug, info};
 
 use crate::llm::Llm;
@@ -17,6 +20,24 @@ use crate::sse_client::Event;
 
 /// Our bot's identifier for detecting our own messages.
 const BOT_SENDER_ID: &str = "lu";
+
+/// Default delay in seconds before responding to channel messages.
+/// Helps throttle conversation pace and manage API costs.
+const DEFAULT_CHANNEL_DELAY_SECS: u64 = 0;
+
+/// Git context from the sender's working environment.
+#[derive(Debug, Deserialize, Default)]
+struct GitContext {
+    /// Repository name.
+    #[serde(default)]
+    repo: Option<String>,
+    /// Current branch name.
+    #[serde(default)]
+    branch: Option<String>,
+    /// Recent commit messages (oneline format).
+    #[serde(default)]
+    recent_commits: Vec<String>,
+}
 
 /// Channel message data from event.
 #[derive(Debug, Deserialize)]
@@ -30,6 +51,9 @@ struct ChannelMessageData {
     /// ID of message this is replying to, if any.
     #[serde(default)]
     reply_to: Option<u64>,
+    /// Git context from sender's environment.
+    #[serde(default)]
+    context: Option<GitContext>,
 }
 
 /// Handle an event from the MCP stream.
@@ -67,6 +91,8 @@ pub async fn handle_event(event: Event, llm: &Llm, mcp: &McpClient) -> Result<()
 ///
 /// Parses the message, skips our own messages, processes through LLM,
 /// and sends the response back to the channel.
+///
+/// Respects `LU_CHANNEL_DELAY` environment variable for throttling (in seconds).
 async fn handle_channel_message(data: serde_json::Value, llm: &Llm, mcp: &McpClient) -> Result<()> {
     let msg: ChannelMessageData =
         serde_json::from_value(data).context("Failed to parse channel message data")?;
@@ -77,17 +103,66 @@ async fn handle_channel_message(data: serde_json::Value, llm: &Llm, mcp: &McpCli
         return Ok(());
     }
 
-    info!(
-        "Channel message from {} (id={}): {}",
-        msg.from,
-        msg.id,
-        truncate_for_log(&msg.content, 100)
-    );
+    // Apply throttle delay if configured (for managing conversation pace/costs)
+    let delay_secs = std::env::var("LU_CHANNEL_DELAY")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_CHANNEL_DELAY_SECS);
+    if delay_secs > 0 {
+        debug!("Throttling channel response for {}s", delay_secs);
+        sleep(Duration::from_secs(delay_secs)).await;
+    }
+
+    // Log context if present
+    if let Some(ctx) = &msg.context {
+        info!(
+            "Channel message from {} (id={}) [repo={}, branch={}]: {}",
+            msg.from,
+            msg.id,
+            ctx.repo.as_deref().unwrap_or("?"),
+            ctx.branch.as_deref().unwrap_or("?"),
+            truncate_for_log(&msg.content, 100)
+        );
+    } else {
+        info!(
+            "Channel message from {} (id={}): {}",
+            msg.from,
+            msg.id,
+            truncate_for_log(&msg.content, 100)
+        );
+    }
+
+    // Build message with context prefix if available
+    let message_with_context = if let Some(ctx) = &msg.context {
+        let mut context_parts = Vec::new();
+        if let Some(repo) = &ctx.repo {
+            context_parts.push(format!("repo: {}", repo));
+        }
+        if let Some(branch) = &ctx.branch {
+            context_parts.push(format!("branch: {}", branch));
+        }
+        if !ctx.recent_commits.is_empty() {
+            let commits = ctx.recent_commits.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+            context_parts.push(format!("recent commits: {}", commits));
+        }
+
+        if context_parts.is_empty() {
+            msg.content.clone()
+        } else {
+            format!(
+                "[Context: {}]\n\n{}",
+                context_parts.join(" | "),
+                msg.content
+            )
+        }
+    } else {
+        msg.content.clone()
+    };
 
     // Process through LLM, sending user-friendly errors back to the channel
     // Note: Using None for user_id since channel messages don't have Telegram user IDs.
     // A future enhancement could map channel users to IDs for conversation memory.
-    let response = match llm.chat(&msg.content, None).await {
+    let response = match llm.chat(&message_with_context, None).await {
         Ok(response) => response,
         Err(e) => {
             let error_msg = format_user_error(&e);

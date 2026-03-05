@@ -31,6 +31,7 @@ class ChannelMessage:
     content: str
     timestamp: str
     reply_to: int | None = None
+    context: dict | None = None  # Git context: {repo, branch, recent_commits}
 
 
 class Channel:
@@ -61,6 +62,7 @@ class Channel:
         sender: str,
         content: str,
         reply_to: int | None = None,
+        context: dict | None = None,
     ) -> ChannelMessage:
         """Send a message to the channel.
 
@@ -68,6 +70,7 @@ class Channel:
             sender: The sender identifier (e.g., "claude_code", "lu").
             content: The message content.
             reply_to: Optional ID of message being replied to.
+            context: Optional git context (repo, branch, recent_commits).
 
         Returns:
             The created ChannelMessage.
@@ -79,19 +82,24 @@ class Channel:
                 content=content,
                 timestamp=datetime.now().isoformat(),
                 reply_to=reply_to,
+                context=context,
             )
             self._next_id += 1
             self._messages.append(msg)
 
         # Publish event to bus
+        event_data = {
+            "id": msg.id,
+            "from": msg.sender,
+            "content": msg.content,
+            "reply_to": msg.reply_to,
+        }
+        if context:
+            event_data["context"] = context
+
         self._bus.publish(
             "channel_message",
-            {
-                "id": msg.id,
-                "from": msg.sender,
-                "content": msg.content,
-                "reply_to": msg.reply_to,
-            },
+            event_data,
             source=sender,
         )
 

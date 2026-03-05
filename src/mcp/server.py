@@ -317,6 +317,9 @@ def chat():
 
     try:
         result = llm_chat(model=model, messages=transformed_messages, tools=tools)
+        # Track token usage for cost estimation
+        if "usage" in result:
+            track_token_usage(result["usage"])
         return jsonify(result)
     except LlmAuthError as e:
         return jsonify({"error": "auth_failed", "message": str(e)}), 401
@@ -498,10 +501,150 @@ def events():
 # -----------------------------------------------------------------------------
 
 
+def get_git_context(path: Path) -> dict | None:
+    """Get git repo, branch, and recent commits for context awareness.
+
+    Args:
+        path: Directory to check for git info.
+
+    Returns:
+        Dict with repo name, branch, and recent commits, or None if not a git repo.
+    """
+    import subprocess
+
+    try:
+        repo_root = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=path,
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+
+        branch = subprocess.check_output(
+            ["git", "branch", "--show-current"],
+            cwd=path,
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+
+        commits_raw = subprocess.check_output(
+            ["git", "log", "--oneline", "-5"],
+            cwd=path,
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+        commits = commits_raw.split("\n") if commits_raw else []
+
+        return {
+            "repo": Path(repo_root).name,
+            "branch": branch,
+            "recent_commits": commits,
+        }
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
+# Channel throttling state
+_channel_throttle = {
+    "exchanges_this_hour": 0,
+    "exchanges_per_hour_limit": 0,  # 0 = disabled
+    "hour_started": None,
+    "paused": False,
+    "total_tokens_used": 0,
+    "estimated_cost_usd": 0.0,
+}
+
+# Claude Sonnet pricing (approximate $/1M tokens)
+COST_PER_1M_INPUT_TOKENS = 3.00
+COST_PER_1M_OUTPUT_TOKENS = 15.00
+
+
+def _reset_hourly_counter_if_needed():
+    """Reset hourly counter if we're in a new hour."""
+    from datetime import datetime
+    now = datetime.now()
+    current_hour = now.replace(minute=0, second=0, microsecond=0).isoformat()
+
+    if _channel_throttle["hour_started"] != current_hour:
+        _channel_throttle["hour_started"] = current_hour
+        _channel_throttle["exchanges_this_hour"] = 0
+        _channel_throttle["paused"] = False
+        logger.info("Channel throttle hourly counter reset")
+
+
+def track_token_usage(usage: dict):
+    """Track token usage for cost estimation."""
+    input_tokens = usage.get("prompt_tokens", 0)
+    output_tokens = usage.get("completion_tokens", 0)
+
+    _channel_throttle["total_tokens_used"] += input_tokens + output_tokens
+
+    # Estimate cost
+    input_cost = (input_tokens / 1_000_000) * COST_PER_1M_INPUT_TOKENS
+    output_cost = (output_tokens / 1_000_000) * COST_PER_1M_OUTPUT_TOKENS
+    _channel_throttle["estimated_cost_usd"] += input_cost + output_cost
+
+
+@app.route("/channel/throttle", methods=["GET", "POST"])
+@require_auth
+def channel_throttle():
+    """Configure and monitor channel throttling.
+
+    GET: Returns current throttle settings, usage, and cost estimate.
+    POST: Updates throttle settings.
+        - per_hour: Max exchanges per hour (0 = disabled)
+        - reset: Reset all counters
+        - resume: Unpause if paused
+
+    Example: POST {"per_hour": 10} - max 10 exchanges per hour
+    """
+    _reset_hourly_counter_if_needed()
+
+    if request.method == "GET":
+        return jsonify({
+            "exchanges_this_hour": _channel_throttle["exchanges_this_hour"],
+            "exchanges_per_hour_limit": _channel_throttle["exchanges_per_hour_limit"],
+            "paused": _channel_throttle["paused"],
+            "total_tokens_used": _channel_throttle["total_tokens_used"],
+            "estimated_cost_usd": round(_channel_throttle["estimated_cost_usd"], 4),
+            "hour_started": _channel_throttle["hour_started"],
+        })
+
+    data = request.json or {}
+
+    if "per_hour" in data:
+        _channel_throttle["exchanges_per_hour_limit"] = int(data["per_hour"])
+        logger.info(f"Channel throttle set to {data['per_hour']} exchanges/hour")
+
+    if data.get("reset"):
+        _channel_throttle["exchanges_this_hour"] = 0
+        _channel_throttle["total_tokens_used"] = 0
+        _channel_throttle["estimated_cost_usd"] = 0.0
+        _channel_throttle["paused"] = False
+        logger.info("Channel throttle counters reset")
+
+    if data.get("resume"):
+        _channel_throttle["paused"] = False
+        logger.info("Channel throttle resumed")
+
+    return jsonify({
+        "exchanges_this_hour": _channel_throttle["exchanges_this_hour"],
+        "exchanges_per_hour_limit": _channel_throttle["exchanges_per_hour_limit"],
+        "paused": _channel_throttle["paused"],
+        "total_tokens_used": _channel_throttle["total_tokens_used"],
+        "estimated_cost_usd": round(_channel_throttle["estimated_cost_usd"], 4),
+    })
+
+
 @app.route("/channel/send", methods=["POST"])
 @require_auth
 def channel_send():
-    """Send a message to the channel."""
+    """Send a message to the channel.
+
+    Automatically attaches git context (repo, branch, recent commits)
+    to help Lu understand what the sender is working on.
+
+    Respects channel throttle settings - will return 429 if paused.
+    """
+    _reset_hourly_counter_if_needed()
+
     data = request.json or {}
     sender = data.get("from")
     content = data.get("content")
@@ -510,15 +653,37 @@ def channel_send():
     if not sender or not content:
         return jsonify({"error": "from and content required"}), 400
 
+    # Check if throttled
+    if _channel_throttle["paused"]:
+        return jsonify({
+            "error": "throttled",
+            "message": f"Channel paused after {_channel_throttle['exchanges_this_hour']} exchanges this hour. Use /channel/throttle to resume.",
+            "exchanges_this_hour": _channel_throttle["exchanges_this_hour"],
+        }), 429
+
+    # Increment exchange counter
+    _channel_throttle["exchanges_this_hour"] += 1
+
+    # Check if we've hit the hourly limit
+    limit = _channel_throttle["exchanges_per_hour_limit"]
+    if limit > 0 and _channel_throttle["exchanges_this_hour"] >= limit:
+        _channel_throttle["paused"] = True
+        logger.info(f"Channel throttle limit reached ({_channel_throttle['exchanges_this_hour']}/{limit} exchanges/hour)")
+
+    # Auto-gather git context from vault path
+    context = get_git_context(get_vault_path())
+
     bus = get_event_bus()
     channel = get_channel(bus, get_vault_path())
 
-    msg = channel.send(sender, content, reply_to)
+    msg = channel.send(sender, content, reply_to, context=context)
 
     return jsonify({
         "status": "sent",
         "id": msg.id,
         "timestamp": msg.timestamp,
+        "exchanges_this_hour": _channel_throttle["exchanges_this_hour"],
+        "exchanges_per_hour_limit": _channel_throttle["exchanges_per_hour_limit"],
     })
 
 
@@ -541,6 +706,7 @@ def channel_history():
                 "content": m.content,
                 "timestamp": m.timestamp,
                 "reply_to": m.reply_to,
+                "context": m.context,
             }
             for m in messages
         ]
