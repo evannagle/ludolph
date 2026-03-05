@@ -530,29 +530,53 @@ pub async fn run() -> Result<()> {
 ///
 /// Extracts the root cause from anyhow error chains and provides
 /// clear, actionable messages for common API errors.
+///
+/// Messages distinguish between:
+/// - Issues users can fix (rate limits, network)
+/// - Issues the Mac admin needs to fix (API key, credits)
 fn format_api_error(error: &anyhow::Error) -> String {
     // Get full error chain as string
     let full_error = format!("{error:?}");
 
-    // Check for credit/billing errors
-    if full_error.contains("credit balance is too low") {
-        return "API credits exhausted. Add credits at console.anthropic.com/settings/billing"
+    // Check for credit/billing errors (Mac admin needs to fix)
+    if full_error.contains("credit balance is too low") || full_error.contains("budget") {
+        return "⚠️ API credits exhausted.\n\n\
+                The Mac admin needs to add credits at:\n\
+                console.anthropic.com/settings/billing\n\n\
+                Use /status to check when it's fixed."
             .to_string();
     }
 
-    // Check for rate limit errors
+    // Check for rate limit errors (user can wait)
     if full_error.contains("rate_limit") || full_error.contains("Rate limit") {
-        return "Rate limited. Please wait a moment and try again.".to_string();
+        return "⏳ Rate limited. Please wait a moment and try again.".to_string();
     }
 
-    // Check for auth errors
-    if full_error.contains("authentication") || full_error.contains("invalid_api_key") {
-        return "Invalid API key. Check your config.".to_string();
+    // Check for auth errors (Mac admin needs to fix)
+    if full_error.contains("authentication")
+        || full_error.contains("invalid_api_key")
+        || full_error.contains("auth_failed")
+        || full_error.contains("API credentials")
+    {
+        return "🔑 API key is invalid or expired.\n\n\
+                The Mac admin needs to update it:\n\
+                1. Get a new key from console.anthropic.com/account/keys\n\
+                2. Run: ./scripts/install-mcp.sh\n\n\
+                Use /status to check when it's fixed."
+            .to_string();
     }
 
-    // Check for network errors
+    // Check for MCP connection errors (Mac might be asleep/offline)
+    if full_error.contains("MCP") && full_error.contains("connection") {
+        return "💤 Can't reach the Mac MCP server.\n\n\
+                The Mac might be asleep or offline.\n\
+                Try sending a message to wake it up."
+            .to_string();
+    }
+
+    // Check for general network errors
     if full_error.contains("connection") || full_error.contains("timeout") {
-        return "Network error. Check your internet connection.".to_string();
+        return "🌐 Network error. Check your internet connection.".to_string();
     }
 
     // Default: show the error chain more clearly
@@ -591,6 +615,13 @@ async fn handle_command(
                     let mcp_name = parts.get(2).copied();
                     handle_mcp_remove(mcp_name, mcp_config, user_id).await
                 }
+                Some("fix") => {
+                    // Placeholder for self-healing API key update
+                    "🔧 /mcp fix coming soon!\n\n\
+                     For now, ask the Mac admin to run:\n\
+                     ./scripts/install-mcp.sh"
+                        .to_string()
+                }
                 // No subcommand - show status (existing behavior)
                 None | Some(_) => handle_mcp_status(mcp_config).await,
             }
@@ -619,6 +650,16 @@ async fn handle_mcp_status(mcp_config: Option<&McpConfig>) -> String {
         let status = client.get_status().await;
 
         if status.connected {
+            // Check API key health
+            let api_status = match client.check_api_health().await {
+                Ok(health) if health.api_key_valid => "✅ Valid".to_string(),
+                Ok(health) => format!(
+                    "❌ Invalid\n   {}",
+                    health.fix.unwrap_or_else(|| "Get new key from console.anthropic.com".to_string())
+                ),
+                Err(_) => "⚠️ Unable to check".to_string(),
+            };
+
             let tools_list = if status.tools.is_empty() {
                 String::new()
             } else {
@@ -642,7 +683,8 @@ async fn handle_mcp_status(mcp_config: Option<&McpConfig>) -> String {
                 "MCP Connection\n\n\
                 Status: Connected\n\
                 Endpoint: {}\n\
-                Latency: {}ms\
+                Latency: {}ms\n\
+                API Key: {api_status}\
                 {tools_list}{fallback_warning}",
                 status.endpoint, status.latency_ms
             )

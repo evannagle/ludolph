@@ -734,6 +734,81 @@ impl McpClient {
             .await
             .context("Failed to parse chat response")
     }
+
+    /// Check API key health on the MCP server.
+    ///
+    /// Returns information about whether the API key is valid and working.
+    pub async fn check_api_health(&self) -> Result<ApiHealthStatus> {
+        let response = self
+            .client
+            .get(format!("{}/admin/health", self.base_url))
+            .header("Authorization", format!("Bearer {}", self.auth_token))
+            .send()
+            .await
+            .map_err(|e| Self::format_connection_error(&e, &self.base_url, "check API health"))?;
+
+        response
+            .json()
+            .await
+            .context("Failed to parse health response")
+    }
+
+    /// Update the API key on the MCP server.
+    ///
+    /// Tests the new key before saving. Returns error if key is invalid.
+    pub async fn update_api_key(&self, new_key: &str) -> Result<ApiKeyUpdateResult> {
+        let response = self
+            .client
+            .post(format!("{}/admin/update-api-key", self.base_url))
+            .header("Authorization", format!("Bearer {}", self.auth_token))
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({ "api_key": new_key }))
+            .send()
+            .await
+            .map_err(|e| Self::format_connection_error(&e, &self.base_url, "update API key"))?;
+
+        let status = response.status();
+
+        if status.is_success() {
+            let result: ApiKeyUpdateResult = response
+                .json()
+                .await
+                .context("Failed to parse update response")?;
+            Ok(result)
+        } else {
+            let error: serde_json::Value = response
+                .json()
+                .await
+                .unwrap_or_else(|_| serde_json::json!({"error": "Unknown error"}));
+            let msg = error
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Failed to update API key");
+            Err(anyhow::anyhow!("{}", msg))
+        }
+    }
+}
+
+/// API health check response.
+#[derive(Deserialize)]
+pub struct ApiHealthStatus {
+    /// Whether the API key is valid.
+    pub api_key_valid: bool,
+    /// Error message if key is invalid.
+    pub error: Option<String>,
+    /// Suggested fix if key is invalid.
+    pub fix: Option<String>,
+}
+
+/// API key update result.
+#[derive(Deserialize)]
+pub struct ApiKeyUpdateResult {
+    /// Status of the update.
+    pub status: String,
+    /// Human-readable message.
+    pub message: String,
+    /// Command to restart the service.
+    pub restart_command: Option<String>,
 }
 
 #[cfg(test)]

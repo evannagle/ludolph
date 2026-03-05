@@ -486,6 +486,123 @@ def channel_history():
     })
 
 
+# -----------------------------------------------------------------------------
+# Admin Endpoints
+# -----------------------------------------------------------------------------
+
+
+@app.route("/admin/health", methods=["GET"])
+@require_auth
+def admin_health():
+    """
+    Test API key health by making a minimal LLM call.
+
+    Returns:
+        JSON with api_key_valid, error message if invalid
+    """
+    import os
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+
+    if not api_key:
+        return jsonify({
+            "api_key_valid": False,
+            "error": "No API key configured",
+            "fix": "Run install-mcp.sh or set ANTHROPIC_API_KEY",
+        })
+
+    # Test with minimal API call
+    try:
+        result = llm_chat(
+            model="claude-sonnet-4-20250514",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        return jsonify({
+            "api_key_valid": True,
+            "model": "claude-sonnet-4-20250514",
+        })
+    except LlmAuthError as e:
+        return jsonify({
+            "api_key_valid": False,
+            "error": "API key is invalid or expired",
+            "fix": "Get a new key from console.anthropic.com/account/keys",
+        })
+    except Exception as e:
+        return jsonify({
+            "api_key_valid": False,
+            "error": str(e),
+            "fix": "Check MCP server logs for details",
+        })
+
+
+@app.route("/admin/update-api-key", methods=["POST"])
+@require_auth
+def admin_update_api_key():
+    """
+    Update the Anthropic API key in the launchd plist.
+
+    Body:
+        api_key: The new API key (must start with sk-ant-)
+
+    This updates the plist file and tells the caller to restart the service.
+    The service must be restarted separately for the change to take effect.
+    """
+    import subprocess
+
+    data = request.json or {}
+    new_key = data.get("api_key", "").strip()
+
+    # Validate key format
+    if not new_key:
+        return jsonify({"error": "api_key is required"}), 400
+
+    if not new_key.startswith("sk-ant-"):
+        return jsonify({"error": "Invalid key format. Must start with sk-ant-"}), 400
+
+    # Test the new key before saving
+    import os
+    old_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    os.environ["ANTHROPIC_API_KEY"] = new_key
+
+    try:
+        result = llm_chat(
+            model="claude-sonnet-4-20250514",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+    except Exception as e:
+        # Restore old key
+        os.environ["ANTHROPIC_API_KEY"] = old_key
+        return jsonify({
+            "error": "New API key is invalid",
+            "details": str(e),
+        }), 400
+
+    # Key is valid - update the plist
+    plist_path = Path.home() / "Library/LaunchAgents/dev.ludolph.mcp.plist"
+
+    if not plist_path.exists():
+        return jsonify({"error": "Launchd plist not found"}), 500
+
+    try:
+        subprocess.run(
+            ["plutil", "-replace", "EnvironmentVariables.ANTHROPIC_API_KEY",
+             "-string", new_key, str(plist_path)],
+            check=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as e:
+        return jsonify({
+            "error": "Failed to update plist",
+            "details": e.stderr.decode() if e.stderr else str(e),
+        }), 500
+
+    return jsonify({
+        "status": "ok",
+        "message": "API key updated. Restart the MCP service to apply.",
+        "restart_command": "launchctl kickstart -k gui/$(id -u)/dev.ludolph.mcp",
+    })
+
+
 def _load_env_file():
     """Load .env file if it exists."""
     env_file = Path(__file__).parent / ".env"
