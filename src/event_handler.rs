@@ -84,13 +84,23 @@ async fn handle_channel_message(data: serde_json::Value, llm: &Llm, mcp: &McpCli
         truncate_for_log(&msg.content, 100)
     );
 
-    // Process through LLM
+    // Process through LLM, sending user-friendly errors back to the channel
     // Note: Using None for user_id since channel messages don't have Telegram user IDs.
     // A future enhancement could map channel users to IDs for conversation memory.
-    let response = llm
-        .chat(&msg.content, None)
-        .await
-        .context("Failed to get LLM response")?;
+    let response = match llm.chat(&msg.content, None).await {
+        Ok(response) => response,
+        Err(e) => {
+            let error_msg = format_user_error(&e);
+            tracing::error!("LLM error: {}", e);
+
+            // Send error message back to channel so user knows what happened
+            let _ = mcp
+                .channel_send(BOT_SENDER_ID, &error_msg, Some(msg.id))
+                .await;
+
+            return Err(e).context("Failed to get LLM response");
+        }
+    };
 
     info!("LLM response: {}", truncate_for_log(&response, 100));
 
@@ -100,6 +110,25 @@ async fn handle_channel_message(data: serde_json::Value, llm: &Llm, mcp: &McpCli
         .context("Failed to send response to channel")?;
 
     Ok(())
+}
+
+/// Convert an error into a user-friendly message for the channel.
+fn format_user_error(e: &anyhow::Error) -> String {
+    let error_str = e.to_string().to_lowercase();
+
+    if error_str.contains("api credentials") || error_str.contains("auth") {
+        "I can't respond right now - the API key needs to be updated. \
+         Ask the admin to run the install script or update the MCP server config."
+            .to_string()
+    } else if error_str.contains("rate limit") {
+        "I'm being rate limited. Please try again in a minute.".to_string()
+    } else if error_str.contains("budget") || error_str.contains("credits") {
+        "API credits are exhausted. Ask the admin to add credits or switch models.".to_string()
+    } else if error_str.contains("connection") || error_str.contains("unreachable") {
+        "I can't reach the MCP server. It might be offline or the Mac is asleep.".to_string()
+    } else {
+        format!("Something went wrong: {}", truncate_for_log(&e.to_string(), 100))
+    }
 }
 
 /// Truncate a string for logging, adding ellipsis if truncated.

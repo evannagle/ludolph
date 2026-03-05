@@ -85,6 +85,8 @@ def chat(
         raise LlmBudgetError(str(e)) from e
     except litellm.RateLimitError as e:
         raise LlmRateLimitError(str(e)) from e
+    except litellm.BadRequestError as e:
+        raise LlmApiError(f"Invalid request: {e}") from e
     except litellm.APIError as e:
         raise LlmApiError(str(e)) from e
 
@@ -139,5 +141,7 @@ def chat_stream(
         raise LlmBudgetError(str(e)) from e
     except litellm.RateLimitError as e:
         raise LlmRateLimitError(str(e)) from e
+    except litellm.BadRequestError as e:
+        raise LlmApiError(f"Invalid request: {e}") from e
     except litellm.APIError as e:
         raise LlmApiError(str(e)) from e

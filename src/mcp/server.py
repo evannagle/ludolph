@@ -247,7 +247,7 @@ def tools_call():
 def chat():
     """Proxy chat request to LLM provider via LiteLLM."""
     data = request.json or {}
-    model = data.get("model", "claude-sonnet-4")
+    model = data.get("model", "claude-sonnet-4-20250514")
     messages = data.get("messages", [])
     tools = data.get("tools")
 
@@ -275,7 +275,7 @@ def chat():
 def chat_stream():
     """Stream chat response via Server-Sent Events."""
     data = request.json or {}
-    model = data.get("model", "claude-sonnet-4")
+    model = data.get("model", "claude-sonnet-4-20250514")
     messages = data.get("messages", [])
     tools = data.get("tools")
 
