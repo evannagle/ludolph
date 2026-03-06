@@ -230,7 +230,7 @@ pub async fn run() -> Result<()> {
 
     // Spawn SSE event listener if MCP is configured
     if let Some(ref mcp) = mcp_config {
-        spawn_sse_listener(mcp, llm.clone());
+        spawn_sse_listener(mcp, llm.clone(), channel);
     }
 
     // Track users currently in setup mode
@@ -850,7 +850,7 @@ async fn handle_mcp_remove(
 ///
 /// This connects to the MCP event stream and processes channel messages,
 /// allowing the bot to respond to messages sent via the Mac's channel system.
-fn spawn_sse_listener(mcp_config: &McpConfig, llm: Llm) {
+fn spawn_sse_listener(mcp_config: &McpConfig, llm: Llm, channel: Channel) {
     let sse_config = crate::sse_client::SseConfig {
         url: mcp_config.url.clone(),
         auth_token: mcp_config.auth_token.clone(),
@@ -880,7 +880,7 @@ fn spawn_sse_listener(mcp_config: &McpConfig, llm: Llm) {
                 event.id
             );
 
-            if let Err(e) = crate::event_handler::handle_event(event, &llm, &mcp_client).await {
+            if let Err(e) = crate::event_handler::handle_event(event, &llm, &mcp_client, &channel).await {
                 tracing::error!("Event handler error: {}", e);
                 // Continue processing - don't let one error crash the listener
             }

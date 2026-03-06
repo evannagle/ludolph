@@ -14,6 +14,7 @@ use serde::Deserialize;
 use tokio::time::sleep;
 use tracing::{debug, info};
 
+use crate::channel::Channel;
 use crate::llm::Llm;
 use crate::mcp_client::McpClient;
 use crate::sse_client::Event;
@@ -64,15 +65,16 @@ struct ChannelMessageData {
 ///
 /// * `event` - The event received from the SSE stream
 /// * `llm` - LLM client for processing messages
-/// * `mcp` - MCP client for sending responses (used when `channel_send` is added)
+/// * `mcp` - MCP client for sending responses
+/// * `channel` - Channel for storing responses (available via HTTP API)
 ///
 /// # Errors
 ///
 /// Returns an error if event handling fails.
-pub async fn handle_event(event: Event, llm: &Llm, mcp: &McpClient) -> Result<()> {
+pub async fn handle_event(event: Event, llm: &Llm, mcp: &McpClient, channel: &Channel) -> Result<()> {
     match event.event_type.as_str() {
         "channel_message" => {
-            handle_channel_message(event.data, llm, mcp).await?;
+            handle_channel_message(event.data, llm, mcp, channel).await?;
         }
         "system_status" => {
             info!("System status: {:?}", event.data);
@@ -93,7 +95,7 @@ pub async fn handle_event(event: Event, llm: &Llm, mcp: &McpClient) -> Result<()
 /// and sends the response back to the channel.
 ///
 /// Respects `LU_CHANNEL_DELAY` environment variable for throttling (in seconds).
-async fn handle_channel_message(data: serde_json::Value, llm: &Llm, mcp: &McpClient) -> Result<()> {
+async fn handle_channel_message(data: serde_json::Value, llm: &Llm, mcp: &McpClient, channel: &Channel) -> Result<()> {
     let msg: ChannelMessageData =
         serde_json::from_value(data).context("Failed to parse channel message data")?;
 
@@ -142,7 +144,13 @@ async fn handle_channel_message(data: serde_json::Value, llm: &Llm, mcp: &McpCli
             context_parts.push(format!("branch: {}", branch));
         }
         if !ctx.recent_commits.is_empty() {
-            let commits = ctx.recent_commits.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+            let commits = ctx
+                .recent_commits
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
             context_parts.push(format!("recent commits: {}", commits));
         }
 
@@ -168,7 +176,10 @@ async fn handle_channel_message(data: serde_json::Value, llm: &Llm, mcp: &McpCli
             let error_msg = format_user_error(&e);
             tracing::error!("LLM error: {}", e);
 
-            // Send error message back to channel so user knows what happened
+            // Store error in channel for HTTP API access
+            channel.send(BOT_SENDER_ID, &error_msg, Some(msg.id), None);
+
+            // Also send via MCP so user sees it immediately
             let _ = mcp
                 .channel_send(BOT_SENDER_ID, &error_msg, Some(msg.id))
                 .await;
@@ -179,7 +190,10 @@ async fn handle_channel_message(data: serde_json::Value, llm: &Llm, mcp: &McpCli
 
     info!("LLM response: {}", truncate_for_log(&response, 100));
 
-    // Send response back to channel
+    // Store response in channel for HTTP API access
+    channel.send(BOT_SENDER_ID, &response, Some(msg.id), None);
+
+    // Send response back via MCP for immediate SSE delivery
     mcp.channel_send(BOT_SENDER_ID, &response, Some(msg.id))
         .await
         .context("Failed to send response to channel")?;
@@ -202,7 +216,10 @@ fn format_user_error(e: &anyhow::Error) -> String {
     } else if error_str.contains("connection") || error_str.contains("unreachable") {
         "I can't reach the MCP server. It might be offline or the Mac is asleep.".to_string()
     } else {
-        format!("Something went wrong: {}", truncate_for_log(&e.to_string(), 100))
+        format!(
+            "Something went wrong: {}",
+            truncate_for_log(&e.to_string(), 100)
+        )
     }
 }
 
