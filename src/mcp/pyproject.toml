@@ -6,6 +6,8 @@ requires-python = ">=3.11"
 dependencies = [
     "flask>=2.0",
     "litellm>=1.0",
+    "mcp>=1.0",
+    "tomli_w>=1.0",
 ]
 
 [tool.setuptools]
@@ -15,6 +17,7 @@ packages = ["tools"]
 [project.scripts]
 ludolph-mcp = "server:main"
 ludolph-mcp-setup = "setup_llm:main"
+ludolph-channel = "mcp_server:main"
 
 [project.optional-dependencies]
 dev = [
