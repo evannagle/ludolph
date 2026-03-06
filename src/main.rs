@@ -1,4 +1,5 @@
 mod bot;
+mod channel;
 mod cli;
 mod config;
 mod event_handler;
