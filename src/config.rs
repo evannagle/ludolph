@@ -21,6 +21,9 @@ pub struct Config {
     /// MCP server configuration (used by Pi thin client to connect to Mac)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp: Option<McpConfig>,
+    /// Channel API configuration for Claude Code communication
+    #[serde(default)]
+    pub channel: ChannelConfig,
     /// Memory configuration for conversation context
     #[serde(default)]
     pub memory: MemoryConfig,
@@ -82,6 +85,44 @@ pub struct McpConfig {
     /// MAC address for Wake-on-LAN (e.g., "a4:83:e7:xx:xx:xx")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mac_address: Option<String>,
+}
+
+/// Channel API configuration for Claude Code communication.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelConfig {
+    /// Port for the channel API server (default: 8202)
+    #[serde(default = "default_channel_port")]
+    pub port: u16,
+    /// Authentication token for channel API (required for security)
+    #[serde(default)]
+    pub auth_token: String,
+}
+
+const fn default_channel_port() -> u16 {
+    8202
+}
+
+impl Default for ChannelConfig {
+    fn default() -> Self {
+        Self {
+            port: default_channel_port(),
+            auth_token: String::new(),
+        }
+    }
+}
+
+impl ChannelConfig {
+    /// Load channel config from environment variables with fallback to defaults.
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self {
+            port: std::env::var("LU_CHANNEL_PORT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or_else(default_channel_port),
+            auth_token: std::env::var("LU_CHANNEL_AUTH_TOKEN").unwrap_or_default(),
+        }
+    }
 }
 
 /// Memory configuration for conversation context.
@@ -188,6 +229,7 @@ impl Config {
             vault: vault_path.map(|path| VaultConfig { path }),
             pi,
             mcp,
+            channel: ChannelConfig::from_env(),
             memory: MemoryConfig::default(),
         }
     }

@@ -14,6 +14,8 @@ use teloxide::types::{ChatAction, ChatId, MessageId, ParseMode, ReactionType, Re
 use tokio::sync::oneshot;
 use tokio::time::{Duration, interval};
 
+use crate::api::{AppState, run_server};
+use crate::channel::Channel;
 use crate::config::{Config, McpConfig, config_dir};
 use crate::llm::Llm;
 use crate::mcp_client::McpClient;
@@ -197,6 +199,22 @@ pub async fn run() -> Result<()> {
             None
         }
     };
+
+    // Initialize channel API server for Claude Code communication
+    let channel = Channel::new();
+    let api_state = Arc::new(AppState {
+        channel: channel.clone(),
+        auth_token: config.channel.auth_token.clone(),
+    });
+
+    let api_port = config.channel.port;
+    tokio::spawn(async move {
+        if let Err(e) = run_server(api_state, api_port).await {
+            tracing::error!("API server error: {}", e);
+        }
+    });
+
+    StatusLine::ok(format!("Channel API: port {}", config.channel.port)).print();
 
     // Ready
     println!();
@@ -655,7 +673,9 @@ async fn handle_mcp_status(mcp_config: Option<&McpConfig>) -> String {
                 Ok(health) if health.api_key_valid => "✅ Valid".to_string(),
                 Ok(health) => format!(
                     "❌ Invalid\n   {}",
-                    health.fix.unwrap_or_else(|| "Get new key from console.anthropic.com".to_string())
+                    health
+                        .fix
+                        .unwrap_or_else(|| "Get new key from console.anthropic.com".to_string())
                 ),
                 Err(_) => "⚠️ Unable to check".to_string(),
             };
