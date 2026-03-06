@@ -4,6 +4,7 @@ Allows Claude Code to send messages to Lu and view conversation history.
 """
 
 import logging
+import time
 from typing import Any
 
 from ..channel import get_channel
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 TOOLS = [
     {
         "name": "channel_send",
-        "description": "Send a message to Lu via the channel. Lu will process and respond automatically.",
+        "description": "Send a message to Lu and optionally wait for response. Set wait_for_response=true to get Lu's reply in the same call.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -26,6 +27,16 @@ TOOLS = [
                 "reply_to": {
                     "type": "integer",
                     "description": "Optional message ID this is replying to",
+                },
+                "wait_for_response": {
+                    "type": "boolean",
+                    "description": "Wait for Lu's response (default: true, max 60s)",
+                    "default": True,
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Max seconds to wait for response (default: 60)",
+                    "default": 60,
                 },
             },
             "required": ["content"],
@@ -49,9 +60,11 @@ TOOLS = [
 
 
 def _handle_channel_send(args: dict[str, Any]) -> dict:
-    """Send a message to the channel."""
+    """Send a message to the channel, optionally waiting for response."""
     content = args.get("content", "").strip()
     reply_to = args.get("reply_to")
+    wait_for_response = args.get("wait_for_response", True)
+    timeout = args.get("timeout", 60)
 
     if not content:
         return {"content": "", "error": "Message content is required"}
@@ -61,11 +74,36 @@ def _handle_channel_send(args: dict[str, Any]) -> dict:
         channel = get_channel(bus, get_vault_path())
 
         msg = channel.send("claude_code", content, reply_to)
+        sent_id = msg.id
+
+        if not wait_for_response:
+            return {
+                "content": f"Message sent (ID: {sent_id}). Lu will respond shortly.",
+                "error": None,
+            }
+
+        # Wait for Lu's response (poll every 2 seconds)
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            time.sleep(2)
+
+            # Check for new messages from Lu
+            history = channel.history(10)
+            for m in reversed(history):
+                # Look for Lu's reply to our message
+                if m.sender == "lu" and m.reply_to == sent_id:
+                    return {
+                        "content": f"Lu's response:\n\n{m.content}",
+                        "error": None,
+                        "message_id": m.id,
+                        "sent_id": sent_id,
+                    }
 
         return {
-            "content": f"Message sent (ID: {msg.id}). Lu will respond shortly.\n\nCheck channel_history or read .lu/channel/ for responses.",
+            "content": f"Message sent (ID: {sent_id}) but no response within {timeout}s. Lu may still be processing.",
             "error": None,
         }
+
     except Exception as e:
         logger.error(f"Channel send failed: {e}")
         return {"content": "", "error": str(e)}
