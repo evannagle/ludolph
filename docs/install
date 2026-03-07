@@ -951,24 +951,38 @@ if ! $IS_PI; then
 
     section "Step 6b: Pi Channel Configuration"
 
-    info "Your Mac needs a token to connect to the Pi's channel server."
-    info "This token was generated when you ran the installer on your Pi."
+    info "Setting up secure channel between Mac and Pi..."
     echo
 
-    # Check for saved channel auth token
+    # Check for saved channel auth token first
     if [ -n "$SAVED_CHANNEL_AUTH_TOKEN" ]; then
         ok "Found saved channel auth token"
         echo
         if confirm "Use existing channel auth token?"; then
             CHANNEL_AUTH_TOKEN="$SAVED_CHANNEL_AUTH_TOKEN"
-        else
-            SAVED_CHANNEL_AUTH_TOKEN=""
         fi
     fi
 
-    if [ -z "$SAVED_CHANNEL_AUTH_TOKEN" ]; then
-        CHANNEL_AUTH_TOKEN=$(ask_secret "Channel auth token (from Pi setup):")
-        [ -z "$CHANNEL_AUTH_TOKEN" ] && { err "Channel auth token required"; exit 1; }
+    # If no saved token, check if Pi already has one, otherwise generate
+    if [ -z "$CHANNEL_AUTH_TOKEN" ]; then
+        spinner_start "Checking Pi for existing channel token..."
+
+        # Try to read existing token from Pi
+        PI_TOKEN=$(ssh -n "$PI_USER@$PI_HOST" "cat ~/.ludolph/channel_token 2>/dev/null" < /dev/null || true)
+
+        if [ -n "$PI_TOKEN" ]; then
+            spinner_stop "ok" "Found existing token on Pi"
+            CHANNEL_AUTH_TOKEN="$PI_TOKEN"
+        else
+            spinner_stop "ok" "Generating new channel token"
+
+            # Generate token locally and push to Pi
+            CHANNEL_AUTH_TOKEN=$(openssl rand -hex 32)
+
+            spinner_start "Saving token to Pi..."
+            ssh -n "$PI_USER@$PI_HOST" "mkdir -p ~/.ludolph && echo '$CHANNEL_AUTH_TOKEN' > ~/.ludolph/channel_token && chmod 600 ~/.ludolph/channel_token" < /dev/null
+            spinner_stop "ok" "Token saved to Pi"
+        fi
     fi
 
     # Default channel port
