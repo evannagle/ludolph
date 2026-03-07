@@ -43,7 +43,7 @@ impl Spinner {
         self.bar.finish_and_clear();
         let _ = writeln!(
             io::stdout(),
-            "{} {}",
+            "  {} {}",
             style("[•ok]").green(),
             self.bar.message()
         );
@@ -54,7 +54,7 @@ impl Spinner {
         self.bar.finish_and_clear();
         let _ = writeln!(
             io::stdout(),
-            "{} {}",
+            "  {} {}",
             style("[•!!]").red(),
             self.bar.message()
         );
