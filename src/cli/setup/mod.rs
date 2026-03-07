@@ -96,7 +96,9 @@ pub async fn setup() -> Result<()> {
     // Warning about AI limitations and privacy
     print_warning();
 
-    let answer: String = dialoguer::Input::new().with_prompt("π").interact_text()?;
+    let answer: String = dialoguer::Input::new()
+        .with_prompt("π 3.14")
+        .interact_text()?;
 
     if answer.trim() != "15926" {
         println!();
