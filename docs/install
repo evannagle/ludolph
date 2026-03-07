@@ -954,6 +954,7 @@ if ! $IS_PI; then
     echo
 
     # Check for saved channel auth token first
+    CHANNEL_AUTH_TOKEN=""
     if [ -n "$SAVED_CHANNEL_AUTH_TOKEN" ]; then
         ok "Found saved channel auth token"
         echo
