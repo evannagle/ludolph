@@ -207,36 +207,50 @@ impl McpClient {
             .client
             .get(&endpoint)
             .header("Authorization", format!("Bearer {}", self.auth_token))
-            .timeout(Duration::from_secs(5)) // Shorter timeout for status check
+            .timeout(Duration::from_secs(5))
             .send()
             .await;
 
         let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
-        match response {
-            Ok(resp) if resp.status().is_success() => match resp.json::<StatusResponse>().await {
-                Ok(status) => Some(McpStatus {
-                    connected: true,
-                    endpoint: base_url.to_string(),
-                    latency_ms,
-                    tools: status.tools,
-                    using_fallback: is_fallback,
-                }),
-                Err(e) => {
-                    tracing::warn!("Failed to parse status response from {}: {}", base_url, e);
-                    None
-                }
-            },
-            Ok(resp) => {
-                tracing::warn!(
-                    "Status endpoint {} returned error: {}",
-                    base_url,
-                    resp.status()
-                );
-                None
-            }
+        self.parse_status_response(response, base_url, is_fallback, latency_ms)
+            .await
+    }
+
+    /// Parse the status response into an `McpStatus`.
+    async fn parse_status_response(
+        &self,
+        response: Result<reqwest::Response, reqwest::Error>,
+        base_url: &str,
+        is_fallback: bool,
+        latency_ms: u64,
+    ) -> Option<McpStatus> {
+        let resp = match response {
+            Ok(r) => r,
             Err(e) => {
-                tracing::debug!("Failed to connect to {}: {}", base_url, e);
+                tracing::debug!("Failed to connect to {base_url}: {e}");
+                return None;
+            }
+        };
+
+        if !resp.status().is_success() {
+            tracing::warn!(
+                "Status endpoint {base_url} returned error: {}",
+                resp.status()
+            );
+            return None;
+        }
+
+        match resp.json::<StatusResponse>().await {
+            Ok(status) => Some(McpStatus {
+                connected: true,
+                endpoint: base_url.to_string(),
+                latency_ms,
+                tools: status.tools,
+                using_fallback: is_fallback,
+            }),
+            Err(e) => {
+                tracing::warn!("Failed to parse status response from {base_url}: {e}");
                 None
             }
         }
@@ -752,45 +766,11 @@ impl McpClient {
             .await
             .context("Failed to parse health response")
     }
-
-    /// Update the API key on the MCP server.
-    ///
-    /// Tests the new key before saving. Returns error if key is invalid.
-    pub async fn update_api_key(&self, new_key: &str) -> Result<ApiKeyUpdateResult> {
-        let response = self
-            .client
-            .post(format!("{}/admin/update-api-key", self.base_url))
-            .header("Authorization", format!("Bearer {}", self.auth_token))
-            .header("Content-Type", "application/json")
-            .json(&serde_json::json!({ "api_key": new_key }))
-            .send()
-            .await
-            .map_err(|e| Self::format_connection_error(&e, &self.base_url, "update API key"))?;
-
-        let status = response.status();
-
-        if status.is_success() {
-            let result: ApiKeyUpdateResult = response
-                .json()
-                .await
-                .context("Failed to parse update response")?;
-            Ok(result)
-        } else {
-            let error: serde_json::Value = response
-                .json()
-                .await
-                .unwrap_or_else(|_| serde_json::json!({"error": "Unknown error"}));
-            let msg = error
-                .get("error")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Failed to update API key");
-            Err(anyhow::anyhow!("{}", msg))
-        }
-    }
 }
 
 /// API health check response.
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub struct ApiHealthStatus {
     /// Whether the API key is valid.
     pub api_key_valid: bool,
@@ -798,17 +778,6 @@ pub struct ApiHealthStatus {
     pub error: Option<String>,
     /// Suggested fix if key is invalid.
     pub fix: Option<String>,
-}
-
-/// API key update result.
-#[derive(Deserialize)]
-pub struct ApiKeyUpdateResult {
-    /// Status of the update.
-    pub status: String,
-    /// Human-readable message.
-    pub message: String,
-    /// Command to restart the service.
-    pub restart_command: Option<String>,
 }
 
 #[cfg(test)]

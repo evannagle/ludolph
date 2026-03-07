@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use serde_json::{Map, Value};
 
 use crate::config::Config;
-use crate::mcp_client::{ChatContent, ChatMessage, ChatRequest, McpClient, ToolCall};
+use crate::mcp_client::{ChatContent, ChatMessage, ChatRequest, ChatResponse, McpClient, ToolCall};
 use crate::memory::Memory;
 use crate::setup::SETUP_COMPLETE_MARKER;
 use crate::tools::{Tool, execute_tool_local};
@@ -229,11 +229,34 @@ impl Llm {
     /// Returns an error if the MCP server is unreachable or returns an error.
     pub async fn chat(&self, user_message: &str, user_id: Option<i64>) -> Result<String> {
         let tools = self.get_tools().await?;
-        let system = self.build_system_prompt().await;
+        let mut messages = self.prepare_messages(user_message, user_id).await;
 
+        tracing::debug!(
+            "Starting chat with {} messages, {} tools",
+            messages.len(),
+            tools.len()
+        );
+
+        loop {
+            let response = self.call_llm(&messages, &tools).await?;
+
+            if self.handle_tool_calls(&response, &mut messages).await {
+                continue;
+            }
+
+            let content = response.content.unwrap_or_default();
+            tracing::debug!("Chat complete, returning {} chars", content.len());
+
+            self.store_message(user_id, "assistant", &content);
+            return Ok(content);
+        }
+    }
+
+    /// Prepare messages for a chat request.
+    async fn prepare_messages(&self, user_message: &str, user_id: Option<i64>) -> Vec<ChatMessage> {
+        let system = self.build_system_prompt().await;
         let mut messages = self.load_conversation_history(user_id);
 
-        // Add system message at start
         messages.insert(
             0,
             ChatMessage {
@@ -242,64 +265,60 @@ impl Llm {
             },
         );
 
-        // Add user message
         messages.push(ChatMessage {
             role: "user".to_string(),
             content: ChatContent::Text(user_message.to_string()),
         });
 
-        // Store user message in memory
         self.store_message(user_id, "user", user_message);
+        messages
+    }
 
-        tracing::debug!(
-            "Starting chat with {} messages, {} tools",
-            messages.len(),
-            tools.len()
-        );
+    /// Call the LLM with the current messages and tools.
+    async fn call_llm(&self, messages: &[ChatMessage], tools: &[Tool]) -> Result<ChatResponse> {
+        let request = ChatRequest {
+            model: self.model.clone(),
+            messages: messages.to_vec(),
+            tools: Some(Self::tools_to_json(tools)),
+        };
 
-        // Tool loop
-        loop {
-            let request = ChatRequest {
-                model: self.model.clone(),
-                messages: messages.clone(),
-                tools: Some(Self::tools_to_json(&tools)),
-            };
+        tracing::debug!("Calling MCP chat endpoint");
+        let response = self.mcp_client.chat(&request).await?;
+        tracing::debug!("LLM usage: {:?}", response.usage);
+        Ok(response)
+    }
 
-            tracing::debug!("Calling MCP chat endpoint");
-            let response = self.mcp_client.chat(&request).await?;
-            tracing::debug!("LLM usage: {:?}", response.usage);
+    /// Handle tool calls from a response. Returns true if tool calls were processed.
+    async fn handle_tool_calls(
+        &self,
+        response: &ChatResponse,
+        messages: &mut Vec<ChatMessage>,
+    ) -> bool {
+        let Some(tool_calls) = &response.tool_calls else {
+            return false;
+        };
 
-            if let Some(tool_calls) = &response.tool_calls {
-                if !tool_calls.is_empty() {
-                    tracing::debug!("Received {} tool calls, continuing loop", tool_calls.len());
-
-                    // Add assistant message with tool calls
-                    messages.push(ChatMessage {
-                        role: "assistant".to_string(),
-                        content: ChatContent::Blocks(vec![serde_json::json!({
-                            "type": "tool_use",
-                            "tool_calls": tool_calls,
-                        })]),
-                    });
-
-                    // Execute tools and add results
-                    let results = self.process_tool_calls(tool_calls).await;
-                    messages.push(ChatMessage {
-                        role: "user".to_string(),
-                        content: ChatContent::Blocks(results),
-                    });
-
-                    continue;
-                }
-            }
-
-            // No tool calls, return content
-            let content = response.content.unwrap_or_default();
-            tracing::debug!("Chat complete, returning {} chars", content.len());
-
-            self.store_message(user_id, "assistant", &content);
-            return Ok(content);
+        if tool_calls.is_empty() {
+            return false;
         }
+
+        tracing::debug!("Received {} tool calls, continuing loop", tool_calls.len());
+
+        messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: ChatContent::Blocks(vec![serde_json::json!({
+                "type": "tool_use",
+                "tool_calls": tool_calls,
+            })]),
+        });
+
+        let results = self.process_tool_calls(tool_calls).await;
+        messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: ChatContent::Blocks(results),
+        });
+
+        true
     }
 
     /// Chat with streaming response support.

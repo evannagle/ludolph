@@ -87,35 +87,50 @@ async fn connect_once(url: &str, auth_token: &str, tx: &mpsc::Sender<Event>) -> 
     let mut stream = pin!(client.stream());
 
     while let Some(event) = stream.next().await {
-        match event {
-            Ok(SSE::Connected(details)) => {
-                info!("SSE connected, status: {}", details.response().status());
-            }
-            Ok(SSE::Event(ev)) => {
-                // Parse the event data as our Event struct
-                match serde_json::from_str::<Event>(&ev.data) {
-                    Ok(parsed_event) => {
-                        if tx.send(parsed_event).await.is_err() {
-                            // Receiver dropped, exit gracefully
-                            info!("Event receiver dropped, closing SSE connection");
-                            return Ok(());
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to parse event data: {} - raw: {}", e, ev.data);
-                    }
-                }
-            }
-            Ok(SSE::Comment(_)) => {
-                // Keepalive comment, ignore
-            }
-            Err(e) => {
-                return Err(anyhow::anyhow!("SSE stream error: {e}"));
-            }
+        if !handle_sse_event(event, tx).await? {
+            return Ok(());
         }
     }
 
     Ok(())
+}
+
+/// Handle a single SSE event. Returns `Ok(false)` if the connection should close.
+async fn handle_sse_event(
+    event: Result<SSE, eventsource_client::Error>,
+    tx: &mpsc::Sender<Event>,
+) -> Result<bool> {
+    match event {
+        Ok(SSE::Connected(details)) => {
+            info!("SSE connected, status: {}", details.response().status());
+        }
+        Ok(SSE::Event(ev)) => {
+            if !forward_event(&ev.data, tx).await {
+                return Ok(false);
+            }
+        }
+        Ok(SSE::Comment(_)) => {}
+        Err(e) => {
+            return Err(anyhow::anyhow!("SSE stream error: {e}"));
+        }
+    }
+    Ok(true)
+}
+
+/// Parse and forward an event to the channel. Returns false if receiver is gone.
+async fn forward_event(data: &str, tx: &mpsc::Sender<Event>) -> bool {
+    match serde_json::from_str::<Event>(data) {
+        Ok(parsed_event) => {
+            if tx.send(parsed_event).await.is_err() {
+                info!("Event receiver dropped, closing SSE connection");
+                return false;
+            }
+        }
+        Err(e) => {
+            warn!("Failed to parse event data: {e} - raw: {data}");
+        }
+    }
+    true
 }
 
 #[cfg(test)]

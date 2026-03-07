@@ -71,7 +71,12 @@ struct ChannelMessageData {
 /// # Errors
 ///
 /// Returns an error if event handling fails.
-pub async fn handle_event(event: Event, llm: &Llm, mcp: &McpClient, channel: &Channel) -> Result<()> {
+pub async fn handle_event(
+    event: Event,
+    llm: &Llm,
+    mcp: &McpClient,
+    channel: &Channel,
+) -> Result<()> {
     match event.event_type.as_str() {
         "channel_message" => {
             handle_channel_message(event.data, llm, mcp, channel).await?;
@@ -95,27 +100,44 @@ pub async fn handle_event(event: Event, llm: &Llm, mcp: &McpClient, channel: &Ch
 /// and sends the response back to the channel.
 ///
 /// Respects `LU_CHANNEL_DELAY` environment variable for throttling (in seconds).
-async fn handle_channel_message(data: serde_json::Value, llm: &Llm, mcp: &McpClient, channel: &Channel) -> Result<()> {
+async fn handle_channel_message(
+    data: serde_json::Value,
+    llm: &Llm,
+    mcp: &McpClient,
+    channel: &Channel,
+) -> Result<()> {
     let msg: ChannelMessageData =
         serde_json::from_value(data).context("Failed to parse channel message data")?;
 
-    // Don't respond to our own messages
     if msg.from == BOT_SENDER_ID {
         debug!("Skipping own message (id={})", msg.id);
         return Ok(());
     }
 
-    // Apply throttle delay if configured (for managing conversation pace/costs)
+    apply_throttle_delay().await;
+    log_channel_message(&msg);
+
+    let message_with_context = build_message_with_context(&msg);
+    let response = process_llm_response(llm, mcp, channel, &msg, &message_with_context).await?;
+
+    info!("LLM response: {}", truncate_for_log(&response, 100));
+    send_response(mcp, channel, &msg, &response).await
+}
+
+/// Apply configured throttle delay before responding.
+async fn apply_throttle_delay() {
     let delay_secs = std::env::var("LU_CHANNEL_DELAY")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_CHANNEL_DELAY_SECS);
     if delay_secs > 0 {
-        debug!("Throttling channel response for {}s", delay_secs);
+        debug!("Throttling channel response for {delay_secs}s");
         sleep(Duration::from_secs(delay_secs)).await;
     }
+}
 
-    // Log context if present
+/// Log the incoming channel message with context if available.
+fn log_channel_message(msg: &ChannelMessageData) {
     if let Some(ctx) = &msg.context {
         info!(
             "Channel message from {} (id={}) [repo={}, branch={}]: {}",
@@ -133,72 +155,82 @@ async fn handle_channel_message(data: serde_json::Value, llm: &Llm, mcp: &McpCli
             truncate_for_log(&msg.content, 100)
         );
     }
+}
 
-    // Build message with context prefix if available
-    let message_with_context = if let Some(ctx) = &msg.context {
-        let mut context_parts = Vec::new();
-        if let Some(repo) = &ctx.repo {
-            context_parts.push(format!("repo: {}", repo));
-        }
-        if let Some(branch) = &ctx.branch {
-            context_parts.push(format!("branch: {}", branch));
-        }
-        if !ctx.recent_commits.is_empty() {
-            let commits = ctx
-                .recent_commits
-                .iter()
-                .take(3)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", ");
-            context_parts.push(format!("recent commits: {}", commits));
-        }
+/// Build a context string from git context.
+fn build_context_string(ctx: &GitContext) -> Option<String> {
+    let mut parts = Vec::new();
 
-        if context_parts.is_empty() {
-            msg.content.clone()
-        } else {
-            format!(
-                "[Context: {}]\n\n{}",
-                context_parts.join(" | "),
-                msg.content
-            )
-        }
+    if let Some(repo) = &ctx.repo {
+        parts.push(format!("repo: {repo}"));
+    }
+    if let Some(branch) = &ctx.branch {
+        parts.push(format!("branch: {branch}"));
+    }
+    if !ctx.recent_commits.is_empty() {
+        let commits = ctx
+            .recent_commits
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        parts.push(format!("recent commits: {commits}"));
+    }
+
+    if parts.is_empty() {
+        None
     } else {
-        msg.content.clone()
-    };
+        Some(parts.join(" | "))
+    }
+}
 
-    // Process through LLM, sending user-friendly errors back to the channel
-    // Note: Using None for user_id since channel messages don't have Telegram user IDs.
-    // A future enhancement could map channel users to IDs for conversation memory.
-    let response = match llm.chat(&message_with_context, None).await {
-        Ok(response) => response,
+/// Build message content with context prefix if available.
+fn build_message_with_context(msg: &ChannelMessageData) -> String {
+    msg.context
+        .as_ref()
+        .and_then(build_context_string)
+        .map_or_else(
+            || msg.content.clone(),
+            |ctx| format!("[Context: {ctx}]\n\n{}", msg.content),
+        )
+}
+
+/// Process the message through LLM, handling errors gracefully.
+async fn process_llm_response(
+    llm: &Llm,
+    mcp: &McpClient,
+    channel: &Channel,
+    msg: &ChannelMessageData,
+    message_with_context: &str,
+) -> Result<String> {
+    match llm.chat(message_with_context, None).await {
+        Ok(response) => Ok(response),
         Err(e) => {
             let error_msg = format_user_error(&e);
-            tracing::error!("LLM error: {}", e);
+            tracing::error!("LLM error: {e}");
 
-            // Store error in channel for HTTP API access
             channel.send(BOT_SENDER_ID, &error_msg, Some(msg.id), None);
-
-            // Also send via MCP so user sees it immediately
             let _ = mcp
                 .channel_send(BOT_SENDER_ID, &error_msg, Some(msg.id))
                 .await;
 
-            return Err(e).context("Failed to get LLM response");
+            Err(e).context("Failed to get LLM response")
         }
-    };
+    }
+}
 
-    info!("LLM response: {}", truncate_for_log(&response, 100));
-
-    // Store response in channel for HTTP API access
-    channel.send(BOT_SENDER_ID, &response, Some(msg.id), None);
-
-    // Send response back via MCP for immediate SSE delivery
-    mcp.channel_send(BOT_SENDER_ID, &response, Some(msg.id))
+/// Send response to both channel storage and MCP.
+async fn send_response(
+    mcp: &McpClient,
+    channel: &Channel,
+    msg: &ChannelMessageData,
+    response: &str,
+) -> Result<()> {
+    channel.send(BOT_SENDER_ID, response, Some(msg.id), None);
+    mcp.channel_send(BOT_SENDER_ID, response, Some(msg.id))
         .await
-        .context("Failed to send response to channel")?;
-
-    Ok(())
+        .context("Failed to send response to channel")
 }
 
 /// Convert an error into a user-friendly message for the channel.

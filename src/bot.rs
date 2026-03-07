@@ -880,7 +880,9 @@ fn spawn_sse_listener(mcp_config: &McpConfig, llm: Llm, channel: Channel) {
                 event.id
             );
 
-            if let Err(e) = crate::event_handler::handle_event(event, &llm, &mcp_client, &channel).await {
+            if let Err(e) =
+                crate::event_handler::handle_event(event, &llm, &mcp_client, &channel).await
+            {
                 tracing::error!("Event handler error: {}", e);
                 // Continue processing - don't let one error crash the listener
             }
