@@ -2,7 +2,7 @@
 
 import re
 
-from ..security import safe_path
+from security import safe_path
 from .metadata import FRONTMATTER_RE
 
 TOOLS = [

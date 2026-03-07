@@ -13,7 +13,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from ..security import get_vault_path
+from security import get_vault_path
 
 logger = logging.getLogger(__name__)
 

@@ -2,7 +2,7 @@
 
 import re
 
-from ..security import get_vault_path, safe_path
+from security import get_vault_path, safe_path
 
 # Pattern for fenced code blocks: ```language\ncode\n```
 CODE_BLOCK_RE = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)

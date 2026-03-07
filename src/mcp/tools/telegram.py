@@ -21,7 +21,7 @@ from typing import Any
 
 import requests
 
-from ..security import get_vault_path
+from security import get_vault_path
 
 logger = logging.getLogger(__name__)
 

@@ -4,7 +4,7 @@ import json
 import re
 from datetime import datetime
 
-from ..security import is_git_ignored, safe_path
+from security import is_git_ignored, safe_path
 
 # Regex to match YAML frontmatter block
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.DOTALL)

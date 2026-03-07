@@ -3,7 +3,7 @@
 import re
 from datetime import datetime
 
-from ..security import get_vault_path, safe_path
+from security import get_vault_path, safe_path
 
 TOOLS = [
     {

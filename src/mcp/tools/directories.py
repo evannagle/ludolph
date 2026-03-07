@@ -2,7 +2,7 @@
 
 import shutil
 
-from ..security import safe_path
+from security import safe_path
 
 TOOLS = [
     {

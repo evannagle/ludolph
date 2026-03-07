@@ -126,14 +126,14 @@ fn setup_venv(mcp_dir: &Path, python: &Path) -> Result<PathBuf> {
         venv_dir.join("bin").join("pip")
     };
 
-    // Install dependencies
+    // Install the ludolph-mcp package (which pulls in dependencies)
     let status = Command::new(&venv_pip)
-        .args(["install", "-q", "flask", "mcp", "requests"])
+        .args(["install", "-q", "-e", mcp_dir.to_str().unwrap()])
         .status()
-        .context("Failed to install dependencies")?;
+        .context("Failed to install ludolph-mcp package")?;
 
     if !status.success() {
-        anyhow::bail!("Failed to install Python dependencies");
+        anyhow::bail!("Failed to install ludolph-mcp package");
     }
 
     // Return path to venv python
@@ -147,19 +147,26 @@ fn setup_venv(mcp_dir: &Path, python: &Path) -> Result<PathBuf> {
 }
 
 /// Write the .mcp.json file with real values.
-fn write_mcp_json(ludolph_dir: &Path, pi_host: &str, auth_token: &str) -> Result<PathBuf> {
+fn write_mcp_json(
+    ludolph_dir: &Path,
+    pi_host: &str,
+    auth_token: &str,
+    venv_python: &Path,
+) -> Result<PathBuf> {
     let mcp_json_path = ludolph_dir.join(".mcp.json");
+    let mcp_dir = ludolph_dir.join("mcp");
 
     let mcp_json = serde_json::json!({
         "mcpServers": {
             "ludolph": {
                 "type": "stdio",
-                "command": "python3",
-                "args": [ludolph_dir.join("mcp").join("mcp_server.py").to_str().unwrap()],
+                "command": venv_python.to_str().unwrap(),
+                "args": [mcp_dir.join("server.py").to_str().unwrap()],
                 "env": {
                     "PI_HOST": pi_host,
                     "PI_CHANNEL_PORT": MCP_PORT.to_string(),
-                    "CHANNEL_AUTH_TOKEN": auth_token
+                    "CHANNEL_AUTH_TOKEN": auth_token,
+                    "PYTHONPATH": mcp_dir.to_str().unwrap()
                 }
             }
         }
@@ -200,7 +207,7 @@ fn create_launchd_plist(
     mcp_dir: &Path,
     venv_python: &Path,
     auth_token: &str,
-    pi_host: &str,
+    vault_path: &Path,
 ) -> Result<PathBuf> {
     let plist_dir = dirs::home_dir()
         .expect("home dir")
@@ -219,17 +226,19 @@ fn create_launchd_plist(
     <key>ProgramArguments</key>
     <array>
         <string>{}</string>
-        <string>{}</string>
+        <string>{}/server.py</string>
     </array>
     <key>WorkingDirectory</key>
     <string>{}</string>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>PI_HOST</key>
+        <key>VAULT_PATH</key>
         <string>{}</string>
-        <key>PI_CHANNEL_PORT</key>
+        <key>AUTH_TOKEN</key>
         <string>{}</string>
-        <key>CHANNEL_AUTH_TOKEN</key>
+        <key>PORT</key>
+        <string>{}</string>
+        <key>PYTHONPATH</key>
         <string>{}</string>
     </dict>
     <key>RunAtLoad</key>
@@ -244,11 +253,12 @@ fn create_launchd_plist(
 </plist>
 "#,
         venv_python.display(),
-        mcp_dir.join("mcp_server.py").display(),
         mcp_dir.display(),
-        pi_host,
-        MCP_PORT,
+        mcp_dir.display(),
+        vault_path.display(),
         auth_token,
+        MCP_PORT,
+        mcp_dir.display(),
         mcp_dir.display(),
         mcp_dir.display(),
     );
@@ -410,10 +420,15 @@ fn setup_auth_token(ludolph_dir: &Path) -> Result<String> {
 }
 
 /// Setup MCP JSON config and symlink.
-fn setup_mcp_config(ludolph_dir: &Path, pi_host: &str, auth_token: &str) -> Result<()> {
+fn setup_mcp_config(
+    ludolph_dir: &Path,
+    pi_host: &str,
+    auth_token: &str,
+    venv_python: &Path,
+) -> Result<()> {
     // Write .mcp.json
     let spinner = Spinner::new("Writing .mcp.json...");
-    let mcp_json_path = write_mcp_json(ludolph_dir, pi_host, auth_token)?;
+    let mcp_json_path = write_mcp_json(ludolph_dir, pi_host, auth_token, venv_python)?;
     spinner.finish();
     StatusLine::ok(format!(".mcp.json written to {}", mcp_json_path.display())).print();
 
@@ -436,10 +451,10 @@ fn start_and_verify_service(
     mcp_dir: &Path,
     venv_python: &Path,
     auth_token: &str,
-    pi_host: &str,
+    vault_path: &Path,
 ) -> Result<()> {
     let spinner = Spinner::new("Setting up launchd service...");
-    let plist_path = create_launchd_plist(mcp_dir, venv_python, auth_token, pi_host)?;
+    let plist_path = create_launchd_plist(mcp_dir, venv_python, auth_token, vault_path)?;
     spinner.finish();
     StatusLine::ok("Launchd plist created").print();
 
@@ -481,25 +496,28 @@ pub async fn setup_mcp() -> Result<()> {
     // Generate or load auth token
     let auth_token = setup_auth_token(&ludolph_dir)?;
 
-    // Get Pi host from config if available
+    // Get config for vault path and Pi host
     let config = Config::load().ok();
     let pi_host = config
         .as_ref()
         .and_then(|c| c.pi.as_ref())
         .map_or_else(|| "localhost".to_string(), |p| p.host.clone());
+    let vault_path = config.as_ref().and_then(|c| c.vault.as_ref()).map_or_else(
+        || dirs::home_dir().unwrap().join("vault"),
+        |v| v.path.clone(),
+    );
 
     // Setup MCP config
-    setup_mcp_config(&ludolph_dir, &pi_host, &auth_token)?;
+    setup_mcp_config(&ludolph_dir, &pi_host, &auth_token, &venv_python)?;
 
     // Start service (macOS only)
     #[cfg(target_os = "macos")]
     {
-        start_and_verify_service(&mcp_dir, &venv_python, &auth_token, &pi_host)?;
+        start_and_verify_service(&mcp_dir, &venv_python, &auth_token, &vault_path)?;
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = venv_python; // Silence unused warning on non-macOS
         StatusLine::skip("Service setup skipped (not macOS)").print();
     }
 

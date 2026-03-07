@@ -3,7 +3,7 @@
 import re
 from collections import Counter
 
-from ..security import get_vault_path, safe_path
+from security import get_vault_path, safe_path
 
 # Pattern for hashtags, avoiding matches inside code or words
 # Negative lookbehind prevents matching inside words or after backticks

@@ -8,7 +8,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from ..security import safe_path
+from security import safe_path
 
 # Conversation storage directory (relative to vault root)
 CONVERSATIONS_DIR = ".lu/conversations"

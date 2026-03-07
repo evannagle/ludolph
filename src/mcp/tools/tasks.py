@@ -2,7 +2,7 @@
 
 import re
 
-from ..security import get_vault_path, safe_path
+from security import get_vault_path, safe_path
 
 # Pattern for markdown checkboxes: - [ ] or * [x] or - [X]
 TASK_PATTERN = re.compile(r"^\s*[-*]\s*\[([ xX])\]\s*(.+)$", re.MULTILINE)

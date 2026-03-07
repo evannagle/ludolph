@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from ..security import get_vault_path, safe_path
+from security import get_vault_path, safe_path
 from .analysis import WIKILINK_RE
 from .tags import TAG_PATTERN
 

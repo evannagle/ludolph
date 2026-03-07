@@ -24,20 +24,20 @@ import json
 
 from flask import Flask, Response, jsonify, request
 
-from .llm import (
+from llm import (
     LlmApiError,
     LlmAuthError,
     LlmBudgetError,
     LlmRateLimitError,
 )
-from .llm import (
+from llm import (
     chat as llm_chat,
     chat_stream as llm_chat_stream,
 )
-from .process_manager import get_process_manager
-from .registry import Registry
-from .security import get_vault_path, init_security, is_git_repo, require_auth
-from .tools import call_tool, get_tool_definitions, reload_tools
+from process_manager import get_process_manager
+from registry import Registry
+from security import get_vault_path, init_security, is_git_repo, require_auth
+from tools import call_tool, get_tool_definitions, reload_tools
 
 logger = logging.getLogger(__name__)
 

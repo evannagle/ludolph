@@ -2,7 +2,7 @@
 
 import re
 
-from ..security import get_vault_path, safe_path
+from security import get_vault_path, safe_path
 
 TOOLS = [
     {

@@ -2,7 +2,7 @@
 
 import re
 
-from ..security import safe_path
+from security import safe_path
 
 # Regex for wikilinks: [[target]] or [[target|alias]]
 WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
