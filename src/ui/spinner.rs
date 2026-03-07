@@ -22,13 +22,13 @@ impl Spinner {
     pub fn new(message: &str) -> Self {
         let bar = ProgressBar::new_spinner();
 
-        // Ponging ball animation
-        let tick_strings = ["*  ", " * ", "  *", " * "];
+        // Ponging ball animation with bullet character
+        let tick_strings = ["•  ", " • ", "  •", " • "];
 
         bar.set_style(
             ProgressStyle::default_spinner()
                 .tick_strings(&tick_strings)
-                .template("[{spinner}] {msg}")
+                .template("  [{spinner}] {msg}")
                 .expect("valid template"),
         );
 
