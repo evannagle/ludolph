@@ -148,8 +148,45 @@ WantedBy=default.target
 "
 }
 
+/// Get the Pi binary - prefer local cross-compiled build, fall back to GitHub release.
+fn get_pi_binary() -> Result<std::path::PathBuf> {
+    const PI_TARGET: &str = "aarch64-unknown-linux-gnu";
+
+    // Check for local cross-compiled binary first (dev workflow)
+    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        let local_binary = std::path::PathBuf::from(&manifest_dir)
+            .join("target")
+            .join(PI_TARGET)
+            .join("release")
+            .join("lu");
+        if local_binary.exists() {
+            tracing::info!(
+                "Using local cross-compiled binary: {}",
+                local_binary.display()
+            );
+            return Ok(local_binary);
+        }
+    }
+
+    // Also check relative to current working directory
+    let cwd_binary = std::path::PathBuf::from("target")
+        .join(PI_TARGET)
+        .join("release")
+        .join("lu");
+    if cwd_binary.exists() {
+        tracing::info!(
+            "Using local cross-compiled binary: {}",
+            cwd_binary.display()
+        );
+        return Ok(cwd_binary);
+    }
+
+    // Fall back to downloading from GitHub releases
+    download_pi_binary_from_github()
+}
+
 /// Download the Pi binary from GitHub releases.
-fn download_pi_binary() -> Result<std::path::PathBuf> {
+fn download_pi_binary_from_github() -> Result<std::path::PathBuf> {
     let version = env!("CARGO_PKG_VERSION");
     let version_tag = format!("v{version}");
     let target = "aarch64-unknown-linux-gnu";
@@ -239,11 +276,16 @@ fn deploy_binary(pi: &PiConfig) -> Result<()> {
     spinner.finish();
     StatusLine::ok("Directories created").print();
 
-    // Download and copy binary
-    let spinner = Spinner::new("Downloading Pi binary...");
-    let binary_path = download_pi_binary()?;
+    // Get Pi binary (local cross-compile or download)
+    let spinner = Spinner::new("Getting Pi binary...");
+    let binary_path = get_pi_binary()?;
+    let is_local = binary_path.to_string_lossy().contains("target/");
     spinner.finish();
-    StatusLine::ok("Pi binary downloaded").print();
+    if is_local {
+        StatusLine::ok("Using local cross-compiled binary").print();
+    } else {
+        StatusLine::ok("Pi binary downloaded").print();
+    }
 
     let spinner = Spinner::new("Copying binary to Pi...");
     scp_copy(pi, binary_path.to_str().unwrap(), "~/.ludolph/bin/lu")?;
