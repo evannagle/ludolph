@@ -149,9 +149,6 @@ fn print_success_with_bot_info() {
     // Show Telegram bot info if available
     let config = Config::load().ok();
     if let Some(cfg) = config {
-        println!();
-        println!("  Send a message to your bot in Telegram to test!");
-
         // Try to get bot username
         let client = reqwest::blocking::Client::new();
         if let Ok(resp) = client
@@ -164,6 +161,11 @@ fn print_success_with_bot_info() {
         {
             if let Ok(json) = resp.json::<serde_json::Value>() {
                 if let Some(username) = json["result"]["username"].as_str() {
+                    println!();
+                    println!(
+                        "  Next step: Open your bot in Telegram and send {}",
+                        style("/setup").cyan()
+                    );
                     println!("  {}", style(format!("https://t.me/{username}")).cyan());
                 }
             }

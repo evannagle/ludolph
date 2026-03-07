@@ -18,7 +18,7 @@ use crate::api::{AppState, run_server};
 use crate::channel::Channel;
 use crate::config::{Config, McpConfig, config_dir};
 use crate::llm::Llm;
-use crate::mcp_client::McpClient;
+use crate::mcp_client::{DisconnectReason, McpClient};
 use crate::memory::Memory;
 use crate::setup::{SETUP_SYSTEM_PROMPT, initial_setup_message};
 use crate::telegram::to_telegram_html;
@@ -276,23 +276,37 @@ pub async fn run() -> Result<()> {
                                     set_reaction(&bot, msg.chat.id, msg.id, "❌").await;
                                     clear_reactions(&bot, msg.chat.id, msg.id).await;
 
-                                    // Check if using Tailscale IP (100.x.x.x)
-                                    let is_tailscale = status.endpoint.contains("100.");
-                                    let hint = if is_tailscale {
-                                        "This looks like a Tailscale IP. Check:\n\
-                                        • Tailscale running on Mac\n\
-                                        • Tailscale running on Pi\n\
-                                        • MCP server running on Mac"
-                                    } else {
-                                        "Check that the MCP server is running on your Mac:\n\
-                                          launchctl kickstart gui/$(id -u)/dev.ludolph.mcp"
+                                    let (status_msg, hint) = match &status.disconnect_reason {
+                                        Some(DisconnectReason::AuthFailed) => (
+                                            "Authentication failed",
+                                            "Token mismatch between Pi and Mac.\n\
+                                            Re-run setup to sync tokens:\n\
+                                              lu setup deploy",
+                                        ),
+                                        Some(DisconnectReason::Unreachable) => (
+                                            "Server unreachable",
+                                            if status.endpoint.contains("100.") {
+                                                "This looks like a Tailscale IP. Check:\n\
+                                                • Tailscale running on Mac\n\
+                                                • Tailscale running on Pi\n\
+                                                • MCP server running on Mac"
+                                            } else {
+                                                "Check that the MCP server is running:\n\
+                                                  launchctl kickstart gui/$(id -u)/dev.ludolph.mcp"
+                                            },
+                                        ),
+                                        _ => (
+                                            "Disconnected",
+                                            "Check the MCP server on your Mac:\n\
+                                              launchctl kickstart gui/$(id -u)/dev.ludolph.mcp",
+                                        ),
                                     };
 
                                     bot.send_message(
                                         msg.chat.id,
                                         format!(
                                             "Setup requires MCP connection.\n\n\
-                                            Status: Disconnected\n\
+                                            Status: {status_msg}\n\
                                             Endpoint: {}\n\n\
                                             {hint}",
                                             status.endpoint
@@ -709,33 +723,45 @@ async fn handle_mcp_status(mcp_config: Option<&McpConfig>) -> String {
                 status.endpoint, status.latency_ms
             )
         } else {
-            // Build troubleshooting hint based on config
-            let is_tailscale = status.endpoint.contains("100.");
-            let has_fallback = mcp.fallback_url.is_some();
+            use crate::mcp_client::DisconnectReason;
 
-            let mut hint = String::new();
-
-            if is_tailscale {
-                hint.push_str(
-                    "This looks like a Tailscale IP. Check:\n\
-                    • Tailscale running on Mac\n\
-                    • Tailscale running on Pi\n\
-                    • MCP server running on Mac",
-                );
-            } else {
-                hint.push_str("Unable to reach MCP server. Check that the server is running.");
-            }
-
-            if !has_fallback && is_tailscale {
-                hint.push_str(
-                    "\n\nTip: Add fallback_url to config.toml with your\n\
-                    LAN IP so Lu works when Tailscale is down.",
-                );
-            }
+            let (status_msg, hint) = match &status.disconnect_reason {
+                Some(DisconnectReason::AuthFailed) => (
+                    "Authentication failed",
+                    "Token mismatch between Pi and Mac.\n\
+                    Re-run setup to sync tokens:\n\
+                      lu setup deploy"
+                        .to_string(),
+                ),
+                Some(DisconnectReason::Unreachable) => {
+                    let is_tailscale = status.endpoint.contains("100.");
+                    let has_fallback = mcp.fallback_url.is_some();
+                    let mut h = if is_tailscale {
+                        "This looks like a Tailscale IP. Check:\n\
+                        • Tailscale running on Mac\n\
+                        • Tailscale running on Pi\n\
+                        • MCP server running on Mac"
+                            .to_string()
+                    } else {
+                        "Unable to reach MCP server. Check that the server is running.".to_string()
+                    };
+                    if !has_fallback && is_tailscale {
+                        h.push_str(
+                            "\n\nTip: Add fallback_url to config.toml with your\n\
+                            LAN IP so Lu works when Tailscale is down.",
+                        );
+                    }
+                    ("Server unreachable", h)
+                }
+                _ => (
+                    "Disconnected",
+                    "Check the MCP server on your Mac.".to_string(),
+                ),
+            };
 
             format!(
                 "MCP Connection\n\n\
-                Status: Disconnected\n\
+                Status: {status_msg}\n\
                 Endpoint: {}\n\n\
                 {hint}",
                 status.endpoint

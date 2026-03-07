@@ -123,6 +123,17 @@ pub struct McpRegistryEntry {
     pub enabled: bool,
 }
 
+/// Why the MCP connection failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DisconnectReason {
+    /// Server not reachable (connection refused, timeout).
+    Unreachable,
+    /// Authentication failed (401/403).
+    AuthFailed,
+    /// Other error.
+    Error(String),
+}
+
 /// Status information from the MCP server.
 #[derive(Debug, Clone)]
 pub struct McpStatus {
@@ -136,6 +147,8 @@ pub struct McpStatus {
     pub tools: Vec<ToolInfo>,
     /// Whether we connected via fallback URL (primary failed).
     pub using_fallback: bool,
+    /// Why the connection failed (if not connected).
+    pub disconnect_reason: Option<DisconnectReason>,
 }
 
 /// Response from the /status endpoint.
@@ -176,30 +189,38 @@ impl McpClient {
     /// If both are unreachable, returns `McpStatus` with `connected: false`.
     pub async fn get_status(&self) -> McpStatus {
         // Try primary URL first
-        if let Some(status) = self.try_status(&self.base_url, false).await {
+        let primary_result = self.try_status(&self.base_url, false).await;
+        if let Ok(status) = primary_result {
             return status;
         }
+        let mut last_reason = primary_result.unwrap_err();
 
         // Try fallback if configured
         if let Some(fallback) = &self.fallback_url {
-            if let Some(status) = self.try_status(fallback, true).await {
-                return status;
+            match self.try_status(fallback, true).await {
+                Ok(status) => return status,
+                Err(reason) => last_reason = reason,
             }
         }
 
-        // Both failed
+        // Both failed - return status with reason from last attempt
         McpStatus {
             connected: false,
             endpoint: self.base_url.clone(),
             latency_ms: 0,
             tools: Vec::new(),
             using_fallback: false,
+            disconnect_reason: Some(last_reason),
         }
     }
 
     /// Try to get status from a specific URL.
-    /// Returns `Some(McpStatus)` if connected, `None` if failed.
-    async fn try_status(&self, base_url: &str, is_fallback: bool) -> Option<McpStatus> {
+    /// Returns `Ok(McpStatus)` if connected, `Err(DisconnectReason)` if failed.
+    async fn try_status(
+        &self,
+        base_url: &str,
+        is_fallback: bool,
+    ) -> Result<McpStatus, DisconnectReason> {
         let start = Instant::now();
         let endpoint = format!("{base_url}/status");
 
@@ -218,40 +239,47 @@ impl McpClient {
     }
 
     /// Parse the status response into an `McpStatus`.
+    #[allow(clippy::cognitive_complexity)]
     async fn parse_status_response(
         &self,
         response: Result<reqwest::Response, reqwest::Error>,
         base_url: &str,
         is_fallback: bool,
         latency_ms: u64,
-    ) -> Option<McpStatus> {
+    ) -> Result<McpStatus, DisconnectReason> {
         let resp = match response {
             Ok(r) => r,
             Err(e) => {
                 tracing::debug!("Failed to connect to {base_url}: {e}");
-                return None;
+                return Err(DisconnectReason::Unreachable);
             }
         };
 
-        if !resp.status().is_success() {
-            tracing::warn!(
-                "Status endpoint {base_url} returned error: {}",
-                resp.status()
-            );
-            return None;
+        let status_code = resp.status();
+        if status_code == reqwest::StatusCode::UNAUTHORIZED
+            || status_code == reqwest::StatusCode::FORBIDDEN
+        {
+            tracing::warn!("Auth failed for {base_url}: {status_code}");
+            return Err(DisconnectReason::AuthFailed);
+        }
+
+        if !status_code.is_success() {
+            tracing::warn!("Status endpoint {base_url} returned error: {status_code}");
+            return Err(DisconnectReason::Error(status_code.to_string()));
         }
 
         match resp.json::<StatusResponse>().await {
-            Ok(status) => Some(McpStatus {
+            Ok(status) => Ok(McpStatus {
                 connected: true,
                 endpoint: base_url.to_string(),
                 latency_ms,
                 tools: status.tools,
                 using_fallback: is_fallback,
+                disconnect_reason: None,
             }),
             Err(e) => {
                 tracing::warn!("Failed to parse status response from {base_url}: {e}");
-                None
+                Err(DisconnectReason::Error(e.to_string()))
             }
         }
     }
@@ -842,6 +870,7 @@ mod tests {
                 description: "A test tool".to_string(),
             }],
             using_fallback: false,
+            disconnect_reason: None,
         };
 
         assert!(status.connected);

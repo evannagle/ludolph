@@ -154,7 +154,13 @@ fn setup_venv(mcp_dir: &Path, python: &Path) -> Result<PathBuf> {
 
     // Install the ludolph-mcp package (which pulls in dependencies)
     let status = Command::new(&venv_pip)
-        .args(["install", "-q", "-e", mcp_dir.to_str().unwrap()])
+        .args([
+            "install",
+            "-q",
+            "--disable-pip-version-check",
+            "-e",
+            mcp_dir.to_str().unwrap(),
+        ])
         .status()
         .context("Failed to install ludolph-mcp package")?;
 
