@@ -69,6 +69,7 @@ fn ssh_run_ignore(pi: &PiConfig, cmd: &str) {
 fn scp_copy(pi: &PiConfig, local_path: &str, remote_path: &str) -> Result<()> {
     let status = Command::new("scp")
         .args([
+            "-q",
             "-o",
             "BatchMode=yes",
             "-o",
