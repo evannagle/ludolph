@@ -1,5 +1,6 @@
 """LLM proxy module using LiteLLM for multi-provider support."""
 
+import os
 from typing import Any, Iterator
 
 import litellm
@@ -10,8 +11,12 @@ class LlmError(Exception):
     """Base class for LLM errors."""
 
 
+class LlmKeyMissingError(LlmError):
+    """API key not configured."""
+
+
 class LlmAuthError(LlmError):
-    """Authentication failed."""
+    """Authentication failed (invalid key)."""
 
 
 class LlmBudgetError(LlmError):
@@ -43,11 +48,17 @@ def chat(
         Dict with "content", "tool_calls", and "usage" keys
 
     Raises:
+        LlmKeyMissingError: API key not set
         LlmAuthError: Invalid API key or OAuth token
         LlmBudgetError: Credits exhausted
         LlmRateLimitError: Rate limited
         LlmApiError: Other API errors
     """
+    # Check for missing API key before calling LiteLLM
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise LlmKeyMissingError("ANTHROPIC_API_KEY not set. Run `lu setup mcp` to configure.")
+
     try:
         kwargs: dict[str, Any] = {
             "model": model,

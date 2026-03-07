@@ -755,16 +755,17 @@ impl McpClient {
             });
 
             let msg = match error.error.as_str() {
-                "auth_failed" => {
-                    "Invalid API credentials. Get a new key from console.anthropic.com/account/keys \
-                     and re-run the install script or update the MCP server config."
-                        .to_string()
-                }
-                "budget_exceeded" => {
-                    "API credits exhausted. Add credits at console.anthropic.com or switch models."
-                        .to_string()
-                }
-                "rate_limit" => "Rate limited by API. Please wait a moment and try again.".to_string(),
+                "api_key_missing" => "API key not configured on Mac.\n\
+                     Run: lu setup mcp"
+                    .to_string(),
+                "auth_failed" => "Invalid API key. Get a new one from:\n\
+                     console.anthropic.com/account/keys\n\
+                     Then run: lu setup credentials"
+                    .to_string(),
+                "budget_exceeded" => "API credits exhausted.\n\
+                     Add credits at console.anthropic.com"
+                    .to_string(),
+                "rate_limit" => "Rate limited. Wait a moment and try again.".to_string(),
                 _ => error.message,
             };
 

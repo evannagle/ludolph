@@ -28,6 +28,7 @@ from llm import (
     LlmApiError,
     LlmAuthError,
     LlmBudgetError,
+    LlmKeyMissingError,
     LlmRateLimitError,
 )
 from llm import (
@@ -316,6 +317,8 @@ def chat():
     try:
         result = llm_chat(model=model, messages=transformed_messages, tools=tools)
         return jsonify(result)
+    except LlmKeyMissingError as e:
+        return jsonify({"error": "api_key_missing", "message": str(e)}), 401
     except LlmAuthError as e:
         return jsonify({"error": "auth_failed", "message": str(e)}), 401
     except LlmBudgetError as e:
@@ -346,6 +349,8 @@ def chat_stream():
             for chunk in llm_chat_stream(model=model, messages=messages, tools=tools):
                 yield f"data: {json.dumps(chunk)}\n\n"
             yield "data: [DONE]\n\n"
+        except LlmKeyMissingError as e:
+            yield f"data: {json.dumps({'error': 'api_key_missing', 'message': str(e)})}\n\n"
         except LlmAuthError as e:
             yield f"data: {json.dumps({'error': 'auth_failed', 'message': str(e)})}\n\n"
         except LlmBudgetError as e:
