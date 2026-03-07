@@ -246,6 +246,7 @@ SAVED_TELEGRAM_TOKEN=""
 SAVED_TELEGRAM_USER=""
 SAVED_CLAUDE_KEY=""
 SAVED_LLM_PROVIDER=""
+SAVED_CHANNEL_AUTH_TOKEN=""
 
 if [ -f "$LOCAL_DIR/config.toml" ]; then
     # Extract values from TOML (handles both Mac and Linux sed)
@@ -258,6 +259,7 @@ if [ -f "$LOCAL_DIR/config.toml" ]; then
     SAVED_CLAUDE_KEY=$(grep '^api_key' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2 || true)
     SAVED_LLM_PROVIDER=$(grep '^provider' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2 || true)
     SAVED_LLM_MODEL=$(grep '^model' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2 || true)
+    SAVED_CHANNEL_AUTH_TOKEN=$(grep '^channel_auth_token' "$LOCAL_DIR/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2 || true)
 fi
 
 # Initialize LLM variables from saved config (used in Step 5 before Step 7 runs)
@@ -473,6 +475,30 @@ if $IS_PI; then
     fi
     chmod +x "$PI_INSTALL_DIR/lu"
     spinner_stop "ok" "Installed lu binary"
+
+    # Generate or reuse channel auth token for Pi hub
+    if [ -f "$LOCAL_DIR/channel_token" ]; then
+        CHANNEL_AUTH_TOKEN=$(cat "$LOCAL_DIR/channel_token")
+        ok "Using existing channel auth token"
+    else
+        spinner_start "Generating channel auth token..."
+        CHANNEL_AUTH_TOKEN=$(openssl rand -hex 32)
+        echo "$CHANNEL_AUTH_TOKEN" > "$LOCAL_DIR/channel_token"
+        chmod 600 "$LOCAL_DIR/channel_token"
+        spinner_stop "ok" "Channel auth token generated"
+    fi
+
+    # Save to env file for service
+    echo "CHANNEL_AUTH_TOKEN=$CHANNEL_AUTH_TOKEN" > "$LOCAL_DIR/env"
+    chmod 600 "$LOCAL_DIR/env"
+
+    # Display for Mac setup
+    echo
+    info "Channel auth token (save for Mac setup):"
+    printf "  ${CYAN}%s${NC}\n" "$CHANNEL_AUTH_TOKEN"
+    echo
+    info "You'll need this token when setting up the Mac client."
+    pause
 else
     PI_TARGET="aarch64-unknown-linux-gnu"
     PI_DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/lu-$PI_TARGET"
@@ -728,15 +754,15 @@ if ! $IS_PI; then
 
     # Install Python dependencies
     spinner_start "Installing Python dependencies..."
-    if pip3 install --user -q flask litellm 2>/dev/null; then
+    if pip3 install --user -q flask litellm mcp 2>/dev/null; then
         spinner_stop "ok" "Dependencies installed"
-    elif python3 -m pip install --user -q flask litellm 2>/dev/null; then
+    elif python3 -m pip install --user -q flask litellm mcp 2>/dev/null; then
         spinner_stop "ok" "Dependencies installed"
-    elif pip3 install --break-system-packages -q flask litellm 2>/dev/null; then
+    elif pip3 install --break-system-packages -q flask litellm mcp 2>/dev/null; then
         spinner_stop "ok" "Dependencies installed"
     else
         spinner_stop "err" "Could not install dependencies"
-        info "Run: pip3 install flask litellm"
+        info "Run: pip3 install flask litellm mcp"
         info "Then re-run this installer"
         exit 1
     fi
@@ -918,6 +944,36 @@ if ! $IS_PI; then
     info "Note: For Wake-on-LAN to work, you may need to enable it"
     info "in System Settings > Energy Saver > Wake for network access"
     echo
+
+    # =============================================================================
+    # Configure Pi Channel Connection
+    # =============================================================================
+
+    section "Step 6b: Pi Channel Configuration"
+
+    info "Your Mac needs a token to connect to the Pi's channel server."
+    info "This token was generated when you ran the installer on your Pi."
+    echo
+
+    # Check for saved channel auth token
+    if [ -n "$SAVED_CHANNEL_AUTH_TOKEN" ]; then
+        ok "Found saved channel auth token"
+        echo
+        if confirm "Use existing channel auth token?"; then
+            CHANNEL_AUTH_TOKEN="$SAVED_CHANNEL_AUTH_TOKEN"
+        else
+            SAVED_CHANNEL_AUTH_TOKEN=""
+        fi
+    fi
+
+    if [ -z "$SAVED_CHANNEL_AUTH_TOKEN" ]; then
+        CHANNEL_AUTH_TOKEN=$(ask_secret "Channel auth token (from Pi setup):")
+        [ -z "$CHANNEL_AUTH_TOKEN" ] && { err "Channel auth token required"; exit 1; }
+    fi
+
+    # Default channel port
+    CHANNEL_PORT=8202
+    ok "Channel port: $CHANNEL_PORT"
 fi
 
 # =============================================================================
@@ -1088,6 +1144,12 @@ LLM_MODEL="${LLM_MODEL:-claude-sonnet-4-6}"
 LLM_PROVIDER="${LLM_PROVIDER:-anthropic}"
 LLM_API_KEY="${LLM_API_KEY:-$CLAUDE_API_KEY}"
 
+# Build fallback URL if using Tailscale and have local IP
+FALLBACK_LINE=""
+if $USING_TAILSCALE && [ -n "$LOCAL_IP" ]; then
+    FALLBACK_LINE="fallback_url = \"http://$LOCAL_IP:$MCP_PORT\""
+fi
+
 # Pi config includes MCP connection details
 PI_CONFIG="[telegram]
 bot_token = \"$TELEGRAM_TOKEN\"
@@ -1102,6 +1164,7 @@ model = \"$LLM_MODEL\"
 
 [mcp]
 url = \"http://$MAC_IP:$MCP_PORT\"
+$FALLBACK_LINE
 auth_token = \"$MCP_AUTH_TOKEN\"
 mac_address = \"$MAC_ADDRESS\"
 "
@@ -1180,6 +1243,11 @@ path = "$VAULT_PATH"
 [pi]
 host = "$PI_HOST"
 user = "$PI_USER"
+
+[channel]
+pi_host = "$PI_HOST"
+channel_port = $CHANNEL_PORT
+channel_auth_token = "$CHANNEL_AUTH_TOKEN"
 EOF
     spinner_stop "ok" "Mac configuration saved"
 
