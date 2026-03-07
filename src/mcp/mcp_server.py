@@ -56,7 +56,7 @@ def _get_headers() -> dict:
 
 
 @mcp.tool()
-def channel_send(
+def lu_send(
     content: str,
     reply_to: int | None = None,
     wait_for_response: bool = True,
@@ -118,15 +118,15 @@ def channel_send(
 
 
 @mcp.tool()
-def channel_history(limit: int = 20) -> str:
+def lu_history(limit: int = 20) -> str:
     """
-    Get recent channel conversation history between Claude Code and Lu.
+    Get recent conversation history between Claude Code and Lu.
 
     Args:
         limit: Maximum messages to return (default 20)
 
     Returns:
-        Formatted channel history
+        Formatted conversation history
     """
     try:
         resp = requests.get(

@@ -46,10 +46,13 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             cli::config_cmd()?;
             Ok(ExitCode::SUCCESS)
         }
-        Some(Command::Setup { step }) => {
+        Some(Command::Setup { full: _, step }) => {
             match step {
-                Some(cli::SetupStep::Credentials) => cli::setup_credentials().await?,
-                Some(cli::SetupStep::Pi) => cli::setup_pi()?,
+                Some(cli::SetupStep::Credentials) => cli::setup_credentials_cmd().await?,
+                Some(cli::SetupStep::Pi) => cli::setup_pi_cmd()?,
+                Some(cli::SetupStep::Mcp) => cli::setup_mcp_cmd().await?,
+                Some(cli::SetupStep::Deploy) => cli::setup_deploy_cmd().await?,
+                Some(cli::SetupStep::Verify) => cli::setup_verify_cmd().await?,
                 None => cli::setup().await?,
             }
             Ok(ExitCode::SUCCESS)
