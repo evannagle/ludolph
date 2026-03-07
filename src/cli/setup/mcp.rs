@@ -77,6 +77,32 @@ fn generate_auth_token() -> String {
     hex
 }
 
+/// Copy local MCP files recursively (dev mode).
+fn copy_local_mcp_files(src: &Path, dest: &Path) -> Result<()> {
+    fs::create_dir_all(dest)?;
+
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_name = path.file_name().unwrap();
+
+        // Skip __pycache__ and .venv
+        if file_name == "__pycache__" || file_name == ".venv" {
+            continue;
+        }
+
+        let dest_path = dest.join(file_name);
+
+        if path.is_dir() {
+            copy_local_mcp_files(&path, &dest_path)?;
+        } else {
+            fs::copy(&path, &dest_path)?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Download MCP server files from the latest release.
 fn download_mcp_files(mcp_dir: &Path) -> Result<()> {
     // First, try to get the version from the current binary
@@ -351,29 +377,22 @@ fn setup_python_env(mcp_dir: &Path) -> Result<PathBuf> {
     fs::create_dir_all(mcp_dir)?;
     StatusLine::ok("MCP directory created").print();
 
-    // Download MCP files
-    let spinner = Spinner::new("Downloading MCP server...");
-    match download_mcp_files(mcp_dir) {
-        Ok(()) => {
-            spinner.finish();
-            StatusLine::ok("MCP server downloaded").print();
-        }
-        Err(e) => {
-            spinner.finish_error();
-            // Try to copy from local source if available (dev mode)
-            let local_mcp = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/mcp");
-            if local_mcp.exists() {
-                StatusLine::ok("Using local MCP files (dev mode)").print();
-                // Copy files
-                for entry in fs::read_dir(&local_mcp)? {
-                    let entry = entry?;
-                    let path = entry.path();
-                    if path.extension().is_some_and(|e| e == "py") {
-                        let dest = mcp_dir.join(path.file_name().unwrap());
-                        fs::copy(&path, &dest)?;
-                    }
-                }
-            } else {
+    // Use local source if available (dev mode), otherwise download
+    let local_mcp = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/mcp");
+    if local_mcp.exists() {
+        let spinner = Spinner::new("Copying MCP server files...");
+        copy_local_mcp_files(&local_mcp, mcp_dir)?;
+        spinner.finish();
+        StatusLine::ok("MCP server files installed").print();
+    } else {
+        let spinner = Spinner::new("Downloading MCP server...");
+        match download_mcp_files(mcp_dir) {
+            Ok(()) => {
+                spinner.finish();
+                StatusLine::ok("MCP server downloaded").print();
+            }
+            Err(e) => {
+                spinner.finish_error();
                 return Err(e);
             }
         }
