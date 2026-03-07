@@ -240,6 +240,7 @@ fn create_launchd_plist(
     venv_python: &Path,
     auth_token: &str,
     vault_path: &Path,
+    claude_api_key: &str,
 ) -> Result<PathBuf> {
     let plist_dir = dirs::home_dir()
         .expect("home dir")
@@ -272,6 +273,8 @@ fn create_launchd_plist(
         <string>{}</string>
         <key>PYTHONPATH</key>
         <string>{}</string>
+        <key>ANTHROPIC_API_KEY</key>
+        <string>{}</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>
@@ -291,6 +294,7 @@ fn create_launchd_plist(
         auth_token,
         MCP_PORT,
         mcp_dir.display(),
+        claude_api_key,
         mcp_dir.display(),
         mcp_dir.display(),
     );
@@ -477,9 +481,11 @@ fn start_and_verify_service(
     venv_python: &Path,
     auth_token: &str,
     vault_path: &Path,
+    claude_api_key: &str,
 ) -> Result<()> {
     let spinner = Spinner::new("Setting up launchd service...");
-    let plist_path = create_launchd_plist(mcp_dir, venv_python, auth_token, vault_path)?;
+    let plist_path =
+        create_launchd_plist(mcp_dir, venv_python, auth_token, vault_path, claude_api_key)?;
     spinner.finish();
     StatusLine::ok("Launchd plist created").print();
 
@@ -521,16 +527,17 @@ pub async fn setup_mcp() -> Result<()> {
     // Generate or load auth token
     let auth_token = setup_auth_token(&ludolph_dir)?;
 
-    // Get config for vault path and Pi host
-    let config = Config::load().ok();
+    // Get config for vault path, Pi host, and Claude API key
+    let config = Config::load().context("No config found. Run `lu setup credentials` first.")?;
     let pi_host = config
+        .pi
         .as_ref()
-        .and_then(|c| c.pi.as_ref())
         .map_or_else(|| "localhost".to_string(), |p| p.host.clone());
-    let vault_path = config.as_ref().and_then(|c| c.vault.as_ref()).map_or_else(
+    let vault_path = config.vault.as_ref().map_or_else(
         || dirs::home_dir().unwrap().join("vault"),
         |v| v.path.clone(),
     );
+    let claude_api_key = &config.claude.api_key;
 
     // Setup MCP config
     setup_mcp_config(&ludolph_dir, &pi_host, &auth_token, &venv_python)?;
@@ -538,7 +545,13 @@ pub async fn setup_mcp() -> Result<()> {
     // Start service (macOS only)
     #[cfg(target_os = "macos")]
     {
-        start_and_verify_service(&mcp_dir, &venv_python, &auth_token, &vault_path)?;
+        start_and_verify_service(
+            &mcp_dir,
+            &venv_python,
+            &auth_token,
+            &vault_path,
+            claude_api_key,
+        )?;
     }
 
     #[cfg(not(target_os = "macos"))]
