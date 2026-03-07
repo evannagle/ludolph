@@ -712,7 +712,6 @@ if ! $IS_PI; then
     fi
 
     # Summary
-    echo
     if $USING_TAILSCALE; then
         ok "Connection: Tailscale (encrypted)"
     else
