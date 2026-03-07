@@ -35,30 +35,6 @@ fn test_health(url: &str, auth_token: &str) -> Result<bool> {
 
     Ok(resp.is_ok_and(|r| r.status().is_success()))
 }
-
-/// Test Pi health via SSH + curl (more reliable than direct connection).
-fn test_pi_health_via_ssh(pi: &PiConfig, auth_token: &str) -> bool {
-    let output = Command::new("ssh")
-        .args([
-            "-n",
-            "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=5",
-            &format!("{}@{}", pi.user, pi.host),
-            &format!(
-                "curl -s -m 5 -H 'Authorization: Bearer {auth_token}' 'http://localhost:{CHANNEL_PORT}/health' 2>/dev/null",
-            ),
-        ])
-        .output();
-
-    match output {
-        Ok(o) if o.status.success() => {
-            let body = String::from_utf8_lossy(&o.stdout);
-            body.contains("ok") || body.contains("status")
-        }
-        _ => false,
-    }
-}
-
 /// Load auth token from config files.
 fn load_auth_token() -> Option<String> {
     let ludolph_dir = ludolph_dir();
@@ -112,27 +88,36 @@ fn check_mac_mcp(auth_token: &str) -> Result<bool> {
     }
 }
 
-/// Check Pi service health.
-fn check_pi_service(pi: &PiConfig, auth_token: &str) -> Result<bool> {
+/// Check Pi service health via SSH (systemd status).
+fn check_pi_service(pi: &PiConfig) -> bool {
     let spinner = Spinner::new(&format!("Checking Pi service at {}...", pi.host));
 
-    // Try SSH + curl first (more reliable)
-    if test_pi_health_via_ssh(pi, auth_token) {
-        spinner.finish();
-        StatusLine::ok(format!("Pi service healthy at {}", pi.host)).print();
-        return Ok(true);
-    }
+    // Check systemd service status via SSH
+    let output = Command::new("ssh")
+        .args([
+            "-n",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=5",
+            &format!("{}@{}", pi.user, pi.host),
+            "systemctl --user is-active ludolph.service 2>/dev/null",
+        ])
+        .output();
 
-    // Try direct connection as fallback
-    let pi_url = format!("http://{}:{CHANNEL_PORT}/health", pi.host);
-    if test_health(&pi_url, auth_token)? {
-        spinner.finish();
-        StatusLine::ok(format!("Pi service healthy at {}", pi.host)).print();
-        return Ok(true);
+    if let Ok(o) = output {
+        if o.status.success() {
+            let status = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if status == "active" {
+                spinner.finish();
+                StatusLine::ok(format!("Pi service running at {}", pi.host)).print();
+                return true;
+            }
+        }
     }
 
     spinner.finish_error();
-    StatusLine::error(format!("Pi service not responding at {}", pi.host)).print();
+    StatusLine::error(format!("Pi service not running at {}", pi.host)).print();
     println!();
     println!("  Check the Pi service:");
     println!(
@@ -154,7 +139,7 @@ fn check_pi_service(pi: &PiConfig, auth_token: &str) -> Result<bool> {
         .cyan()
     );
     println!();
-    Ok(false)
+    false
 }
 
 /// Print success message with Telegram bot info.
@@ -208,9 +193,9 @@ pub async fn setup_verify(pi: Option<&PiConfig>) -> Result<()> {
         }
     }
 
-    // Step 2: Test Pi channel API (if Pi is configured)
+    // Step 2: Test Pi service (if Pi is configured)
     if let Some(pi) = pi {
-        if !check_pi_service(pi, &auth_token)? {
+        if !check_pi_service(pi) {
             all_ok = false;
         }
     }
