@@ -15,6 +15,7 @@ use console::style;
 use crate::config::{self, Config, PiConfig};
 use crate::ui::{self, Spinner, StatusLine};
 
+#[cfg(target_os = "macos")]
 const CHANNEL_PORT: u16 = 8202;
 
 /// Get the ludolph directory (~/.ludolph).
@@ -23,6 +24,7 @@ fn ludolph_dir() -> std::path::PathBuf {
 }
 
 /// Test if a health endpoint is responding.
+#[cfg(target_os = "macos")]
 fn test_health(url: &str, auth_token: &str) -> Result<bool> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(5))

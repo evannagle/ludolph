@@ -305,6 +305,7 @@ fn create_launchd_plist(
 }
 
 /// Get the current user ID.
+#[cfg(target_os = "macos")]
 fn get_user_id() -> Result<u32> {
     let output = Command::new("id")
         .arg("-u")
@@ -346,6 +347,7 @@ fn start_mcp_service(plist_path: &Path) -> Result<()> {
 }
 
 /// Verify MCP server is running by checking health endpoint.
+#[cfg(target_os = "macos")]
 fn verify_mcp_running(auth_token: &str) -> bool {
     for _ in 0..5 {
         std::thread::sleep(std::time::Duration::from_secs(1));
@@ -511,6 +513,7 @@ fn start_and_verify_service(
 }
 
 /// Run the MCP setup phase.
+#[allow(unused_variables)]
 pub async fn setup_mcp() -> Result<()> {
     println!();
     ui::status::section("MCP Server Setup");
