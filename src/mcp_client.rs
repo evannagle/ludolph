@@ -425,6 +425,7 @@ impl McpClient {
     ///
     /// If the server is unreachable and a MAC address is configured,
     /// this will attempt to wake the Mac and retry.
+    #[allow(clippy::cognitive_complexity)]
     pub async fn get_tool_definitions(&self) -> Result<Vec<Tool>> {
         // First attempt
         let first_error = match self.try_get_tool_definitions().await {
