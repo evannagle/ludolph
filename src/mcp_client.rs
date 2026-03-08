@@ -422,11 +422,48 @@ impl McpClient {
     }
 
     /// Get tool definitions from the MCP server.
+    ///
+    /// If the server is unreachable and a MAC address is configured,
+    /// this will attempt to wake the Mac and retry.
     pub async fn get_tool_definitions(&self) -> Result<Vec<Tool>> {
+        // First attempt
+        let first_error = match self.try_get_tool_definitions().await {
+            Ok(tools) => return Ok(tools),
+            Err(e) => {
+                tracing::warn!("Failed to get tools: {}", e);
+                e
+            }
+        };
+
+        // Try Wake-on-LAN if we have a MAC address
+        if self.mac_address.is_none() {
+            return Err(first_error);
+        }
+
+        tracing::info!("Attempting Wake-on-LAN to fetch tools...");
+        if let Err(wol_err) = self.wake_mac() {
+            tracing::warn!("Wake-on-LAN failed: {}", wol_err);
+            return Err(first_error);
+        }
+
+        // Wait for Mac to wake up
+        tracing::info!("Waiting for Mac to wake up...");
+        tokio::time::sleep(Duration::from_secs(15)).await;
+
+        // Retry
+        self.try_get_tool_definitions().await.context(
+            "Failed to get tools after Wake-on-LAN.\n\n\
+             The Mac may still be waking up. Try again in a moment.",
+        )
+    }
+
+    /// Try to get tool definitions (single attempt).
+    async fn try_get_tool_definitions(&self) -> Result<Vec<Tool>> {
         let response = self
             .client
             .get(format!("{}/tools", self.base_url))
             .header("Authorization", format!("Bearer {}", self.auth_token))
+            .timeout(Duration::from_secs(10))
             .send()
             .await
             .map_err(|e| {
