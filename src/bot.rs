@@ -380,12 +380,30 @@ pub async fn run() -> Result<()> {
                         "/wake" => {
                             if let Some(mcp) = &mcp_config {
                                 let client = McpClient::from_config(mcp);
-                                match client.wake_mac() {
-                                    Ok(()) => {
-                                        "Wake-on-LAN packet sent. Mac should wake up shortly."
-                                            .to_string()
+
+                                // Check if already awake
+                                let status = client.get_status().await;
+                                if status.connected {
+                                    "Mac is already awake and responding.".to_string()
+                                } else {
+                                    // Try to wake
+                                    match client.wake_mac() {
+                                        Ok(()) => {
+                                            // Wait and verify
+                                            tokio::time::sleep(Duration::from_secs(15)).await;
+                                            let status = client.get_status().await;
+                                            if status.connected {
+                                                "Mac is awake and responding.".to_string()
+                                            } else {
+                                                "Wake-on-LAN sent but Mac not responding yet.\n\
+                                                 Try again in a moment, or check:\n\
+                                                 • Mac power settings\n\
+                                                 • Wake-on-LAN enabled in System Settings"
+                                                    .to_string()
+                                            }
+                                        }
+                                        Err(e) => format!("Wake failed: {e}"),
                                     }
-                                    Err(e) => format!("Wake failed: {}", e),
                                 }
                             } else {
                                 "MCP not configured. Run /setup first.".to_string()
