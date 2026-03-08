@@ -377,6 +377,20 @@ pub async fn run() -> Result<()> {
                         "/version" => {
                             format!("Ludolph v{VERSION}")
                         }
+                        "/wake" => {
+                            if let Some(mcp) = &mcp_config {
+                                let client = McpClient::from_config(mcp);
+                                match client.wake_mac() {
+                                    Ok(()) => {
+                                        "Wake-on-LAN packet sent. Mac should wake up shortly."
+                                            .to_string()
+                                    }
+                                    Err(e) => format!("Wake failed: {}", e),
+                                }
+                            } else {
+                                "MCP not configured. Run /setup first.".to_string()
+                            }
+                        }
                         _ => {
                             // Other commands handled by handle_command
                             #[allow(clippy::cast_possible_wrap)]
@@ -662,6 +676,7 @@ async fn handle_command(
             "I'm {bot_name}, your vault assistant.\n\n\
             Commands:\n\
             /setup - Configure your assistant (creates Lu.md)\n\
+            /wake - Wake up Mac via Wake-on-LAN\n\
             /version - Show version info\n\
             /mcp - Show MCP connection status\n\
             /mcp list - Show available MCPs\n\
