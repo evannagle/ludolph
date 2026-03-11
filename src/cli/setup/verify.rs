@@ -9,9 +9,8 @@ use std::process::Command;
 use std::time::Duration;
 
 use anyhow::Result;
-
-#[cfg(target_os = "macos")]
 use console::style;
+
 #[cfg(target_os = "macos")]
 use std::fs;
 
