@@ -203,9 +203,14 @@ pub async fn run() -> Result<()> {
 
     // Initialize channel API server for Claude Code communication
     let channel = Channel::new();
+
+    // Create notification channel for incoming messages (capacity 100)
+    let (message_tx, message_rx) = tokio::sync::mpsc::channel(100);
+
     let api_state = Arc::new(AppState {
         channel: channel.clone(),
         auth_token: config.channel.auth_token.clone(),
+        message_tx: Some(message_tx),
     });
 
     let api_port = config.channel.port;
@@ -231,8 +236,11 @@ pub async fn run() -> Result<()> {
 
     // Spawn SSE event listener if MCP is configured
     if let Some(ref mcp) = mcp_config {
-        spawn_sse_listener(mcp, llm.clone(), channel);
+        spawn_sse_listener(mcp, llm.clone(), channel.clone());
     }
+
+    // Spawn local channel message listener for Pi-local processing
+    spawn_channel_listener(message_rx, llm.clone(), channel);
 
     // Track users currently in setup mode
     let setup_users: Arc<Mutex<HashSet<u64>>> = Arc::new(Mutex::new(HashSet::new()));
@@ -949,5 +957,47 @@ fn spawn_sse_listener(mcp_config: &McpConfig, llm: Llm, channel: Channel) {
         }
 
         tracing::warn!("SSE event channel closed - listener shutting down");
+    });
+}
+
+/// Spawn a listener for local channel messages.
+///
+/// This handles messages sent directly to the Pi's channel API,
+/// processing them through the LLM and posting responses back.
+fn spawn_channel_listener(
+    mut rx: tokio::sync::mpsc::Receiver<crate::channel::ChannelMessage>,
+    llm: Llm,
+    channel: Channel,
+) {
+    tokio::spawn(async move {
+        tracing::info!("Channel message listener started");
+
+        while let Some(msg) = rx.recv().await {
+            tracing::info!("Processing channel message {} from {}", msg.id, msg.sender);
+
+            // Build context from the message
+            let user_message = msg.content.clone();
+
+            // Process through LLM
+            match llm.chat(&user_message, None).await {
+                Ok(response) => {
+                    // Post Lu's response back to channel
+                    channel.send("lu", &response, Some(msg.id), None);
+                    tracing::info!("Responded to channel message {}", msg.id);
+                }
+                Err(e) => {
+                    tracing::error!("LLM error for channel message {}: {}", msg.id, e);
+                    // Post error response
+                    channel.send(
+                        "lu",
+                        &format!("Sorry, I encountered an error: {e}"),
+                        Some(msg.id),
+                        None,
+                    );
+                }
+            }
+        }
+
+        tracing::warn!("Channel message listener shutting down");
     });
 }
