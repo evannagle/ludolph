@@ -19,6 +19,7 @@ use crate::ui::{self, Spinner, StatusLine};
 const CHANNEL_PORT: u16 = 8202;
 
 /// Get the ludolph directory (~/.ludolph).
+#[cfg(target_os = "macos")]
 fn ludolph_dir() -> std::path::PathBuf {
     config::config_dir()
 }
@@ -38,6 +39,7 @@ fn test_health(url: &str, auth_token: &str) -> Result<bool> {
     Ok(resp.is_ok_and(|r| r.status().is_success()))
 }
 /// Load auth token from config files.
+#[cfg(target_os = "macos")]
 fn load_auth_token() -> Option<String> {
     let ludolph_dir = ludolph_dir();
     let channel_token_file = ludolph_dir.join("channel_token");

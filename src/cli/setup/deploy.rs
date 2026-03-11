@@ -238,6 +238,7 @@ fn get_mac_address() -> Result<String> {
 }
 
 /// Get Mac's MAC address for Wake-on-LAN.
+#[allow(clippy::missing_const_for_fn)]
 fn get_mac_hw_address() -> Option<String> {
     #[cfg(target_os = "macos")]
     {
