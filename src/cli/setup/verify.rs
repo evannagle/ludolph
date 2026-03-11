@@ -5,14 +5,19 @@
 //! 2. HTTP: Tests Pi channel health ({pi}:8202/health)
 //! 3. Reports success/failure
 
-use std::fs;
 use std::process::Command;
 use std::time::Duration;
 
 use anyhow::Result;
-use console::style;
 
-use crate::config::{self, Config, PiConfig};
+#[cfg(target_os = "macos")]
+use console::style;
+#[cfg(target_os = "macos")]
+use std::fs;
+
+#[cfg(target_os = "macos")]
+use crate::config;
+use crate::config::{Config, PiConfig};
 use crate::ui::{self, Spinner, StatusLine};
 
 #[cfg(target_os = "macos")]
