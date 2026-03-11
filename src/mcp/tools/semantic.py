@@ -4,12 +4,15 @@ Provides semantic similarity search for the Obsidian vault using
 sentence-transformers. The model and index are lazy-loaded to avoid
 import-time costs on systems where semantic search isn't needed.
 
+Supports temporal decay to weight recent notes higher in search results.
+
 Note: sentence-transformers is optional. If not installed, these tools
 return graceful error messages rather than crashing.
 """
 
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +25,47 @@ _model = None
 
 # Index file location
 INDEX_PATH = Path.home() / ".ludolph" / "semantic_index.json"
+
+# Default half-life for temporal decay (days)
+DEFAULT_HALF_LIFE_DAYS = 30
+
+
+def temporal_score(modified_at: str, half_life_days: int = DEFAULT_HALF_LIFE_DAYS) -> float:
+    """Calculate temporal decay score based on file modification time.
+
+    Uses exponential decay: score = 0.5 ^ (age_days / half_life_days)
+
+    Args:
+        modified_at: ISO 8601 timestamp string
+        half_life_days: Days until score halves (default 30)
+
+    Returns:
+        Score between 0 and 1, where 1 is most recent
+    """
+    try:
+        modified_dt = datetime.fromisoformat(modified_at)
+        age_days = (datetime.now() - modified_dt).days
+        return 0.5 ** (age_days / half_life_days)
+    except (ValueError, TypeError):
+        return 0.5  # Default to half-decay for unparseable dates
+
+
+def combined_score(
+    semantic_sim: float,
+    temporal: float,
+    recency_weight: float = 0.3,
+) -> float:
+    """Combine semantic similarity with temporal score.
+
+    Args:
+        semantic_sim: Cosine similarity score (0-1)
+        temporal: Temporal decay score (0-1)
+        recency_weight: How much to weight recency (0.0-1.0)
+
+    Returns:
+        Combined score
+    """
+    return (1 - recency_weight) * semantic_sim + recency_weight * temporal
 
 
 def _get_model():
@@ -56,7 +100,7 @@ def _check_numpy():
 TOOLS = [
     {
         "name": "semantic_search",
-        "description": "Search vault by meaning using semantic similarity. Finds notes conceptually related to your query, not just keyword matches. Requires sentence-transformers to be installed.",
+        "description": "Search vault by meaning using semantic similarity. Finds notes conceptually related to your query, not just keyword matches. Supports temporal decay to boost recent notes. Requires sentence-transformers to be installed.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -67,6 +111,10 @@ TOOLS = [
                 "limit": {
                     "type": "integer",
                     "description": "Maximum number of results to return (default 5)",
+                },
+                "recency_weight": {
+                    "type": "number",
+                    "description": "How much to weight recency vs semantic similarity (0.0-1.0, default 0.0 for pure semantic search)",
                 },
             },
             "required": ["query"],
@@ -102,9 +150,13 @@ TOOLS = [
 
 
 def _semantic_search(args: dict) -> dict[str, Any]:
-    """Search vault using semantic similarity."""
+    """Search vault using semantic similarity with optional temporal decay."""
     query = args.get("query", "")
     limit = args.get("limit", 5)
+    recency_weight = args.get("recency_weight", 0.0)
+
+    # Clamp recency_weight to valid range
+    recency_weight = max(0.0, min(1.0, recency_weight))
 
     if not query:
         return {"content": "", "error": "Query is required"}
@@ -142,26 +194,36 @@ def _semantic_search(args: dict) -> dict[str, Any]:
     # Encode query
     query_embedding = model.encode(query)
 
-    # Calculate similarities
+    # Calculate similarities with optional temporal decay
     results = []
     for entry in index["documents"]:
         embedding = np.array(entry["embedding"])
         # Cosine similarity (embeddings are normalized by default)
-        similarity = float(np.dot(query_embedding, embedding))
+        semantic_sim = float(np.dot(query_embedding, embedding))
+
+        # Apply temporal decay if recency_weight > 0 and modified_at exists
+        if recency_weight > 0 and "modified_at" in entry:
+            temp_score = temporal_score(entry["modified_at"])
+            final_score = combined_score(semantic_sim, temp_score, recency_weight)
+        else:
+            final_score = semantic_sim
+
         results.append(
             {
                 "path": entry["path"],
                 "title": entry["title"],
-                "similarity": round(similarity, 3),
+                "score": round(final_score, 3),
+                "semantic": round(semantic_sim, 3),
                 "excerpt": (
                     entry["excerpt"][:200] + "..."
                     if len(entry["excerpt"]) > 200
                     else entry["excerpt"]
                 ),
+                "modified_at": entry.get("modified_at"),
             }
         )
 
-    results.sort(key=lambda x: x["similarity"], reverse=True)
+    results.sort(key=lambda x: x["score"], reverse=True)
     top_results = results[:limit]
 
     # Format output
@@ -170,7 +232,10 @@ def _semantic_search(args: dict) -> dict[str, Any]:
 
     lines = [f"Found {len(top_results)} result(s):\n"]
     for r in top_results:
-        lines.append(f"- {r['path']} (similarity: {r['similarity']})")
+        score_info = f"score: {r['score']}"
+        if recency_weight > 0:
+            score_info += f" (semantic: {r['semantic']})"
+        lines.append(f"- {r['path']} ({score_info})")
         lines.append(f"  Title: {r['title']}")
         lines.append(f"  {r['excerpt']}\n")
 
@@ -255,7 +320,15 @@ def _get_related_notes(args: dict) -> dict[str, Any]:
 
 
 def _rebuild_semantic_index(args: dict) -> dict[str, Any]:
-    """Rebuild the semantic index for the vault."""
+    """Rebuild the semantic index for the vault.
+
+    Index entries include:
+    - path: relative path to file
+    - title: extracted title or filename
+    - excerpt: first few lines of content
+    - embedding: vector embedding for semantic search
+    - modified_at: file modification time for temporal decay
+    """
     model = _get_model()
     if model is None:
         return {
@@ -284,6 +357,13 @@ def _rebuild_semantic_index(args: dict) -> dict[str, Any]:
             skipped += 1
             continue
 
+        # Get file modification time for temporal decay
+        try:
+            mtime = md_file.stat().st_mtime
+            modified_at = datetime.fromtimestamp(mtime).isoformat()
+        except OSError:
+            modified_at = datetime.now().isoformat()
+
         # Extract title (first heading or filename)
         title = md_file.stem
         for line in content.split("\n"):
@@ -311,6 +391,7 @@ def _rebuild_semantic_index(args: dict) -> dict[str, Any]:
                 "title": title,
                 "excerpt": excerpt,
                 "embedding": embedding.tolist(),
+                "modified_at": modified_at,
             }
         )
 

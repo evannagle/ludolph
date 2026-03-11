@@ -183,15 +183,15 @@ pub async fn setup_verify(pi: Option<&PiConfig>) -> Result<()> {
 
     let mut all_ok = true;
 
-    // Load auth token
-    let Some(auth_token) = load_auth_token() else {
-        StatusLine::error("No auth token found").print();
-        return Ok(());
-    };
-
     // Step 1: Test Mac MCP server (if not on Pi)
     #[cfg(target_os = "macos")]
     {
+        // Load auth token
+        let Some(auth_token) = load_auth_token() else {
+            StatusLine::error("No auth token found").print();
+            return Ok(());
+        };
+
         if !check_mac_mcp(&auth_token)? {
             all_ok = false;
         }

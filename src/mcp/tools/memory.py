@@ -2,10 +2,12 @@
 
 Provides claude-mem inspired endpoints for persisting conversations
 to vault files in .lu/conversations/ directory.
+
+Supports session-scoped search to filter by conversation context.
 """
 
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from security import safe_path
@@ -37,13 +39,17 @@ TOOLS = [
                     "type": "integer",
                     "description": "Telegram user ID for organizing conversations",
                 },
+                "session_id": {
+                    "type": "string",
+                    "description": "Optional session identifier for grouping related conversations",
+                },
             },
             "required": ["messages", "user_id"],
         },
     },
     {
         "name": "search_conversations",
-        "description": "Search past conversations by content. Returns matching excerpts with dates.",
+        "description": "Search past conversations by content. Returns matching excerpts with dates. Supports scoping to filter by context.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -54,6 +60,15 @@ TOOLS = [
                 "limit": {
                     "type": "integer",
                     "description": "Maximum results to return (default 10)",
+                },
+                "scope": {
+                    "type": "string",
+                    "description": "Search scope: 'all' (default), 'session' (current session), 'recent' (last 7 days)",
+                    "enum": ["all", "session", "recent"],
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "Session ID to filter by (required if scope='session')",
                 },
             },
             "required": ["query"],
@@ -92,8 +107,11 @@ def _get_conversations_dir() -> Path:
     return path
 
 
-def _format_message(msg: dict) -> str:
-    """Format a single message for markdown storage."""
+def _format_message(msg: dict, session_id: str | None = None) -> str:
+    """Format a single message for markdown storage.
+
+    If session_id is provided, includes it as metadata.
+    """
     role = msg.get("role", "user")
     content = msg.get("content", "")
     timestamp = msg.get("timestamp", "")
@@ -106,13 +124,17 @@ def _format_message(msg: dict) -> str:
         time_str = "??:??"
 
     role_label = "User" if role == "user" else "Lu"
-    return f"### {time_str}\n**{role_label}**: {content}\n"
+
+    # Include session metadata if provided
+    session_tag = f" [session:{session_id}]" if session_id else ""
+    return f"### {time_str}{session_tag}\n**{role_label}**: {content}\n"
 
 
 def _save_conversation(args: dict) -> dict:
-    """Save conversation messages to vault."""
+    """Save conversation messages to vault with optional session tracking."""
     messages = args.get("messages", [])
     user_id = args.get("user_id", 0)
+    session_id = args.get("session_id")
 
     if not messages:
         return {"content": "No messages to save", "error": None}
@@ -148,7 +170,7 @@ def _save_conversation(args: dict) -> dict:
             content_parts.append(f"## {date_str}\n")
 
         for msg in date_messages:
-            content_parts.append(_format_message(msg))
+            content_parts.append(_format_message(msg, session_id))
 
         content_parts.append("---\n")
         content = "\n".join(content_parts)
@@ -159,36 +181,67 @@ def _save_conversation(args: dict) -> dict:
 
         files_written.append(date_str)
 
+    session_info = f" (session: {session_id})" if session_id else ""
     return {
-        "content": f"Saved {len(messages)} messages to {len(files_written)} file(s): {', '.join(files_written)}",
+        "content": f"Saved {len(messages)} messages to {len(files_written)} file(s): {', '.join(files_written)}{session_info}",
         "error": None,
     }
 
 
 def _search_conversations(args: dict) -> dict:
-    """Search past conversations."""
+    """Search past conversations with optional scope filtering.
+
+    Scope options:
+    - 'all': Search all conversations (default)
+    - 'session': Filter by session_id
+    - 'recent': Only search last 7 days
+    """
     query = args.get("query", "").lower()
     limit = args.get("limit", 10)
+    scope = args.get("scope", "all")
+    session_id = args.get("session_id")
 
     if not query:
         return {"content": "", "error": "Query is required"}
+
+    if scope == "session" and not session_id:
+        return {"content": "", "error": "session_id is required when scope='session'"}
 
     conv_dir = _get_conversations_dir()
     if not conv_dir or not conv_dir.exists():
         return {"content": "No conversation history found", "error": None}
 
+    # Calculate date cutoff for 'recent' scope
+    recent_cutoff = None
+    if scope == "recent":
+        recent_cutoff = datetime.now() - timedelta(days=7)
+
     results = []
 
-    # Search all markdown files
+    # Search markdown files (sorted by date, newest first)
     for file_path in sorted(conv_dir.glob("*.md"), reverse=True):
         if len(results) >= limit:
             break
+
+        # Apply date filtering for 'recent' scope
+        if scope == "recent" and recent_cutoff:
+            try:
+                file_date = datetime.strptime(file_path.stem, "%Y-%m-%d")
+                if file_date < recent_cutoff:
+                    continue
+            except ValueError:
+                continue
 
         content = file_path.read_text(encoding="utf-8")
 
         # Find matching sections
         sections = content.split("---")
         for section in sections:
+            # Apply session filtering
+            if scope == "session" and session_id:
+                if f"[session:{session_id}]" not in section:
+                    continue
+
             if query in section.lower():
                 # Extract date from filename
                 date_str = file_path.stem
@@ -204,7 +257,12 @@ def _search_conversations(args: dict) -> dict:
                     break
 
     if not results:
-        return {"content": f"No conversations found matching '{query}'", "error": None}
+        scope_info = ""
+        if scope == "session":
+            scope_info = f" in session '{session_id}'"
+        elif scope == "recent":
+            scope_info = " in the last 7 days"
+        return {"content": f"No conversations found matching '{query}'{scope_info}", "error": None}
 
     return {
         "content": f"Found {len(results)} result(s):\n\n" + "\n\n---\n\n".join(results),

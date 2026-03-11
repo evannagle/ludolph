@@ -18,6 +18,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+#[cfg(target_os = "macos")]
 use console::style;
 
 use crate::config::{self, Config};

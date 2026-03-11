@@ -78,6 +78,7 @@ async fn register_commands(token: &str) -> Result<()> {
             {"command": "setup", "description": "Configure your vault assistant"},
             {"command": "version", "description": "Show version info"},
             {"command": "mcp", "description": "Show MCP connection details and tools"},
+            {"command": "wake", "description": "Wake up Mac via Wake-on-LAN"},
             {"command": "help", "description": "Show available commands"},
             {"command": "cancel", "description": "Cancel setup in progress"},
         ]
