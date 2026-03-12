@@ -184,6 +184,12 @@ impl McpClient {
         }
     }
 
+    /// Check if a MAC address is configured for Wake-on-LAN.
+    #[must_use]
+    pub const fn has_mac_address(&self) -> bool {
+        self.mac_address.is_some()
+    }
+
     /// Get detailed status information from the MCP server.
     ///
     /// Returns status including connection state, latency, and available tools.
@@ -442,39 +448,44 @@ impl McpClient {
 
     /// Get tool definitions from the MCP server.
     ///
-    /// If the server is unreachable and a MAC address is configured,
-    /// this will attempt to wake the Mac and retry.
+    /// Uses smart recovery: if request fails, checks if server is actually
+    /// unreachable before triggering Wake-on-LAN.
     #[allow(clippy::cognitive_complexity)]
     pub async fn get_tool_definitions(&self) -> Result<Vec<Tool>> {
         // First attempt
-        let first_error = match self.try_get_tool_definitions().await {
-            Ok(tools) => return Ok(tools),
+        match self.try_get_tool_definitions().await {
+            Ok(tools) => Ok(tools),
             Err(e) => {
                 tracing::warn!("Failed to get tools: {}", e);
-                e
+
+                // Quick health check before assuming server is down
+                if self.quick_health_check().await {
+                    tracing::info!("Health check passed, retrying immediately");
+                    return self.try_get_tool_definitions().await;
+                }
+
+                // Server truly unreachable, try WoL if configured
+                if !self.has_mac_address() {
+                    return Err(e);
+                }
+
+                tracing::info!("Server unreachable, attempting Wake-on-LAN...");
+                if let Err(wol_err) = self.wake_mac() {
+                    tracing::warn!("Wake-on-LAN failed: {}", wol_err);
+                    return Err(e);
+                }
+
+                // Wait for Mac to wake up
+                tracing::info!("Waiting 15s for Mac to wake up...");
+                tokio::time::sleep(Duration::from_secs(15)).await;
+
+                // Retry
+                self.try_get_tool_definitions().await.context(
+                    "Failed to get tools after Wake-on-LAN.\n\n\
+                     The Mac may still be waking up. Try again in a moment.",
+                )
             }
-        };
-
-        // Try Wake-on-LAN if we have a MAC address
-        if self.mac_address.is_none() {
-            return Err(first_error);
         }
-
-        tracing::info!("Attempting Wake-on-LAN to fetch tools...");
-        if let Err(wol_err) = self.wake_mac() {
-            tracing::warn!("Wake-on-LAN failed: {}", wol_err);
-            return Err(first_error);
-        }
-
-        // Wait for Mac to wake up
-        tracing::info!("Waiting for Mac to wake up...");
-        tokio::time::sleep(Duration::from_secs(15)).await;
-
-        // Retry
-        self.try_get_tool_definitions().await.context(
-            "Failed to get tools after Wake-on-LAN.\n\n\
-             The Mac may still be waking up. Try again in a moment.",
-        )
     }
 
     /// Try to get tool definitions (single attempt).
@@ -533,44 +544,47 @@ impl McpClient {
 
     /// Call a tool on the MCP server.
     ///
-    /// If the server is unreachable and a MAC address is configured,
-    /// this will attempt to wake the Mac and retry.
+    /// Uses smart recovery: if request fails, checks if server is actually
+    /// unreachable before triggering Wake-on-LAN.
     #[allow(clippy::cognitive_complexity)]
     pub async fn call_tool(&self, name: &str, input: &Value) -> Result<String> {
         // First attempt
-        let first_result = self.try_call_tool(name, input).await;
-        if first_result.is_ok() {
-            return first_result;
-        }
+        match self.try_call_tool(name, input).await {
+            Ok(result) => Ok(result),
+            Err(e) => {
+                tracing::warn!("MCP call failed: {}", e);
 
-        let first_error = first_result.unwrap_err();
-        tracing::warn!("MCP call failed: {}", first_error);
+                // Quick health check before assuming server is down
+                if self.quick_health_check().await {
+                    tracing::info!("Health check passed, retrying immediately");
+                    return self.try_call_tool(name, input).await;
+                }
 
-        // Try Wake-on-LAN if we have a MAC address
-        if self.mac_address.is_none() {
-            return Err(first_error);
-        }
+                // Server truly unreachable, try WoL if configured
+                if !self.has_mac_address() {
+                    return Err(e);
+                }
 
-        tracing::info!("Attempting Wake-on-LAN...");
-        if let Err(wol_err) = self.wake_mac() {
-            tracing::warn!("Wake-on-LAN failed: {}", wol_err);
-            return Err(first_error);
-        }
+                tracing::info!("Server unreachable, attempting Wake-on-LAN...");
+                if let Err(wol_err) = self.wake_mac() {
+                    tracing::warn!("Wake-on-LAN failed: {}", wol_err);
+                    return Err(e);
+                }
 
-        // Wait for Mac to wake up
-        tracing::info!("Waiting for Mac to wake up...");
-        tokio::time::sleep(Duration::from_secs(10)).await;
+                // Wait for Mac to wake up
+                tracing::info!("Waiting 10s for Mac to wake up...");
+                tokio::time::sleep(Duration::from_secs(10)).await;
 
-        // Retry with longer timeout
-        self.try_call_tool_with_retry(name, input, 3).await.context(
-            "Failed to connect after Wake-on-LAN attempt.\n\n\
+                // Retry with retries
+                self.try_call_tool_with_retry(name, input, 3).await.context(
+                    "Failed to connect after Wake-on-LAN attempt.\n\n\
                      Try:\n\
                      • Wait longer for Mac to wake up\n\
                      • Check Mac power/network status manually\n\
-                     • Verify Wake-on-LAN is enabled in Mac settings\n\
-                     • Ensure Mac is on same network\n\
-                     • Try pinging Mac to verify it's awake",
-        )
+                     • Verify Wake-on-LAN is enabled in Mac settings",
+                )
+            }
+        }
     }
 
     async fn try_call_tool(&self, name: &str, input: &Value) -> Result<String> {
@@ -988,5 +1002,28 @@ mod tests {
         let is_healthy = client.quick_health_check().await;
 
         assert!(!is_healthy);
+    }
+
+    #[test]
+    fn client_has_mac_address_returns_correct_value() {
+        let config_with = McpConfig {
+            url: "http://localhost:8200".to_string(),
+            fallback_url: None,
+            auth_token: "test".to_string(),
+            mac_address: Some("aa:bb:cc:dd:ee:ff".to_string()),
+        };
+
+        let config_without = McpConfig {
+            url: "http://localhost:8200".to_string(),
+            fallback_url: None,
+            auth_token: "test".to_string(),
+            mac_address: None,
+        };
+
+        let client_with = McpClient::from_config(&config_with);
+        let client_without = McpClient::from_config(&config_without);
+
+        assert!(client_with.has_mac_address());
+        assert!(!client_without.has_mac_address());
     }
 }
