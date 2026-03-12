@@ -270,6 +270,45 @@ def events():
     return Response(generate(), mimetype="text/event-stream")
 
 
+@app.route("/channel/send", methods=["POST"])
+@require_auth
+def channel_send():
+    """Send a message to the channel via SSE.
+
+    This endpoint receives messages from Claude Code and pushes them
+    as SSE events to connected Pi clients.
+
+    Request body:
+        from: Sender identifier (e.g., "claude_code")
+        content: Message content
+        reply_to: Optional message ID being replied to
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "JSON body required"}), 400
+
+    sender = data.get("from", "unknown")
+    content = data.get("content", "")
+    reply_to = data.get("reply_to")
+
+    if not content:
+        return jsonify({"error": "content is required"}), 400
+
+    # Generate message ID (simple incrementing for now)
+    global _next_event_id
+    with _event_lock:
+        message_id = _next_event_id
+
+    # Push SSE event to all subscribers
+    push_channel_message(sender, content, message_id, reply_to)
+
+    return jsonify({
+        "status": "sent",
+        "id": message_id,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    })
+
+
 @app.route("/status")
 @require_auth
 def status():

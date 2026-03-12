@@ -36,9 +36,10 @@ import requests
 
 from mcp.server.fastmcp import FastMCP
 
-# Pi connection configuration
+# Connection configuration
 PI_HOST = os.environ.get("PI_HOST", "localhost")
 PI_CHANNEL_PORT = os.environ.get("PI_CHANNEL_PORT", "8202")
+MAC_MCP_PORT = os.environ.get("MAC_MCP_PORT", "8202")
 CHANNEL_AUTH_TOKEN = os.environ.get("CHANNEL_AUTH_TOKEN", "")
 
 # Initialize MCP server
@@ -50,8 +51,13 @@ def _get_pi_url(path: str) -> str:
     return f"http://{PI_HOST}:{PI_CHANNEL_PORT}{path}"
 
 
+def _get_mac_url(path: str) -> str:
+    """Build URL for Mac's MCP server."""
+    return f"http://localhost:{MAC_MCP_PORT}{path}"
+
+
 def _get_headers() -> dict:
-    """Get headers for Pi API requests."""
+    """Get headers for API requests."""
     return {"Authorization": f"Bearer {CHANNEL_AUTH_TOKEN}"}
 
 
@@ -79,9 +85,9 @@ def lu_send(
         return "Error: Message content is required"
 
     try:
-        # Send to Pi
+        # Send to Mac's MCP server (which pushes SSE to Pi)
         resp = requests.post(
-            _get_pi_url("/channel/send"),
+            _get_mac_url("/channel/send"),
             headers=_get_headers(),
             json={"from": "claude_code", "content": content, "reply_to": reply_to},
             timeout=10,
