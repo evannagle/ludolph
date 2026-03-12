@@ -194,7 +194,7 @@ fn write_mcp_json(
             "ludolph": {
                 "type": "stdio",
                 "command": venv_python.to_str().unwrap(),
-                "args": [mcp_dir.join("server.py").to_str().unwrap()],
+                "args": [mcp_dir.join("mcp_server.py").to_str().unwrap()],
                 "env": {
                     "PI_HOST": pi_host,
                     "PI_CHANNEL_PORT": MCP_PORT.to_string(),
