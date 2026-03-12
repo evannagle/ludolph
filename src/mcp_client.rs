@@ -216,6 +216,23 @@ impl McpClient {
         }
     }
 
+    /// Quick health check with 2 second timeout.
+    ///
+    /// Returns true if server responds with 200 OK, false otherwise.
+    /// This is faster than `get_status()` and doesn't parse response body.
+    #[allow(dead_code)] // Will be used in smart WoL implementation
+    pub async fn quick_health_check(&self) -> bool {
+        let response = self
+            .client
+            .get(format!("{}/health", self.base_url))
+            .header("Authorization", format!("Bearer {}", self.auth_token))
+            .timeout(Duration::from_secs(2))
+            .send()
+            .await;
+
+        matches!(response, Ok(r) if r.status().is_success())
+    }
+
     /// Try to get status from a specific URL.
     /// Returns `Ok(McpStatus)` if connected, `Err(DisconnectReason)` if failed.
     async fn try_status(
@@ -956,5 +973,20 @@ mod tests {
         let result = client.disable_mcp(123, "slack").await;
 
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn health_check_returns_false_for_unreachable_server() {
+        let config = McpConfig {
+            url: "http://127.0.0.1:1".to_string(),
+            fallback_url: None,
+            auth_token: "test-token".to_string(),
+            mac_address: None,
+        };
+
+        let client = McpClient::from_config(&config);
+        let is_healthy = client.quick_health_check().await;
+
+        assert!(!is_healthy);
     }
 }
