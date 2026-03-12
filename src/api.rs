@@ -14,7 +14,6 @@ use axum::{
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
 
 use crate::channel::{Channel, ChannelMessage};
 
@@ -23,9 +22,6 @@ use crate::channel::{Channel, ChannelMessage};
 pub struct AppState {
     pub channel: Channel,
     pub auth_token: String,
-    /// Sender for notifying when new messages need LLM processing.
-    /// Messages from senders other than "lu" trigger notifications.
-    pub message_tx: Option<mpsc::Sender<ChannelMessage>>,
 }
 
 /// Request body for sending a message.
@@ -108,14 +104,6 @@ async fn channel_send(
     let msg = state
         .channel
         .send(&req.from, &req.content, req.reply_to, req.context);
-
-    // Notify listener if message is from external sender (not Lu)
-    if req.from != "lu" {
-        if let Some(ref tx) = state.message_tx {
-            // Best-effort send - don't block if receiver is slow
-            let _ = tx.try_send(msg.clone());
-        }
-    }
 
     Ok(Json(SendResponse {
         status: "sent".to_string(),
