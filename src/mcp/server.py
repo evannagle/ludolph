@@ -90,9 +90,9 @@ def push_channel_message(
 ):
     """Push a channel message event to SSE subscribers."""
     push_event("channel_message", {
-        "sender": sender,
+        "from": sender,
         "content": content,
-        "message_id": message_id,
+        "id": message_id,
         "reply_to": reply_to,
     })
 

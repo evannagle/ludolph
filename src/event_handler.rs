@@ -4,8 +4,6 @@
 //! Channel messages are processed through the LLM and responses are
 //! sent back through the MCP client.
 
-// Module is prepared for integration in Task 5.5
-#![allow(dead_code)]
 
 use std::time::Duration;
 
@@ -51,6 +49,7 @@ struct ChannelMessageData {
     content: String,
     /// ID of message this is replying to, if any.
     #[serde(default)]
+    #[allow(dead_code)] // Protocol field, may be used for threading
     reply_to: Option<u64>,
     /// Git context from sender's environment.
     #[serde(default)]

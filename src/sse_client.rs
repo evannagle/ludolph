@@ -3,8 +3,6 @@
 //! Provides automatic reconnection with exponential backoff
 //! and sends parsed events through an mpsc channel.
 
-// Module is prepared for integration in Task 5.5
-#![allow(dead_code)]
 
 use anyhow::Result;
 use eventsource_client::{Client as SseClient, ClientBuilder, SSE};
@@ -22,6 +20,7 @@ pub struct Event {
     pub id: u64,
     #[serde(rename = "type")]
     pub event_type: String,
+    #[allow(dead_code)] // Protocol field, useful for logging/debugging
     pub timestamp: String,
     pub data: serde_json::Value,
 }
