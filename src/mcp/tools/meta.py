@@ -36,7 +36,7 @@ TOOLS = [
     },
     {
         "name": "create_tool",
-        "description": "Create a new custom tool. The code must define TOOLS (list) and HANDLERS (dict). Dangerous operations like subprocess, eval, exec are forbidden.",
+        "description": "Create a new custom tool. The code must define TOOLS (list with 'name', 'description', 'input_schema' keys) and HANDLERS (dict). Use 'input_schema' NOT 'parameters'. Dangerous operations like subprocess, eval, exec are forbidden.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -112,6 +112,12 @@ def _validate_tool_code(code: str) -> str | None:
         return "Code must define TOOLS list"
     if "HANDLERS" not in code:
         return "Code must define HANDLERS dict"
+
+    # Check for common mistakes
+    if '"parameters"' in code or "'parameters'" in code:
+        return "Use 'input_schema' instead of 'parameters' in TOOLS definition"
+    if "input_schema" not in code:
+        return "TOOLS must include 'input_schema' for each tool"
 
     # Check for forbidden patterns
     for pattern in FORBIDDEN_PATTERNS:

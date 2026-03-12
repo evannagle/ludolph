@@ -44,7 +44,9 @@ struct ToolDefinitionsResponse {
 struct ToolDefinition {
     name: String,
     description: String,
-    input_schema: Value,
+    /// Input schema is optional to handle malformed tools gracefully
+    #[serde(default)]
+    input_schema: Option<Value>,
 }
 
 /// Chat request to the LLM proxy.
@@ -496,15 +498,20 @@ impl McpClient {
                      • Verify server is responding correctly",
         )?;
 
-        Ok(defs
-            .tools
-            .into_iter()
-            .map(|t| Tool {
-                name: t.name,
-                description: t.description,
-                input_schema: t.input_schema,
-            })
-            .collect())
+        // Filter out malformed tools (missing input_schema) and log warnings
+        let mut valid_tools = Vec::new();
+        for t in defs.tools {
+            if let Some(schema) = t.input_schema {
+                valid_tools.push(Tool {
+                    name: t.name,
+                    description: t.description,
+                    input_schema: schema,
+                });
+            } else {
+                tracing::warn!("Skipping malformed tool '{}': missing input_schema", t.name);
+            }
+        }
+        Ok(valid_tools)
     }
 
     /// Call a tool on the MCP server.
