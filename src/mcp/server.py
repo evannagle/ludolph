@@ -15,12 +15,13 @@ Environment Variables:
 """
 
 import asyncio
+import json
 import logging
 import os
 import signal
+import threading
+import time
 from pathlib import Path
-
-import json
 
 from flask import Flask, Response, jsonify, request
 
@@ -59,6 +60,41 @@ def get_registry() -> Registry:
     if _registry is None:
         _registry = Registry(REGISTRY_PATH, USERS_PATH)
     return _registry
+
+
+# Channel for SSE events - thread-safe queue
+_event_subscribers: dict[str, list[dict]] = {}
+_event_lock = threading.Lock()
+_next_event_id = 1
+
+
+def push_event(event_type: str, data: dict) -> int:
+    """Push an event to all subscribers."""
+    global _next_event_id
+    with _event_lock:
+        event_id = _next_event_id
+        _next_event_id += 1
+        event = {
+            "id": event_id,
+            "type": event_type,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "data": data,
+        }
+        for subscriber_events in _event_subscribers.values():
+            subscriber_events.append(event)
+        return event_id
+
+
+def push_channel_message(
+    sender: str, content: str, message_id: int, reply_to: int | None = None
+):
+    """Push a channel message event to SSE subscribers."""
+    push_event("channel_message", {
+        "sender": sender,
+        "content": content,
+        "message_id": message_id,
+        "reply_to": reply_to,
+    })
 
 
 # External MCP tool naming convention: {mcp_name}__{tool_name}
@@ -185,6 +221,46 @@ def health():
     """Health check endpoint."""
     vault = get_vault_path()
     return jsonify({"status": "ok", "vault": str(vault), "git_repo": is_git_repo()})
+
+
+@app.route("/events")
+@require_auth
+def events():
+    """Server-Sent Events endpoint for real-time notifications."""
+    subscriber = request.args.get("subscriber", "unknown")
+
+    # Initialize subscriber's event queue
+    with _event_lock:
+        if subscriber not in _event_subscribers:
+            _event_subscribers[subscriber] = []
+
+    def generate():
+        last_heartbeat = time.time()
+        while True:
+            # Check for new events
+            with _event_lock:
+                events_to_send = _event_subscribers.get(subscriber, [])
+                _event_subscribers[subscriber] = []
+
+            for event in events_to_send:
+                yield f"data: {json.dumps(event)}\n\n"
+
+            # Send heartbeat every 30 seconds
+            if time.time() - last_heartbeat >= 30:
+                heartbeat = {
+                    "id": 0,
+                    "type": "heartbeat",
+                    "timestamp": time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                    ),
+                    "data": {},
+                }
+                yield f"data: {json.dumps(heartbeat)}\n\n"
+                last_heartbeat = time.time()
+
+            time.sleep(0.5)
+
+    return Response(generate(), mimetype="text/event-stream")
 
 
 @app.route("/status")
