@@ -36,7 +36,7 @@ TOOLS = [
     },
     {
         "name": "create_tool",
-        "description": "Create a new custom tool. The code must define TOOLS (list with 'name', 'description', 'input_schema' keys) and HANDLERS (dict). Use 'input_schema' NOT 'parameters'. Dangerous operations like subprocess, eval, exec are forbidden.",
+        "description": "Create a new custom tool. Code must define TOOLS list (each with 'name', 'description', 'input_schema' in snake_case) and HANDLERS dict. IMPORTANT: Use 'input_schema' NOT 'parameters' or 'inputSchema'. Subprocess/eval/exec forbidden.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -103,7 +103,7 @@ def _validate_tool_name(name: str) -> str | None:
 
 
 def _validate_tool_code(code: str) -> str | None:
-    """Validate tool code for security. Returns error message or None if valid."""
+    """Validate tool code for security and correctness. Returns error message or None if valid."""
     if not code:
         return "Code is required"
 
@@ -113,11 +113,49 @@ def _validate_tool_code(code: str) -> str | None:
     if "HANDLERS" not in code:
         return "Code must define HANDLERS dict"
 
-    # Check for common mistakes
+    # Check for common schema mistakes (must use snake_case 'input_schema')
     if '"parameters"' in code or "'parameters'" in code:
-        return "Use 'input_schema' instead of 'parameters' in TOOLS definition"
+        return (
+            "Error: Use 'input_schema' not 'parameters'\n\n"
+            "Example:\n"
+            "TOOLS = [{\n"
+            "    'name': 'my_tool',\n"
+            "    'description': 'Does something',\n"
+            "    'input_schema': {  # NOT 'parameters'\n"
+            "        'type': 'object',\n"
+            "        'properties': {...}\n"
+            "    }\n"
+            "}]"
+        )
+    if '"inputSchema"' in code or "'inputSchema'" in code:
+        return (
+            "Error: Use 'input_schema' (snake_case) not 'inputSchema' (camelCase)\n\n"
+            "Example:\n"
+            "TOOLS = [{\n"
+            "    'name': 'my_tool',\n"
+            "    'description': 'Does something',\n"
+            "    'input_schema': {  # NOT 'inputSchema'\n"
+            "        'type': 'object',\n"
+            "        'properties': {...}\n"
+            "    }\n"
+            "}]"
+        )
     if "input_schema" not in code:
-        return "TOOLS must include 'input_schema' for each tool"
+        return (
+            "Error: TOOLS must include 'input_schema' for each tool\n\n"
+            "Example:\n"
+            "TOOLS = [{\n"
+            "    'name': 'my_tool',\n"
+            "    'description': 'Does something',\n"
+            "    'input_schema': {\n"
+            "        'type': 'object',\n"
+            "        'properties': {\n"
+            "            'arg1': {'type': 'string', 'description': 'First argument'}\n"
+            "        },\n"
+            "        'required': ['arg1']\n"
+            "    }\n"
+            "}]"
+        )
 
     # Check for forbidden patterns
     for pattern in FORBIDDEN_PATTERNS:
