@@ -234,31 +234,38 @@ def events():
         if subscriber not in _event_subscribers:
             _event_subscribers[subscriber] = []
 
+    logger.info(f"SSE subscriber connected: {subscriber}")
+
     def generate():
-        last_heartbeat = time.time()
-        while True:
-            # Check for new events
+        try:
+            last_heartbeat = time.time()
+            while True:
+                # Check for new events
+                with _event_lock:
+                    events_to_send = _event_subscribers.get(subscriber, [])
+                    _event_subscribers[subscriber] = []
+
+                for event in events_to_send:
+                    yield f"data: {json.dumps(event)}\n\n"
+
+                # Send heartbeat every 30 seconds
+                if time.time() - last_heartbeat >= 30:
+                    heartbeat = {
+                        "id": 0,
+                        "type": "heartbeat",
+                        "timestamp": time.strftime(
+                            "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                        ),
+                        "data": {},
+                    }
+                    yield f"data: {json.dumps(heartbeat)}\n\n"
+                    last_heartbeat = time.time()
+
+                time.sleep(0.5)
+        finally:
             with _event_lock:
-                events_to_send = _event_subscribers.get(subscriber, [])
-                _event_subscribers[subscriber] = []
-
-            for event in events_to_send:
-                yield f"data: {json.dumps(event)}\n\n"
-
-            # Send heartbeat every 30 seconds
-            if time.time() - last_heartbeat >= 30:
-                heartbeat = {
-                    "id": 0,
-                    "type": "heartbeat",
-                    "timestamp": time.strftime(
-                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-                    ),
-                    "data": {},
-                }
-                yield f"data: {json.dumps(heartbeat)}\n\n"
-                last_heartbeat = time.time()
-
-            time.sleep(0.5)
+                _event_subscribers.pop(subscriber, None)
+            logger.info(f"SSE subscriber disconnected: {subscriber}")
 
     return Response(generate(), mimetype="text/event-stream")
 
