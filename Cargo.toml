@@ -39,6 +39,8 @@ chrono = { version = "0.4", features = ["serde"] }
 futures = "0.3"
 eventsource-client = "0.13"
 axum = "0.7"
+open = "5"
+urlencoding = "2"
 
 [dev-dependencies]
 cargo-husky = { version = "1", default-features = false, features = ["prepush-hook", "run-cargo-check", "run-cargo-clippy", "run-cargo-fmt", "run-cargo-test"] }
