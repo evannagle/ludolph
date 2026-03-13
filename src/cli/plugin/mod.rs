@@ -6,9 +6,73 @@
 mod templates;
 
 use anyhow::Result;
+use regex::Regex;
 
 use crate::config::Config;
 use crate::ui::{Spinner, StatusLine};
+
+/// Reserved plugin names that cannot be used.
+const RESERVED_NAMES: &[&str] = &["lu", "plugin", "test"];
+
+/// Validate plugin name format.
+/// Must be lowercase alphanumeric with hyphens, start with letter, max 50 chars.
+fn validate_plugin_name(name: &str) -> Result<(), String> {
+    if name.len() > 50 {
+        return Err("Plugin name must be 50 characters or less".to_string());
+    }
+
+    let re = Regex::new(r"^[a-z][a-z0-9-]*$").unwrap();
+    if !re.is_match(name) {
+        return Err(
+            "Invalid plugin name. Use lowercase letters, numbers, and hyphens only. Must start with a letter.".to_string()
+        );
+    }
+
+    if RESERVED_NAMES.contains(&name) {
+        return Err(format!("'{name}' is a reserved name and cannot be used"));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_plugin_name_valid() {
+        assert!(validate_plugin_name("my-plugin").is_ok());
+        assert!(validate_plugin_name("a").is_ok());
+        assert!(validate_plugin_name("plugin123").is_ok());
+        assert!(validate_plugin_name("my-cool-plugin-2").is_ok());
+    }
+
+    #[test]
+    fn test_validate_plugin_name_invalid_start() {
+        assert!(validate_plugin_name("123-plugin").is_err());
+        assert!(validate_plugin_name("-plugin").is_err());
+    }
+
+    #[test]
+    fn test_validate_plugin_name_invalid_chars() {
+        assert!(validate_plugin_name("My Plugin").is_err());
+        assert!(validate_plugin_name("my_plugin").is_err());
+        assert!(validate_plugin_name("MyPlugin").is_err());
+    }
+
+    #[test]
+    fn test_validate_plugin_name_reserved() {
+        assert!(validate_plugin_name("lu").is_err());
+        assert!(validate_plugin_name("plugin").is_err());
+        assert!(validate_plugin_name("test").is_err());
+    }
+
+    #[test]
+    fn test_validate_plugin_name_too_long() {
+        let long_name = "a".repeat(51);
+        assert!(validate_plugin_name(&long_name).is_err());
+    }
+}
 
 /// Search for plugins in the community registry.
 pub async fn plugin_search(query: &str) -> Result<()> {
