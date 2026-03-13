@@ -8,8 +8,8 @@ use clap::{Parser, Subcommand};
 
 pub use commands::{check, config_cmd, mcp_restart, mcp_update, mcp_version, pi};
 pub use plugin::{
-    plugin_check, plugin_disable, plugin_enable, plugin_install, plugin_list, plugin_logs,
-    plugin_remove, plugin_search, plugin_setup, plugin_update,
+    plugin_check, plugin_create, plugin_disable, plugin_enable, plugin_install, plugin_list,
+    plugin_logs, plugin_publish, plugin_remove, plugin_search, plugin_setup, plugin_update,
 };
 pub use setup::{
     setup, setup_credentials_cmd, setup_deploy_cmd, setup_mcp_cmd, setup_pi_cmd, setup_verify_cmd,
@@ -132,4 +132,11 @@ pub enum PluginAction {
         #[arg(short = 'n', default_value = "20")]
         lines: usize,
     },
+    /// Create a new plugin from template
+    Create {
+        /// Plugin name (lowercase alphanumeric with hyphens)
+        name: String,
+    },
+    /// Publish plugin to community registry
+    Publish,
 }

@@ -83,6 +83,8 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 cli::PluginAction::Remove { name } => cli::plugin_remove(&name).await?,
                 cli::PluginAction::Check { name } => cli::plugin_check(&name).await?,
                 cli::PluginAction::Logs { name, lines } => cli::plugin_logs(&name, lines).await?,
+                cli::PluginAction::Create { name } => cli::plugin_create(&name).await?,
+                cli::PluginAction::Publish => cli::plugin_publish().await?,
             }
             Ok(ExitCode::SUCCESS)
         }

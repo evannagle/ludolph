@@ -682,3 +682,29 @@ pub async fn plugin_logs(name: &str, lines: usize) -> Result<()> {
     println!();
     Ok(())
 }
+
+/// Create a new plugin from template.
+pub async fn plugin_create(name: &str) -> Result<()> {
+    println!();
+    println!("Creating plugin: {name}");
+    println!();
+
+    // TODO: Implement plugin_create
+    StatusLine::ok("Plugin creation not yet implemented").print();
+
+    println!();
+    Ok(())
+}
+
+/// Publish plugin to community registry.
+pub async fn plugin_publish() -> Result<()> {
+    println!();
+    println!("Publishing plugin to registry...");
+    println!();
+
+    // TODO: Implement plugin_publish
+    StatusLine::ok("Plugin publishing not yet implemented").print();
+
+    println!();
+    Ok(())
+}
