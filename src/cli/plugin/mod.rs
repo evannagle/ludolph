@@ -84,56 +84,95 @@ pub async fn plugin_search(query: &str) -> Result<()> {
     println!("Searching for plugins matching: {query}");
     println!();
 
-    let config = Config::load()?;
-    let mcp_url = config
-        .mcp
-        .as_ref()
-        .map_or("http://localhost:8200", |m| m.url.as_str());
-
     let spinner = Spinner::new("Searching registry...");
 
+    // Fetch plugins.toml from GitHub
     let client = reqwest::Client::new();
     let response = client
-        .get(format!("{mcp_url}/plugin/search"))
-        .query(&[("q", query)])
-        .header(
-            "Authorization",
-            format!(
-                "Bearer {}",
-                config.mcp.as_ref().map_or("", |m| m.auth_token.as_str())
-            ),
-        )
+        .get("https://raw.githubusercontent.com/ludolph-community/plugin-registry/main/plugins.toml")
         .send()
         .await;
 
     match response {
         Ok(resp) if resp.status().is_success() => {
             spinner.finish();
-            let body: serde_json::Value = resp.json().await?;
-            if let Some(plugins) = body.get("plugins").and_then(|p| p.as_array()) {
-                if plugins.is_empty() {
-                    StatusLine::skip("No plugins found").print();
-                } else {
-                    for plugin in plugins {
-                        let name = plugin.get("name").and_then(|n| n.as_str()).unwrap_or("?");
-                        let desc = plugin
-                            .get("description")
-                            .and_then(|d| d.as_str())
-                            .unwrap_or("");
-                        println!("  {name} - {desc}");
-                    }
+
+            let content = resp.text().await?;
+            let registry: toml::Value = match toml::from_str(&content) {
+                Ok(v) => v,
+                Err(e) => {
+                    StatusLine::error(format!("Failed to parse registry: {e}")).print();
+                    println!();
+                    return Ok(());
+                }
+            };
+
+            let plugins = registry
+                .get("plugins")
+                .and_then(|p| p.as_array())
+                .cloned()
+                .unwrap_or_default();
+
+            let query_lower = query.to_lowercase();
+            let matches: Vec<_> = plugins
+                .iter()
+                .filter(|p| {
+                    let name = p.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    let desc = p.get("description").and_then(|d| d.as_str()).unwrap_or("");
+                    let tags = p
+                        .get("tags")
+                        .and_then(|t| t.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|t| t.as_str())
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        })
+                        .unwrap_or_default();
+
+                    name.to_lowercase().contains(&query_lower)
+                        || desc.to_lowercase().contains(&query_lower)
+                        || tags.to_lowercase().contains(&query_lower)
+                })
+                .collect();
+
+            if matches.is_empty() {
+                StatusLine::skip("No plugins found").print();
+            } else {
+                println!("Found {} plugin(s):", matches.len());
+                println!();
+                for plugin in matches {
+                    let name = plugin.get("name").and_then(|n| n.as_str()).unwrap_or("?");
+                    let desc = plugin
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("");
+                    let version = plugin
+                        .get("version")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?");
+                    println!("  {name} v{version}");
+                    println!("    {desc}");
+                    println!();
                 }
             }
         }
         Ok(resp) => {
             spinner.finish_error();
             let status = resp.status();
-            StatusLine::error(format!("Search failed: {status}")).print();
+            if status.as_u16() == 404 {
+                StatusLine::skip("Registry not found").print();
+                crate::ui::status::hint(
+                    "The plugin registry hasn't been created yet at ludolph-community/plugin-registry",
+                );
+            } else {
+                StatusLine::error(format!("Search failed: {status}")).print();
+            }
         }
         Err(e) => {
             spinner.finish_error();
             StatusLine::error(format!("Connection failed: {e}")).print();
-            crate::ui::status::hint("Is the MCP server running? Try: lu mcp restart");
+            crate::ui::status::hint("Check your internet connection");
         }
     }
 
