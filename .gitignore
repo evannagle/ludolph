@@ -33,3 +33,6 @@ __pycache__/
 !.claude/commands/
 !.claude/skills/
 ludolph-mcp-*.tar.gz
+
+# Git worktrees
+.worktrees/
