@@ -7,6 +7,7 @@ mod templates;
 
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 
 use anyhow::Result;
 use regex::Regex;
@@ -851,6 +852,128 @@ pub async fn plugin_create(name: &str) -> Result<()> {
     println!("  uv run pytest             # run tests");
     println!("  lu plugin install .       # test locally");
     println!("  lu plugin publish         # submit to registry");
+    println!();
+
+    Ok(())
+}
+
+/// Publish plugin to community registry.
+pub async fn plugin_publish() -> Result<()> {
+    println!();
+    println!("Publishing plugin to Lu registry");
+    println!();
+
+    // Check for lu-plugin.toml
+    let manifest_path = Path::new("lu-plugin.toml");
+    if !manifest_path.exists() {
+        crate::ui::status::print_error(
+            "Not a plugin directory",
+            Some("No lu-plugin.toml found. Run this command from a plugin directory."),
+        );
+        return Ok(());
+    }
+
+    // Parse manifest
+    let manifest_content = fs::read_to_string(manifest_path)?;
+    let manifest: toml::Value = toml::from_str(&manifest_content)?;
+
+    let plugin = manifest.get("plugin").ok_or_else(|| {
+        anyhow::anyhow!("Invalid manifest: missing [plugin] section")
+    })?;
+
+    let name = plugin
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("Missing required field: name. Update lu-plugin.toml and try again."))?;
+
+    let version = plugin
+        .get("version")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("Missing required field: version. Update lu-plugin.toml and try again."))?;
+
+    let description = plugin
+        .get("description")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("Missing required field: description. Update lu-plugin.toml and try again."))?;
+
+    let author = plugin
+        .get("author")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    // Get repository URL from git remote or manifest
+    let repository = plugin
+        .get("repository")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .or_else(|| {
+            // Try git remote
+            Command::new("git")
+                .args(["remote", "get-url", "origin"])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        });
+
+    let repository = if let Some(url) = repository {
+        url
+    } else {
+        // Prompt for repository
+        dialoguer::Input::new()
+            .with_prompt("π Repository URL (e.g., https://github.com/you/lu-myplugin)")
+            .interact_text()?
+    };
+
+    // Generate PR body
+    let pr_body = format!(
+        r#"## Add {name}
+
+- **Description:** {description}
+- **Repository:** {repository}
+- **Version:** {version}
+- **Author:** {author}
+
+### plugins.toml entry
+
+```toml
+[[plugins]]
+name = "{name}"
+description = "{description}"
+repository = "{repository}"
+version = "{version}"
+author = "{author}"
+tags = []
+```
+"#
+    );
+
+    // Open browser with prefilled PR URL
+    let title = format!("Add {name}");
+    let encoded_title = urlencoding::encode(&title);
+    let encoded_body = urlencoding::encode(&pr_body);
+    let url = format!(
+        "https://github.com/ludolph-community/plugin-registry/compare/main...main?quick_pull=1&title={encoded_title}&body={encoded_body}"
+    );
+
+    println!("Opening browser for PR creation...");
+    println!();
+
+    if let Err(e) = open::that(&url) {
+        StatusLine::error(format!("Failed to open browser: {e}")).print();
+        println!();
+        println!("Open this URL manually:");
+        println!("{url}");
+    } else {
+        StatusLine::ok("Opened browser for PR creation").print();
+    }
+
+    println!();
+    println!("Next steps:");
+    println!("  1. Fork ludolph-community/plugin-registry if you haven't");
+    println!("  2. Add the plugins.toml entry shown above to your fork");
+    println!("  3. Create a PR to the main repository");
     println!();
 
     Ok(())

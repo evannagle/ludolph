@@ -49,7 +49,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 "#;
 
-pub const README_MD: &str = r#"# {{name}}
+pub const README_MD: &str = r"# {{name}}
 
 {{description}}
 
@@ -75,7 +75,7 @@ uv run mcp dev src/server.py
 ## License
 
 MIT
-"#;
+";
 
 pub const SRC_INIT_PY: &str = r#""""{{name}} - {{description}}"""
 
