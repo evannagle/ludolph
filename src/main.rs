@@ -69,6 +69,23 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             }
             Ok(ExitCode::SUCCESS)
         }
+        Some(Command::Plugin { action }) => {
+            match action {
+                cli::PluginAction::Search { query } => cli::plugin_search(&query).await?,
+                cli::PluginAction::Install { source } => cli::plugin_install(&source).await?,
+                cli::PluginAction::Setup { name } => cli::plugin_setup(&name).await?,
+                cli::PluginAction::List => cli::plugin_list().await?,
+                cli::PluginAction::Enable { name } => cli::plugin_enable(&name).await?,
+                cli::PluginAction::Disable { name } => cli::plugin_disable(&name).await?,
+                cli::PluginAction::Update { all, name } => {
+                    cli::plugin_update(all, name.as_deref()).await?;
+                }
+                cli::PluginAction::Remove { name } => cli::plugin_remove(&name).await?,
+                cli::PluginAction::Check { name } => cli::plugin_check(&name).await?,
+                cli::PluginAction::Logs { name, lines } => cli::plugin_logs(&name, lines).await?,
+            }
+            Ok(ExitCode::SUCCESS)
+        }
         None => {
             bot::run().await?;
             Ok(ExitCode::SUCCESS)

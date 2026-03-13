@@ -1,0 +1,56 @@
+# Lu Plugin Manifest
+# This is the configuration file that defines a Lu plugin.
+# For full documentation, see: https://ludolph.dev/docs/plugins
+
+[plugin]
+name = "lu-example"
+version = "1.0.0"
+description = "Example plugin demonstrating Lu plugin architecture"
+author = "ludolph-community"
+license = "MIT"
+repository = "https://github.com/ludolph-community/lu-example"
+
+# Explain how this plugin integrates with the vault.
+# This helps users understand the value proposition.
+vault_integration = """
+This example plugin demonstrates vault-first design.
+Tool outputs become searchable vault notes in the designated folders.
+"""
+
+# Runtime configuration - how the plugin executes
+[plugin.runtime]
+type = "external"      # "builtin" | "external" | "webhook"
+package = "lu-mcp-example"  # npm/pip package name
+runtime = "npx"        # "npx" | "uvx" | "python"
+
+# Credentials required by the plugin
+# These are prompted during `lu plugin setup <name>`
+[plugin.credentials]
+EXAMPLE_API_KEY = { description = "API key for the example service", required = true }
+EXAMPLE_WEBHOOK_SECRET = { description = "Webhook secret (optional)", required = false }
+
+# Tools provided by the plugin
+# These become available as MCP tools when the plugin is enabled
+[[plugin.tools]]
+name = "example_greet"
+description = "Generate a greeting message and save to vault"
+vault_output = true
+output_path = "Inbox/greetings/{date}.md"
+
+[[plugin.tools]]
+name = "example_summarize"
+description = "Summarize text content"
+vault_output = false
+
+# Scheduled tasks (optional)
+# These run automatically via cron on the Pi
+[[plugin.schedules]]
+name = "daily_greeting"
+cron = "0 8 * * *"      # Every day at 8am
+tool = "example_greet"
+notify = true           # Send Telegram notification when complete
+
+# Dependencies (optional)
+# Specify minimum Lu version or other requirements
+[plugin.dependencies]
+lu-version = ">=0.9.0"

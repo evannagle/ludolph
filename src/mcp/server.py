@@ -701,6 +701,266 @@ def admin_update_api_key():
     })
 
 
+# -----------------------------------------------------------------------------
+# Plugin Management Endpoints
+# -----------------------------------------------------------------------------
+
+# Lazy-loaded plugin manager
+_plugin_manager = None
+
+
+def get_plugin_manager():
+    """Get or create the plugin manager instance."""
+    global _plugin_manager
+    if _plugin_manager is None:
+        from plugins import PluginManager
+        _plugin_manager = PluginManager()
+    return _plugin_manager
+
+
+@app.route("/plugin/search", methods=["GET"])
+@require_auth
+def plugin_search():
+    """Search for plugins in the community registry."""
+    query = request.args.get("q", "")
+
+    # For now, return empty results - registry lookup not yet implemented
+    # In the future, this would query github.com/ludolph-community
+    return jsonify({
+        "query": query,
+        "plugins": [],
+        "message": "Registry search not yet implemented. Use git URLs to install plugins.",
+    })
+
+
+@app.route("/plugin/install", methods=["POST"])
+@require_auth
+def plugin_install():
+    """Install a plugin from source."""
+    from plugins import PluginInstallError
+
+    data = request.json or {}
+    source = data.get("source", "")
+
+    if not source:
+        return jsonify({"error": "source is required"}), 400
+
+    manager = get_plugin_manager()
+
+    try:
+        manifest = manager.install(source)
+        return jsonify({
+            "status": "ok",
+            "name": manifest.name,
+            "version": manifest.version,
+            "description": manifest.description,
+            "needs_setup": manager.needs_setup(manifest.name),
+            "tools": [t.name for t in manifest.tools],
+        })
+    except PluginInstallError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.exception(f"Plugin install failed: {e}")
+        return jsonify({"error": f"Install failed: {e}"}), 500
+
+
+@app.route("/plugin/list", methods=["GET"])
+@require_auth
+def plugin_list():
+    """List installed plugins."""
+    manager = get_plugin_manager()
+    plugins = manager.list()
+
+    return jsonify({
+        "plugins": [
+            {
+                "name": p.name,
+                "version": p.version,
+                "description": p.description,
+                "enabled": p.enabled,
+            }
+            for p in plugins
+        ]
+    })
+
+
+@app.route("/plugin/<name>/enable", methods=["POST"])
+@require_auth
+def plugin_enable_endpoint(name: str):
+    """Enable a plugin."""
+    manager = get_plugin_manager()
+
+    if manager.enable(name):
+        return jsonify({"status": "ok", "name": name, "enabled": True})
+    else:
+        return jsonify({"error": "Plugin not found"}), 404
+
+
+@app.route("/plugin/<name>/disable", methods=["POST"])
+@require_auth
+def plugin_disable_endpoint(name: str):
+    """Disable a plugin."""
+    manager = get_plugin_manager()
+
+    if manager.disable(name):
+        return jsonify({"status": "ok", "name": name, "enabled": False})
+    else:
+        return jsonify({"error": "Plugin not found"}), 404
+
+
+@app.route("/plugin/<name>/remove", methods=["POST"])
+@require_auth
+def plugin_remove_endpoint(name: str):
+    """Remove a plugin."""
+    manager = get_plugin_manager()
+
+    if manager.remove(name):
+        return jsonify({"status": "ok", "name": name, "removed": True})
+    else:
+        return jsonify({"error": "Plugin not found"}), 404
+
+
+@app.route("/plugin/<name>/check", methods=["GET"])
+@require_auth
+def plugin_check_endpoint(name: str):
+    """Run health check on a plugin."""
+    from plugins import PluginNotFoundError
+
+    manager = get_plugin_manager()
+
+    try:
+        result = manager.check(name)
+        return jsonify(result)
+    except PluginNotFoundError:
+        return jsonify({"error": "Plugin not found"}), 404
+
+
+@app.route("/plugin/<name>/credentials", methods=["GET"])
+@require_auth
+def plugin_credentials_get(name: str):
+    """Get credential requirements for a plugin."""
+    from plugins import PluginNotFoundError
+
+    manager = get_plugin_manager()
+
+    try:
+        manifest = manager.get(name)
+        return jsonify({
+            "name": name,
+            "credentials": [
+                {
+                    "name": c.name,
+                    "description": c.description,
+                    "required": c.required,
+                    "oauth_flow": c.oauth_flow,
+                }
+                for c in manifest.credentials
+            ],
+        })
+    except PluginNotFoundError:
+        return jsonify({"error": "Plugin not found"}), 404
+
+
+@app.route("/plugin/<name>/credentials", methods=["POST"])
+@require_auth
+def plugin_credentials_set(name: str):
+    """Set credentials for a plugin."""
+    from plugins import PluginNotFoundError
+
+    manager = get_plugin_manager()
+    storage = manager.storage
+
+    try:
+        manifest = manager.get(name)
+    except PluginNotFoundError:
+        return jsonify({"error": "Plugin not found"}), 404
+
+    data = request.json or {}
+
+    # Validate that all provided credentials are valid for this plugin
+    valid_creds = {c.name for c in manifest.credentials}
+    for key in data.keys():
+        if key not in valid_creds:
+            return jsonify({"error": f"Unknown credential: {key}"}), 400
+
+    # Save credentials
+    for key, value in data.items():
+        if value:  # Don't save empty values
+            storage.set_credential(name, key, value)
+
+    return jsonify({
+        "status": "ok",
+        "name": name,
+        "saved": list(data.keys()),
+    })
+
+
+@app.route("/plugin/<name>/update", methods=["POST"])
+@require_auth
+def plugin_update_single(name: str):
+    """Update a single plugin."""
+    from plugins import PluginNotFoundError
+
+    manager = get_plugin_manager()
+
+    try:
+        result = manager.update(name)
+        if result:
+            return jsonify({
+                "status": "ok",
+                "name": name,
+                "version": result.version,
+                "updated": True,
+            })
+        else:
+            return jsonify({
+                "status": "ok",
+                "name": name,
+                "updated": False,
+                "message": "Already up to date",
+            })
+    except PluginNotFoundError:
+        return jsonify({"error": "Plugin not found"}), 404
+
+
+@app.route("/plugin/update", methods=["POST"])
+@require_auth
+def plugin_update_all():
+    """Update all plugins."""
+    manager = get_plugin_manager()
+    updated = manager.update_all()
+
+    return jsonify({
+        "status": "ok",
+        "updated": [
+            {"name": m.name, "version": m.version}
+            for m in updated
+        ],
+    })
+
+
+@app.route("/plugin/<name>/logs", methods=["GET"])
+@require_auth
+def plugin_logs_endpoint(name: str):
+    """Get plugin logs."""
+    from plugins import PluginNotFoundError
+
+    manager = get_plugin_manager()
+    lines = int(request.args.get("lines", 20))
+
+    try:
+        manager.get(name)  # Verify plugin exists
+    except PluginNotFoundError:
+        return jsonify({"error": "Plugin not found"}), 404
+
+    # For now, logs are not implemented - would need to capture MCP process output
+    return jsonify({
+        "name": name,
+        "logs": "",
+        "message": "Plugin logging not yet implemented",
+    })
+
+
 def _load_env_file():
     """Load .env file if it exists."""
     env_file = Path(__file__).parent / ".env"
