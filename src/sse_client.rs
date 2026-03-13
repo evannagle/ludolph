@@ -3,7 +3,6 @@
 //! Provides automatic reconnection with exponential backoff
 //! and sends parsed events through an mpsc channel.
 
-
 use anyhow::Result;
 use eventsource_client::{Client as SseClient, ClientBuilder, SSE};
 use futures::StreamExt;

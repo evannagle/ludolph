@@ -89,7 +89,9 @@ pub async fn plugin_search(query: &str) -> Result<()> {
     // Fetch plugins.toml from GitHub
     let client = reqwest::Client::new();
     let response = client
-        .get("https://raw.githubusercontent.com/ludolph-community/plugin-registry/main/plugins.toml")
+        .get(
+            "https://raw.githubusercontent.com/ludolph-community/plugin-registry/main/plugins.toml",
+        )
         .send()
         .await;
 
@@ -217,9 +219,12 @@ pub async fn plugin_install(source: &str) -> Result<()> {
             StatusLine::ok(format!("Installed {name} v{version}")).print();
 
             // Check if setup is needed
-            if let Some(needs_setup) = body.get("needs_setup").and_then(serde_json::Value::as_bool) {
+            if let Some(needs_setup) = body.get("needs_setup").and_then(serde_json::Value::as_bool)
+            {
                 if needs_setup {
-                    crate::ui::status::hint(&format!("Run `lu plugin setup {name}` to configure credentials"));
+                    crate::ui::status::hint(&format!(
+                        "Run `lu plugin setup {name}` to configure credentials"
+                    ));
                 }
             }
         }
@@ -865,9 +870,10 @@ pub async fn plugin_create(name: &str) -> Result<()> {
     )?;
 
     // CLAUDE.md needs special handling - replace lu-example references
-    let claude_md = templates::CLAUDE_MD
-        .replace("lu-example", name)
-        .replace("lu plugin setup lu-example", &format!("lu plugin setup {name}"));
+    let claude_md = templates::CLAUDE_MD.replace("lu-example", name).replace(
+        "lu plugin setup lu-example",
+        &format!("lu plugin setup {name}"),
+    );
     fs::write(plugin_dir.join("CLAUDE.md"), claude_md)?;
 
     spinner.finish();
@@ -916,29 +922,31 @@ pub async fn plugin_publish() -> Result<()> {
     let manifest_content = fs::read_to_string(manifest_path)?;
     let manifest: toml::Value = toml::from_str(&manifest_content)?;
 
-    let plugin = manifest.get("plugin").ok_or_else(|| {
-        anyhow::anyhow!("Invalid manifest: missing [plugin] section")
-    })?;
+    let plugin = manifest
+        .get("plugin")
+        .ok_or_else(|| anyhow::anyhow!("Invalid manifest: missing [plugin] section"))?;
 
-    let name = plugin
-        .get("name")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("Missing required field: name. Update lu-plugin.toml and try again."))?;
+    let name = plugin.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+        anyhow::anyhow!("Missing required field: name. Update lu-plugin.toml and try again.")
+    })?;
 
     let version = plugin
         .get("version")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("Missing required field: version. Update lu-plugin.toml and try again."))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("Missing required field: version. Update lu-plugin.toml and try again.")
+        })?;
 
     let description = plugin
         .get("description")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("Missing required field: description. Update lu-plugin.toml and try again."))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Missing required field: description. Update lu-plugin.toml and try again."
+            )
+        })?;
 
-    let author = plugin
-        .get("author")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let author = plugin.get("author").and_then(|v| v.as_str()).unwrap_or("");
 
     // Get repository URL from git remote or manifest
     let repository = plugin

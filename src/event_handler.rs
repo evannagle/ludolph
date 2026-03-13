@@ -4,7 +4,6 @@
 //! Channel messages are processed through the LLM and responses are
 //! sent back through the MCP client.
 
-
 use std::time::Duration;
 
 use anyhow::{Context, Result};
