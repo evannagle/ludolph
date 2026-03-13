@@ -5,6 +5,9 @@
 
 mod templates;
 
+use std::fs;
+use std::path::Path;
+
 use anyhow::Result;
 use regex::Regex;
 
@@ -746,5 +749,109 @@ pub async fn plugin_logs(name: &str, lines: usize) -> Result<()> {
     }
 
     println!();
+    Ok(())
+}
+
+/// Create a new plugin from template.
+pub async fn plugin_create(name: &str) -> Result<()> {
+    println!();
+    println!("Creating plugin: {name}");
+    println!();
+
+    // Validate name
+    if let Err(e) = validate_plugin_name(name) {
+        crate::ui::status::print_error("Invalid name", Some(&e));
+        return Ok(());
+    }
+
+    // Check if directory exists
+    let plugin_dir = Path::new(name);
+    if plugin_dir.exists() {
+        crate::ui::status::print_error(
+            "Directory exists",
+            Some(&format!(
+                "Directory '{name}' already exists. Remove it or choose a different name."
+            )),
+        );
+        return Ok(());
+    }
+
+    // Prompt for description
+    let description: String = dialoguer::Input::new()
+        .with_prompt("π What does this plugin do?")
+        .interact_text()?;
+
+    let spinner = Spinner::new("Creating plugin...");
+
+    // Create directory structure
+    fs::create_dir_all(plugin_dir.join("src"))?;
+    fs::create_dir_all(plugin_dir.join("tests"))?;
+
+    // Helper to interpolate templates
+    let interpolate = |template: &str| -> String {
+        template
+            .replace("{{name}}", name)
+            .replace("{{description}}", &description)
+    };
+
+    // Write files
+    fs::write(
+        plugin_dir.join("lu-plugin.toml"),
+        interpolate(templates::LU_PLUGIN_TOML),
+    )?;
+    fs::write(
+        plugin_dir.join("pyproject.toml"),
+        interpolate(templates::PYPROJECT_TOML),
+    )?;
+    fs::write(
+        plugin_dir.join("README.md"),
+        interpolate(templates::README_MD),
+    )?;
+    fs::write(
+        plugin_dir.join("src/__init__.py"),
+        interpolate(templates::SRC_INIT_PY),
+    )?;
+    fs::write(
+        plugin_dir.join("src/server.py"),
+        interpolate(templates::SERVER_PY),
+    )?;
+    fs::write(
+        plugin_dir.join("tests/__init__.py"),
+        interpolate(templates::TESTS_INIT_PY),
+    )?;
+    fs::write(
+        plugin_dir.join("tests/test_tools.py"),
+        interpolate(templates::TEST_TOOLS_PY),
+    )?;
+
+    // CLAUDE.md needs special handling - replace lu-example references
+    let claude_md = templates::CLAUDE_MD
+        .replace("lu-example", name)
+        .replace("lu plugin setup lu-example", &format!("lu plugin setup {name}"));
+    fs::write(plugin_dir.join("CLAUDE.md"), claude_md)?;
+
+    spinner.finish();
+
+    // Print success with tree structure
+    StatusLine::ok(format!("Created {name}/")).print();
+    println!("      ├── lu-plugin.toml");
+    println!("      ├── CLAUDE.md");
+    println!("      ├── README.md");
+    println!("      ├── pyproject.toml");
+    println!("      ├── src/");
+    println!("      │   ├── __init__.py");
+    println!("      │   └── server.py");
+    println!("      └── tests/");
+    println!("          ├── __init__.py");
+    println!("          └── test_tools.py");
+    println!();
+    println!("Next steps:");
+    println!("  cd {name}");
+    println!("  claude                    # develop with Claude Code");
+    println!("  uv run pytest             # run tests");
+    println!("  lu plugin install .       # test locally");
+    println!("  lu plugin publish         # submit to registry");
+    println!();
+
     Ok(())
 }
