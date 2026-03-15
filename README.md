@@ -211,6 +211,20 @@ For the full API reference and instructions for adding your own tools, see [src/
 
 <br clear="right">
 
+## Plugins
+
+Out of the box, Lu can read, write, and search your vault. But maybe you want more — email summaries that land in your inbox folder, calendar alerts that become tasks, invoices that write themselves. Plugins let you extend Lu without touching the core.
+
+```bash
+lu plugin search email          # Find plugins
+lu plugin install lu-email      # Install one
+lu plugin setup lu-email        # Configure credentials
+```
+
+Plugins are MCP servers that run alongside Lu's vault tools. Each one adds new capabilities while following the same vault-first design: data flows into your vault as searchable notes, not into some separate database you'll forget exists.
+
+**Building your own?** Start with `lu plugin create my-plugin` — it scaffolds everything you need. The [lu-example](examples/plugins/lu-example) plugin is a working reference with two tools you can copy and adapt. See the [Plugin Guide](docs/plugins/getting-started.md) for the full story.
+
 ## Building from Source
 
 ```bash
