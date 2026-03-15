@@ -176,6 +176,8 @@ writing tests, formatting vault output. Just describe what you want.
 
 ## Test
 
+Requires Python 3.10+.
+
 \```bash
 uv sync                        # Install dependencies
 uv run pytest                  # Run tests
@@ -281,7 +283,9 @@ vault_output = false
 | `name` | string | Tool identifier |
 | `description` | string | What it does |
 | `vault_output` | bool | Creates vault notes? |
-| `output_path` | string | Where notes land (supports `{date}`, `{name}`) |
+| `output_path` | string | Where notes land |
+
+**Output path variables:** `{date}` (YYYY-MM-DD), `{datetime}` (ISO format), `{name}` (from tool arguments)
 
 ## Schedules
 
