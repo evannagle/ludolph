@@ -139,7 +139,8 @@ impl Llm {
              - Short paragraphs. Break up walls of text.\n\
              - Simple lists when helpful. Use bullet points sparingly.\n\
              - No emojis unless the user uses them first.\n\
-             - Be concise. Get to the point.{}{}",
+             - Be concise. Get to the point.\n\
+             - If you have multiple questions, ask one at a time.{}{}",
             self.vault_description(),
             memory_context,
             lu_context
