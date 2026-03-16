@@ -1206,6 +1206,26 @@ LLM_MODEL="${LLM_MODEL:-claude-sonnet-4-6}"
 LLM_PROVIDER="${LLM_PROVIDER:-anthropic}"
 LLM_API_KEY="${LLM_API_KEY:-$CLAUDE_API_KEY}"
 
+# Update the launchd plist with the API key (plist was created earlier without it)
+if ! $IS_PI && [ -f "$PLIST_PATH" ]; then
+    # Determine API key env var name based on provider
+    API_KEY_NAME="ANTHROPIC_API_KEY"
+    case "$LLM_PROVIDER" in
+        openai) API_KEY_NAME="OPENAI_API_KEY" ;;
+        gemini) API_KEY_NAME="GEMINI_API_KEY" ;;
+    esac
+
+    # Update the plist with the actual API key using plutil
+    plutil -replace EnvironmentVariables.$API_KEY_NAME -string "$LLM_API_KEY" "$PLIST_PATH" 2>/dev/null || true
+
+    # Reload the service with the updated config
+    USER_ID=$(id -u)
+    launchctl bootout gui/$USER_ID/dev.ludolph.mcp 2>/dev/null || true
+    sleep 1
+    launchctl bootstrap gui/$USER_ID "$PLIST_PATH" 2>/dev/null || true
+    launchctl kickstart gui/$USER_ID/dev.ludolph.mcp 2>/dev/null || true
+fi
+
 # Build fallback URL if using Tailscale and have local IP
 FALLBACK_LINE=""
 if $USING_TAILSCALE && [ -n "$LOCAL_IP" ]; then
