@@ -473,6 +473,21 @@ else
     fi
 fi
 
+# Save partial config early so values persist across failures
+mkdir -p "$LOCAL_DIR"
+if [ ! -f "$LOCAL_DIR/config.toml" ]; then
+    # Create minimal config with what we have so far
+    cat > "$LOCAL_DIR/config.toml" <<PARTIALEOF
+# Partial config - will be completed after setup finishes
+[vault]
+path = "$VAULT_PATH"
+
+[pi]
+host = "$PI_HOST"
+user = "$PI_USER"
+PARTIALEOF
+fi
+
 # =============================================================================
 # Install Ludolph on Pi
 # =============================================================================
