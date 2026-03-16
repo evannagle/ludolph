@@ -814,18 +814,28 @@ if ! $IS_PI; then
         exit 1
     fi
 
-    # Choose port (default 8200, but check if in use)
-    MCP_PORT=8200
-    if lsof -ti :$MCP_PORT >/dev/null 2>&1; then
-        # Find an available port
-        while lsof -ti :$MCP_PORT >/dev/null 2>&1; do
-            MCP_PORT=$((MCP_PORT + 1))
-        done
+    # Choose port (default 8200, but reuse existing port if plist exists)
+    PLIST_PATH="$HOME/Library/LaunchAgents/dev.ludolph.mcp.plist"
+    if [ -f "$PLIST_PATH" ]; then
+        # Reuse existing port from plist
+        EXISTING_PORT=$(plutil -extract EnvironmentVariables.PORT raw "$PLIST_PATH" 2>/dev/null || echo "")
+        if [ -n "$EXISTING_PORT" ]; then
+            MCP_PORT=$EXISTING_PORT
+        else
+            MCP_PORT=8200
+        fi
+    else
+        # Fresh install: find an available port
+        MCP_PORT=8200
+        if lsof -ti :$MCP_PORT >/dev/null 2>&1; then
+            while lsof -ti :$MCP_PORT >/dev/null 2>&1; do
+                MCP_PORT=$((MCP_PORT + 1))
+            done
+        fi
     fi
 
     # Create launchd plist for auto-start
     spinner_start "Setting up auto-start..."
-    PLIST_PATH="$HOME/Library/LaunchAgents/dev.ludolph.mcp.plist"
     mkdir -p "$HOME/Library/LaunchAgents"
 
     # Get Python user site-packages for PYTHONPATH
