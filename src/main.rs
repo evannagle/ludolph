@@ -88,6 +88,11 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             }
             Ok(ExitCode::SUCCESS)
         }
+        Some(Command::Doctor) => Ok(cli::doctor().await),
+        Some(Command::Uninstall { mac, pi, all }) => {
+            cli::uninstall(mac, pi, all)?;
+            Ok(ExitCode::SUCCESS)
+        }
         None => {
             bot::run().await?;
             Ok(ExitCode::SUCCESS)

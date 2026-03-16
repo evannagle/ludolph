@@ -1,12 +1,13 @@
 //! CLI command handling for Ludolph.
 
+mod checks;
 mod commands;
 mod plugin;
 mod setup;
 
 use clap::{Parser, Subcommand};
 
-pub use commands::{check, config_cmd, mcp_restart, mcp_update, mcp_version, pi};
+pub use commands::{check, config_cmd, doctor, mcp_restart, mcp_update, mcp_version, pi, uninstall};
 pub use plugin::{
     plugin_check, plugin_create, plugin_disable, plugin_enable, plugin_install, plugin_list,
     plugin_logs, plugin_publish, plugin_remove, plugin_search, plugin_setup, plugin_update,
@@ -50,6 +51,20 @@ pub enum Command {
     Plugin {
         #[command(subcommand)]
         action: PluginAction,
+    },
+    /// Diagnose Ludolph installation
+    Doctor,
+    /// Uninstall Ludolph
+    Uninstall {
+        /// Uninstall from Mac only
+        #[arg(long)]
+        mac: bool,
+        /// Uninstall from Pi only
+        #[arg(long)]
+        pi: bool,
+        /// Uninstall from both Mac and Pi
+        #[arg(long)]
+        all: bool,
     },
 }
 

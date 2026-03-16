@@ -8,9 +8,10 @@ use anyhow::Result;
 use console::style;
 use walkdir::WalkDir;
 
+use super::checks::{self, CheckResult};
 use crate::config::{self, Config};
 use crate::ssh;
-use crate::ui::{self, Spinner, StatusLine};
+use crate::ui::{self, prompt, Spinner, StatusLine};
 
 const REPO: &str = "evannagle/ludolph";
 const LUDOLPH_DIR: &str = ".ludolph";
@@ -326,4 +327,206 @@ fn mcp_restart_service() -> Result<()> {
         ui::status::hint("Could not restart MCP service. Restart manually.");
         Ok(())
     }
+}
+
+// =============================================================================
+// Doctor Command
+// =============================================================================
+
+/// Run diagnostic checks and report results.
+pub async fn doctor() -> ExitCode {
+    println!();
+    println!("{}", style("Ludolph Doctor").bold());
+    println!();
+
+    // Run checks in a blocking task to avoid issues with reqwest::blocking in async context
+    let results = tokio::task::spawn_blocking(|| {
+        let (_, results) = checks::run_all_checks();
+        results
+    })
+    .await
+    .expect("spawn_blocking failed");
+
+    let mut has_failures = false;
+    let mut diagnosis: Option<(&str, &str)> = None;
+
+    for (name, result) in &results {
+        match result {
+            CheckResult::Pass { message } => {
+                StatusLine::ok(message).print();
+            }
+            CheckResult::Fail {
+                message,
+                fix_hint,
+                doc_anchor,
+            } => {
+                has_failures = true;
+                StatusLine::error(message).print();
+
+                // Print fix hint indented
+                for line in fix_hint.lines() {
+                    println!("      {}", style(line).dim());
+                }
+
+                // Remember first failure for diagnosis
+                if diagnosis.is_none() {
+                    diagnosis = Some((name, doc_anchor));
+                }
+            }
+            CheckResult::Skip { reason } => {
+                StatusLine::skip(format!("Cannot check: {name} ({reason})")).print();
+            }
+        }
+    }
+
+    println!();
+
+    if has_failures {
+        if let Some((check_name, anchor)) = diagnosis {
+            println!(
+                "{}",
+                style(format!(
+                    "DIAGNOSIS: {} issue. See docs/troubleshooting.md#{anchor}",
+                    check_name.replace('_', " ")
+                ))
+                .yellow()
+            );
+        }
+        println!();
+        ExitCode::FAILURE
+    } else {
+        ui::status::print_success("All checks passed", None);
+        ExitCode::SUCCESS
+    }
+}
+
+// =============================================================================
+// Uninstall Command
+// =============================================================================
+
+/// Uninstall Ludolph from specified targets.
+pub fn uninstall(mac: bool, pi: bool, all: bool) -> Result<()> {
+    println!();
+    println!("{}", style("Ludolph Uninstall").bold());
+    println!();
+
+    // Determine what to uninstall
+    // If no flags provided, default to mac only on macOS
+    let uninstall_mac = mac || all || !pi;
+    let uninstall_pi = pi || all;
+
+    #[cfg(not(target_os = "macos"))]
+    let uninstall_mac = false;
+
+    if !uninstall_mac && !uninstall_pi {
+        println!("  Usage: lu uninstall [--mac] [--pi] [--all]");
+        println!();
+        return Ok(());
+    }
+
+    // Show what will be uninstalled
+    println!("  This will remove:");
+    if uninstall_mac {
+        println!("    - ~/.ludolph/ directory (Mac)");
+        println!("    - MCP launchd service (Mac)");
+    }
+    if uninstall_pi {
+        println!("    - ~/.ludolph/ directory (Pi)");
+        println!("    - ludolph systemd service (Pi)");
+    }
+    println!();
+    println!("  {}:", style("Preserved").dim());
+    println!("    - Your Obsidian vault");
+    println!("    - SSH keys");
+    println!("    - Tailscale configuration");
+    println!();
+
+    // Confirmation
+    if !prompt::confirm("Proceed with uninstall?")? {
+        println!();
+        StatusLine::skip("Uninstall cancelled").print();
+        println!();
+        return Ok(());
+    }
+
+    println!();
+
+    // Uninstall Mac
+    if uninstall_mac {
+        uninstall_mac_internal()?;
+    }
+
+    // Uninstall Pi
+    if uninstall_pi {
+        uninstall_pi_internal()?;
+    }
+
+    println!();
+    ui::status::print_success("Uninstall complete", None);
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn uninstall_mac_internal() -> Result<()> {
+    let spinner = Spinner::new("Uninstalling from Mac...");
+
+    // Stop and remove launchd service
+    let plist = dirs::home_dir()
+        .expect("home dir")
+        .join("Library/LaunchAgents/dev.ludolph.mcp.plist");
+
+    if plist.exists() {
+        let _ = std::process::Command::new("launchctl")
+            .args(["unload", plist.to_str().unwrap()])
+            .status();
+
+        fs::remove_file(&plist)?;
+    }
+
+    // Remove ~/.ludolph directory
+    let ludolph_dir = ludolph_dir();
+    if ludolph_dir.exists() {
+        fs::remove_dir_all(&ludolph_dir)?;
+    }
+
+    spinner.finish();
+    StatusLine::ok("Mac uninstalled").print();
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn uninstall_mac_internal() -> Result<()> {
+    StatusLine::skip("Mac uninstall only runs on macOS").print();
+    Ok(())
+}
+
+#[allow(clippy::unnecessary_wraps)]
+fn uninstall_pi_internal() -> Result<()> {
+    let config = Config::load().ok();
+
+    let Some(pi) = config.as_ref().and_then(|c| c.pi.as_ref()) else {
+        StatusLine::skip("No Pi configured").print();
+        return Ok(());
+    };
+
+    let spinner = Spinner::new(&format!("Uninstalling from Pi ({}@{})...", pi.user, pi.host));
+
+    // Stop and disable systemd service
+    let _ = std::process::Command::new("ssh")
+        .args([
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=10",
+            &format!("{}@{}", pi.user, pi.host),
+            "systemctl --user stop ludolph.service 2>/dev/null; \
+             systemctl --user disable ludolph.service 2>/dev/null; \
+             rm -f ~/.config/systemd/user/ludolph.service; \
+             rm -rf ~/.ludolph",
+        ])
+        .status();
+
+    spinner.finish();
+    StatusLine::ok(format!("Pi uninstalled ({})", pi.host)).print();
+    Ok(())
 }
