@@ -16,6 +16,7 @@ from . import (
     analytics,
     backlinks,
     batch,
+    conversation,
     directories,
     editing,
     files,
@@ -50,6 +51,7 @@ _CORE_TOOLS = (
     + meta.TOOLS
     + semantic.TOOLS
     + telegram.TOOLS
+    + conversation.TOOLS
 )
 
 # Aggregate core handlers
@@ -71,6 +73,7 @@ _CORE_HANDLERS = {
     **meta.HANDLERS,
     **semantic.HANDLERS,
     **telegram.HANDLERS,
+    **conversation.HANDLERS,
 }
 
 
