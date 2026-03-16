@@ -154,6 +154,21 @@ impl Memory {
             self.max_context_bytes,
         )
     }
+
+    /// Clear all messages for a user.
+    ///
+    /// Used when starting a fresh conversation context (e.g., `/setup`).
+    pub fn clear_user(&self, user_id: i64) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+
+        conn.execute("DELETE FROM messages WHERE user_id = ?1", params![user_id])
+            .context("Failed to clear user messages")?;
+
+        Ok(())
+    }
 }
 
 /// Compact message content to reduce storage/memory footprint.

@@ -324,6 +324,10 @@ pub async fn run() -> Result<()> {
                                 guard.insert(uid);
                             }
 
+                            // Clear previous conversation history for fresh setup
+                            #[allow(clippy::cast_possible_wrap)]
+                            llm.clear_user_memory(uid as i64);
+
                             // Show status indicators
                             set_reaction(&bot, msg.chat.id, msg.id, "👀").await;
                             let typing = start_typing(bot.clone(), msg.chat.id);

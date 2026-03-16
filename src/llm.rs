@@ -133,8 +133,13 @@ impl Llm {
 
         format!(
             "You are Ludolph, a helpful assistant with access to the user's Obsidian vault at {}. \
-             You can read files and search the vault to answer questions about their notes. \
-             Be concise and helpful.{}{}",
+             You can read files and search the vault to answer questions about their notes.\n\n\
+             FORMATTING: Your responses go to Telegram. Keep them clean and readable:\n\
+             - Plain text only. No markdown syntax (no **, no `, no #).\n\
+             - Short paragraphs. Break up walls of text.\n\
+             - Simple lists when helpful. Use bullet points sparingly.\n\
+             - No emojis unless the user uses them first.\n\
+             - Be concise. Get to the point.{}{}",
             self.vault_description(),
             memory_context,
             lu_context
@@ -162,6 +167,15 @@ impl Llm {
     fn store_message(&self, user_id: Option<i64>, role: &str, content: &str) {
         if let (Some(memory), Some(uid)) = (&self.memory, user_id) {
             let _ = memory.add_message(uid, role, content);
+        }
+    }
+
+    /// Clear all messages for a user.
+    ///
+    /// Used to start fresh conversations (e.g., `/setup`).
+    pub fn clear_user_memory(&self, user_id: i64) {
+        if let Some(memory) = &self.memory {
+            let _ = memory.clear_user(user_id);
         }
     }
 

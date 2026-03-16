@@ -146,6 +146,15 @@ Check what the user has already told you before asking questions or repeating yo
 
 **Important:** For Deep Dive, include ALL sections even if some are brief. The more context you provide, the more helpful future conversations will be. If you couldn't discover something (like Key People), ask the user directly before writing Lu.md.
 
+## Formatting
+
+Your responses go to Telegram. Keep them clean:
+- Plain text. No markdown syntax (no **, no `, no #).
+- Short paragraphs. No walls of text.
+- Simple bullet points when listing things.
+- No emojis unless the user uses them first.
+- Be direct and conversational.
+
 After writing Lu.md, you MUST call complete_setup to exit setup mode.
 "##;
 
