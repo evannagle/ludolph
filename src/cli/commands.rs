@@ -11,7 +11,7 @@ use walkdir::WalkDir;
 use super::checks::{self, CheckResult};
 use crate::config::{self, Config};
 use crate::ssh;
-use crate::ui::{self, prompt, Spinner, StatusLine};
+use crate::ui::{self, Spinner, StatusLine, prompt};
 
 const REPO: &str = "evannagle/ludolph";
 const LUDOLPH_DIR: &str = ".ludolph";
@@ -405,7 +405,8 @@ pub async fn doctor() -> ExitCode {
 // =============================================================================
 
 /// Uninstall Ludolph from specified targets.
-pub fn uninstall(mac: bool, pi: bool, all: bool) -> Result<()> {
+#[allow(clippy::fn_params_excessive_bools)]
+pub fn uninstall(mac: bool, pi: bool, all: bool, yes: bool) -> Result<()> {
     println!();
     println!("{}", style("Ludolph Uninstall").bold());
     println!();
@@ -441,8 +442,8 @@ pub fn uninstall(mac: bool, pi: bool, all: bool) -> Result<()> {
     println!("    - Tailscale configuration");
     println!();
 
-    // Confirmation
-    if !prompt::confirm("Proceed with uninstall?")? {
+    // Confirmation (skip if --yes flag provided)
+    if !yes && !prompt::confirm("Proceed with uninstall?")? {
         println!();
         StatusLine::skip("Uninstall cancelled").print();
         println!();
@@ -509,7 +510,10 @@ fn uninstall_pi_internal() -> Result<()> {
         return Ok(());
     };
 
-    let spinner = Spinner::new(&format!("Uninstalling from Pi ({}@{})...", pi.user, pi.host));
+    let spinner = Spinner::new(&format!(
+        "Uninstalling from Pi ({}@{})...",
+        pi.user, pi.host
+    ));
 
     // Stop and disable systemd service
     let _ = std::process::Command::new("ssh")

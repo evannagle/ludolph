@@ -7,7 +7,9 @@ mod setup;
 
 use clap::{Parser, Subcommand};
 
-pub use commands::{check, config_cmd, doctor, mcp_restart, mcp_update, mcp_version, pi, uninstall};
+pub use commands::{
+    check, config_cmd, doctor, mcp_restart, mcp_update, mcp_version, pi, uninstall,
+};
 pub use plugin::{
     plugin_check, plugin_create, plugin_disable, plugin_enable, plugin_install, plugin_list,
     plugin_logs, plugin_publish, plugin_remove, plugin_search, plugin_setup, plugin_update,
@@ -65,6 +67,9 @@ pub enum Command {
         /// Uninstall from both Mac and Pi
         #[arg(long)]
         all: bool,
+        /// Skip confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 }
 

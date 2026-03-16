@@ -431,6 +431,39 @@ else
     else
         spinner_stop "err" "Could not connect to $PI_USER@$PI_HOST"
         echo
+
+        # Show available hosts to help user find the right one
+        info "Available hosts:"
+        echo
+
+        # Check Tailscale devices
+        if command -v tailscale &>/dev/null; then
+            TS_DEVICES=$(tailscale status 2>/dev/null | grep -i "linux\|pi\|rasp" | awk '{print "    " $2 " (" $1 ")"}')
+            if [ -n "$TS_DEVICES" ]; then
+                info "  Tailscale (Linux devices):"
+                echo "$TS_DEVICES"
+                echo
+            fi
+        fi
+
+        # Check local mDNS
+        LOCAL_HOSTS=""
+        for host in "pi.local" "raspberrypi.local" "pi-1.local" "raspberry.local"; do
+            if ping -c 1 -W 1 "$host" &>/dev/null 2>&1; then
+                LOCAL_HOSTS="$LOCAL_HOSTS    $host\n"
+            fi
+        done
+        if [ -n "$LOCAL_HOSTS" ]; then
+            info "  Local network (mDNS):"
+            printf "$LOCAL_HOSTS"
+            echo
+        fi
+
+        if [ -z "$TS_DEVICES" ] && [ -z "$LOCAL_HOSTS" ]; then
+            info "  No Pi devices found on Tailscale or local network"
+            echo
+        fi
+
         info "Troubleshooting:"
         info "  1. Verify Pi is on: ping $PI_HOST"
         info "  2. Set up SSH keys: ssh-copy-id $PI_USER@$PI_HOST"
