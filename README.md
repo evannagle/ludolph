@@ -111,11 +111,17 @@ On your Pi:
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up
+sudo systemctl enable tailscaled  # auto-start on boot
 ```
 
 On your Mac:
 ```bash
 brew install tailscale
+```
+
+Then copy your SSH key to the Pi (replace `pi` with your Pi's hostname and `your-username` with the username you set during imaging):
+```bash
+ssh-copy-id your-username@pi
 ```
 
 ### 3. Run the installer on your Mac
