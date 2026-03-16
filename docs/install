@@ -853,7 +853,7 @@ if ! $IS_PI; then
         <key>PATH</key>
         <string>/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin</string>
         <key>PYTHONPATH</key>
-        <string>$LOCAL_DIR:$PYTHON_USER_SITE</string>
+        <string>$LOCAL_DIR:$LOCAL_DIR/mcp:$PYTHON_USER_SITE</string>
         <key>$API_KEY_NAME</key>
         <string>$LLM_API_KEY</string>
     </dict>
