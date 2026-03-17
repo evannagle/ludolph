@@ -6,7 +6,7 @@ pacing, and progress tracking.
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from security import get_vault_path
@@ -43,6 +43,57 @@ def _save_state(conversation_id: str, state: dict) -> None:
     path = _get_state_path(conversation_id)
     state["updated"] = datetime.now(timezone.utc).isoformat()
     path.write_text(json.dumps(state, indent=2))
+
+
+def expire_stale_topics(conversation_id: str, max_age_hours: int = 24) -> int:
+    """
+    Move topics older than max_age_hours to 'stale' status.
+
+    Args:
+        conversation_id: Conversation identifier
+        max_age_hours: Hours after which topics become stale (default 24)
+
+    Returns:
+        Number of topics moved to stale
+    """
+    path = _get_state_path(conversation_id)
+    if not path.exists():
+        return 0
+
+    try:
+        state = json.loads(path.read_text())
+    except Exception:
+        return 0
+
+    updated_str = state.get("updated")
+    if not updated_str:
+        return 0
+
+    try:
+        updated = datetime.fromisoformat(updated_str.replace("Z", "+00:00"))
+    except Exception:
+        return 0
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+
+    if updated >= cutoff:
+        return 0
+
+    topics = state.get("topics", [])
+    if not topics:
+        return 0
+
+    stale = state.get("stale", [])
+    stale.extend(topics)
+
+    state["stale"] = stale
+    state["topics"] = []
+    state["current"] = None
+    state["updated"] = datetime.now(timezone.utc).isoformat()
+
+    path.write_text(json.dumps(state, indent=2))
+
+    return len(topics)
 
 
 def conversation_scope(
