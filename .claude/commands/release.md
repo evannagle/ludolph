@@ -52,9 +52,9 @@ Run Python checks:
 find src/mcp -name "*.py" -exec python3 -m py_compile {} \;
 ```
 
-Test ARM build on Pi:
+Test ARM build on Pi (includes clippy to catch Linux-specific warnings):
 ```bash
-ssh pi "source ~/.cargo/env && cd ~/ludolph && git fetch origin develop && git checkout origin/develop && cargo build --release"
+ssh pi "source ~/.cargo/env && cd ~/ludolph && git fetch origin develop && git checkout origin/develop && cargo clippy --all-features -- -D warnings && cargo test && cargo build --release"
 ssh pi "~/.ludolph/bin/lu --version || ~/ludolph/target/release/lu --version"
 ```
 
