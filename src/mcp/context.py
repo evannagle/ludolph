@@ -120,25 +120,31 @@ def load_philosophy() -> str | None:
 
 def inject_principles(messages: list, user_id: str | None = None) -> list:
     """
-    Inject conversation principles and philosophy into the system message.
+    Inject conversation principles, philosophy, and topics into context.
 
     Includes:
     - Core principles (always)
     - Philosophy file content (if available)
+    - Open topics for user (if user_id provided)
 
     Args:
         messages: Original message list
-        user_id: Optional user ID for loading topics (used in next task)
+        user_id: Optional user ID for loading topics
 
     Returns a new list (does not mutate input).
     """
     # Load philosophy (may be None)
     philosophy = load_philosophy()
 
+    # Load topics if user_id provided
+    topics = load_topics(user_id) if user_id else ""
+
     # Build full context
     context_parts = [CORE_PRINCIPLES.strip()]
     if philosophy:
         context_parts.append(f"\n## Philosophy Context\n\n{philosophy}")
+    if topics:
+        context_parts.append(f"\n## Open Topics\n\n{topics}")
 
     full_context = "\n".join(context_parts)
 
