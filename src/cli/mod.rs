@@ -8,7 +8,7 @@ mod setup;
 use clap::{Parser, Subcommand};
 
 pub use commands::{
-    check, config_cmd, doctor, mcp_restart, mcp_update, mcp_version, pi, uninstall,
+    check, config_cmd, doctor, mcp_restart, mcp_update, mcp_version, pi, uninstall, update,
 };
 pub use plugin::{
     plugin_check, plugin_create, plugin_disable, plugin_enable, plugin_install, plugin_list,
@@ -71,6 +71,8 @@ pub enum Command {
         #[arg(long, short = 'y')]
         yes: bool,
     },
+    /// Update Lu and MCP to latest version
+    Update,
 }
 
 #[derive(Subcommand)]

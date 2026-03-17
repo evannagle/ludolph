@@ -536,3 +536,331 @@ fn uninstall_pi_internal() -> Result<()> {
     StatusLine::ok(format!("Pi uninstalled ({})", pi.host)).print();
     Ok(())
 }
+
+// =============================================================================
+// Update Command
+// =============================================================================
+
+/// Platform-specific binary name for downloads.
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const BINARY_NAME: &str = "lu-x86_64-apple-darwin";
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const BINARY_NAME: &str = "lu-aarch64-apple-darwin";
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const BINARY_NAME: &str = "lu-x86_64-unknown-linux-gnu";
+
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const BINARY_NAME: &str = "lu-aarch64-unknown-linux-gnu";
+
+/// Get the current CLI version from Cargo.toml (compile-time).
+const fn current_cli_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+/// Get Pi's current CLI version via SSH.
+fn get_pi_version(host: &str, user: &str) -> Option<String> {
+    let output = std::process::Command::new("ssh")
+        .args([
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=5",
+            &format!("{user}@{host}"),
+            "~/.ludolph/bin/lu --version 2>/dev/null || echo unknown",
+        ])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        let version_line = String::from_utf8_lossy(&output.stdout);
+        // Parse "lu X.Y.Z" output
+        let version = version_line
+            .trim()
+            .strip_prefix("lu ")
+            .unwrap_or_else(|| version_line.trim());
+        if version == "unknown" || version.is_empty() {
+            None
+        } else {
+            Some(version.to_string())
+        }
+    } else {
+        None
+    }
+}
+
+/// Update Mac binary to latest version.
+fn update_mac_binary(tag: &str) -> Result<bool> {
+    let current = current_cli_version();
+    let latest = tag.trim_start_matches('v');
+
+    if current == latest {
+        return Ok(false);
+    }
+
+    let spinner = Spinner::new("Updating Mac binary...");
+
+    // Download to temp file
+    let temp_path = std::env::temp_dir().join("lu-update-temp");
+    let url = format!(
+        "https://github.com/{REPO}/releases/download/{tag}/{BINARY_NAME}"
+    );
+
+    let status = std::process::Command::new("curl")
+        .args(["-sSL", "-o", temp_path.to_str().unwrap(), &url])
+        .status()?;
+
+    if !status.success() {
+        spinner.finish_error();
+        anyhow::bail!("Failed to download Mac binary");
+    }
+
+    // Check file size
+    let metadata = fs::metadata(&temp_path)?;
+    if metadata.len() == 0 {
+        spinner.finish_error();
+        fs::remove_file(&temp_path)?;
+        anyhow::bail!("Downloaded file is empty");
+    }
+
+    // Make executable
+    std::process::Command::new("chmod")
+        .args(["+x", temp_path.to_str().unwrap()])
+        .status()?;
+
+    // Get current binary path and replace
+    let current_exe = std::env::current_exe()?;
+    fs::rename(&temp_path, &current_exe)?;
+
+    spinner.finish();
+    StatusLine::ok(format!("Mac binary updated ({current} → {latest})")).print();
+
+    Ok(true)
+}
+
+/// Update MCP server to latest version (reuses existing logic).
+fn update_mcp(tag: &str) -> Result<bool> {
+    let mcp_dir = ludolph_dir().join("mcp");
+
+    // Skip if MCP not installed
+    if !mcp_dir.exists() {
+        StatusLine::skip("MCP server not installed").print();
+        return Ok(false);
+    }
+
+    let current_version = fs::read_to_string(mcp_version_file())
+        .map_or_else(|_| "unknown".to_string(), |v| v.trim().to_string());
+
+    let latest_version = tag.trim_start_matches('v');
+
+    if current_version == latest_version {
+        return Ok(false);
+    }
+
+    let spinner = Spinner::new("Updating MCP server...");
+
+    let url = format!(
+        "https://github.com/{REPO}/releases/download/{tag}/ludolph-mcp-{tag}.tar.gz"
+    );
+
+    // Backup current MCP
+    let backup_dir = ludolph_dir().join("mcp.bak");
+    if backup_dir.exists() {
+        fs::remove_dir_all(&backup_dir)?;
+    }
+    fs::rename(&mcp_dir, &backup_dir)?;
+
+    // Download and extract
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "curl -sSL '{}' | tar -xz -C '{}'",
+            url,
+            ludolph_dir().display()
+        ))
+        .status()?;
+
+    if !status.success() {
+        // Restore backup
+        if backup_dir.exists() {
+            fs::rename(&backup_dir, &mcp_dir)?;
+        }
+        spinner.finish_error();
+        anyhow::bail!("Failed to download MCP server");
+    }
+
+    // Remove backup
+    if backup_dir.exists() {
+        fs::remove_dir_all(&backup_dir)?;
+    }
+
+    spinner.finish();
+    StatusLine::ok(format!("MCP server updated ({current_version} → {latest_version})")).print();
+
+    // Restart service
+    mcp_restart_service()?;
+    StatusLine::ok("MCP service restarted").print();
+
+    Ok(true)
+}
+
+/// Update Pi binary via SSH.
+#[cfg(target_os = "macos")]
+fn update_pi_binary(tag: &str, host: &str, user: &str) -> Result<bool> {
+    let latest = tag.trim_start_matches('v');
+
+    // Get current Pi version
+    let Some(current) = get_pi_version(host, user) else {
+        StatusLine::skip("Could not get Pi version").print();
+        return Ok(false);
+    };
+
+    if current == latest {
+        return Ok(false);
+    }
+
+    let spinner = Spinner::new(&format!("Updating Pi ({host})..."));
+
+    // Download binary directly on Pi
+    let download_url = format!(
+        "https://github.com/{REPO}/releases/download/{tag}/lu-aarch64-unknown-linux-gnu"
+    );
+
+    let ssh_cmd = format!(
+        "curl -sSL -o /tmp/lu-new '{download_url}' && \
+         chmod +x /tmp/lu-new && \
+         mv /tmp/lu-new ~/.ludolph/bin/lu && \
+         systemctl --user restart ludolph.service"
+    );
+
+    let status = std::process::Command::new("ssh")
+        .args([
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=10",
+            &format!("{user}@{host}"),
+            &ssh_cmd,
+        ])
+        .status()?;
+
+    if !status.success() {
+        spinner.finish_error();
+        ui::status::hint(&format!(
+            "Pi update failed. Update manually:\n      ssh {user}@{host} 'curl -sSL -o ~/.ludolph/bin/lu \"{download_url}\" && chmod +x ~/.ludolph/bin/lu'"
+        ));
+        return Ok(false);
+    }
+
+    spinner.finish();
+    StatusLine::ok(format!("Pi binary updated ({current} → {latest})")).print();
+    StatusLine::ok("Pi service restarted").print();
+
+    Ok(true)
+}
+
+#[cfg(not(target_os = "macos"))]
+#[allow(clippy::unnecessary_wraps)]
+fn update_pi_binary(_tag: &str, _host: &str, _user: &str) -> Result<bool> {
+    // Pi update only runs from Mac
+    Ok(false)
+}
+
+/// Update Lu and MCP to latest version.
+pub async fn update() -> Result<()> {
+    println!();
+    println!("{}", style("Ludolph Update").bold());
+    println!();
+
+    // Fetch latest release
+    let spinner = Spinner::new("Checking for updates...");
+    let latest_tag = fetch_latest_release_tag()?;
+    spinner.finish();
+
+    let latest_version = latest_tag.trim_start_matches('v');
+    let current_cli = current_cli_version();
+
+    // Get MCP version
+    let current_mcp = fs::read_to_string(mcp_version_file())
+        .map_or_else(|_| "not installed".to_string(), |v| v.trim().to_string());
+
+    // Get Pi info
+    let config = Config::load().ok();
+    let pi_info = config.as_ref().and_then(|c| c.pi.as_ref());
+
+    let (pi_version, pi_reachable) = pi_info.map_or_else(
+        || ("not configured".to_string(), false),
+        |pi| match crate::ssh::test_connection(&pi.host, &pi.user) {
+            Ok(()) => {
+                let v = get_pi_version(&pi.host, &pi.user).unwrap_or_else(|| "unknown".to_string());
+                (v, true)
+            }
+            Err(_) => ("unreachable".to_string(), false),
+        },
+    );
+
+    // Show current state
+    StatusLine::ok(format!("Current: lu v{current_cli}, MCP v{current_mcp}, Pi v{pi_version}")).print();
+    StatusLine::ok(format!("Latest: v{latest_version}")).print();
+    println!();
+
+    // Check what needs updating
+    let cli_needs_update = current_cli != latest_version;
+    let mcp_needs_update = current_mcp != latest_version && current_mcp != "not installed";
+    let pi_needs_update = pi_reachable && pi_version != latest_version && pi_version != "unknown";
+
+    if !cli_needs_update && !mcp_needs_update && !pi_needs_update {
+        StatusLine::ok("Already up to date").print();
+        println!();
+        return Ok(());
+    }
+
+    // Show what will be updated
+    println!("Updates available:");
+    if cli_needs_update {
+        println!("  - Mac binary: {current_cli} → {latest_version}");
+    }
+    if mcp_needs_update {
+        println!("  - MCP server: {current_mcp} → {latest_version}");
+    }
+    if pi_needs_update {
+        if let Some(pi) = pi_info {
+            println!("  - Pi binary ({}): {pi_version} → {latest_version}", pi.host);
+        }
+    }
+    if !pi_reachable && pi_info.is_some() {
+        println!("  - Pi: skipped (unreachable)");
+    }
+    println!();
+
+    // Confirm
+    if !prompt::confirm("Proceed with update?")? {
+        println!();
+        StatusLine::skip("Update cancelled").print();
+        println!();
+        return Ok(());
+    }
+
+    println!();
+
+    // Perform updates
+    let cli_updated = cli_needs_update && update_mac_binary(&latest_tag)?;
+    let mcp_updated = mcp_needs_update && update_mcp(&latest_tag)?;
+    let pi_updated = pi_needs_update
+        && pi_info
+            .map(|pi| update_pi_binary(&latest_tag, &pi.host, &pi.user))
+            .transpose()?
+            .unwrap_or(false);
+
+    let any_updated = cli_updated || mcp_updated || pi_updated;
+
+    println!();
+    if any_updated {
+        ui::status::print_success(&format!("Updated to v{latest_version}"), None);
+    } else {
+        StatusLine::ok("No updates applied").print();
+    }
+
+    Ok(())
+}
