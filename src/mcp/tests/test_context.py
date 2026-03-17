@@ -53,3 +53,23 @@ def test_load_philosophy_handles_read_error(tmp_path):
         result = context.load_philosophy()
 
     assert result is None
+
+
+def test_inject_principles_includes_philosophy(tmp_path):
+    """inject_principles includes philosophy file content."""
+    import context
+
+    lu_dir = tmp_path / ".lu"
+    lu_dir.mkdir()
+    (lu_dir / "philosophy.md").write_text("# My Philosophy\n\nBe kind.")
+
+    messages = [{"role": "user", "content": "hello"}]
+
+    with patch.object(context, "get_vault_path", return_value=tmp_path):
+        result = context.inject_principles(messages)
+
+    system_msg = result[0]
+    assert system_msg["role"] == "system"
+    assert "CONVERSATION PRINCIPLES" in system_msg["content"]
+    assert "My Philosophy" in system_msg["content"]
+    assert "Be kind" in system_msg["content"]

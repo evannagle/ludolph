@@ -84,34 +84,42 @@ def load_philosophy() -> str | None:
 
 def inject_principles(messages: list, user_id: str | None = None) -> list:
     """
-    Inject conversation principles into the message list.
+    Inject conversation principles and philosophy into the system message.
 
-    Finds the system message and appends principles to it. If no system
-    message exists, creates one with just the principles.
+    Includes:
+    - Core principles (always)
+    - Philosophy file content (if available)
 
     Args:
-        messages: List of message dicts with 'role' and 'content'
-        user_id: Optional user ID for future per-user customization
+        messages: Original message list
+        user_id: Optional user ID for loading topics (used in next task)
 
-    Returns:
-        Modified message list with principles injected
+    Returns a new list (does not mutate input).
     """
-    # Find existing system message
-    system_idx = None
-    for i, msg in enumerate(messages):
-        if msg.get("role") == "system":
-            system_idx = i
-            break
+    # Load philosophy (may be None)
+    philosophy = load_philosophy()
 
-    # Create a copy to avoid mutating the original
-    result = [dict(m) for m in messages]
+    # Build full context
+    context_parts = [CORE_PRINCIPLES.strip()]
+    if philosophy:
+        context_parts.append(f"\n## Philosophy Context\n\n{philosophy}")
 
-    if system_idx is not None:
-        # Append principles to existing system message
-        original_content = result[system_idx].get("content", "")
-        result[system_idx]["content"] = f"{original_content}\n\n{CORE_PRINCIPLES}"
-    else:
-        # Create new system message at the beginning
-        result.insert(0, {"role": "system", "content": CORE_PRINCIPLES.strip()})
+    full_context = "\n".join(context_parts)
+
+    result = []
+    found_system = False
+
+    for msg in messages:
+        if msg.get("role") == "system" and not found_system:
+            found_system = True
+            result.append({
+                "role": "system",
+                "content": msg.get("content", "") + "\n\n" + full_context
+            })
+        else:
+            result.append(msg)
+
+    if not found_system:
+        result.insert(0, {"role": "system", "content": full_context})
 
     return result
