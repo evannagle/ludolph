@@ -15,6 +15,7 @@ fn ludolph_dir() -> std::path::PathBuf {
 }
 
 /// Load auth token from config files.
+#[cfg(target_os = "macos")]
 fn load_auth_token() -> Option<String> {
     let ludolph_dir = ludolph_dir();
     let channel_token_file = ludolph_dir.join("channel_token");
@@ -34,6 +35,7 @@ fn load_auth_token() -> Option<String> {
 }
 
 /// Test if a health endpoint is responding.
+#[cfg(target_os = "macos")]
 fn test_health(url: &str, auth_token: &str) -> bool {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(5))
@@ -57,7 +59,7 @@ pub fn mac_mcp_running(ctx: &CheckContext) -> CheckResult {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = ctx;
-        return CheckResult::skip("Mac MCP check only runs on macOS");
+        CheckResult::skip("Mac MCP check only runs on macOS")
     }
 
     #[cfg(target_os = "macos")]

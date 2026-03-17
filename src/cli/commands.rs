@@ -496,6 +496,7 @@ fn uninstall_mac_internal() -> Result<()> {
 }
 
 #[cfg(not(target_os = "macos"))]
+#[allow(clippy::unnecessary_wraps)]
 fn uninstall_mac_internal() -> Result<()> {
     StatusLine::skip("Mac uninstall only runs on macOS").print();
     Ok(())
