@@ -38,6 +38,7 @@ from llm import (
 )
 from process_manager import get_process_manager
 from registry import Registry
+from context import inject_principles
 from security import get_vault_path, init_security, is_git_repo, require_auth
 from tools import call_tool, get_tool_definitions, reload_tools
 
@@ -435,6 +436,12 @@ def chat():
 
     # Transform Anthropic-style messages to OpenAI-style for LiteLLM
     transformed_messages = transform_messages_for_openai(messages)
+
+    # Inject conversation principles into system prompt
+    user_id = data.get("user_id")
+    transformed_messages = inject_principles(
+        transformed_messages, str(user_id) if user_id else None
+    )
 
     try:
         result = llm_chat(model=model, messages=transformed_messages, tools=tools)
