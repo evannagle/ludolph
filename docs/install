@@ -580,6 +580,39 @@ else
         echo
         exit 1
     fi
+
+    # Install Mac binary
+    section "Step 4b: Install Mac CLI"
+
+    MAC_BIN_DIR="$HOME/.local/bin"
+    mkdir -p "$MAC_BIN_DIR"
+
+    spinner_start "Downloading lu for Mac..."
+    MAC_DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/lu-$TARGET"
+    if ! curl -fsSL "$MAC_DOWNLOAD_URL" -o "$MAC_BIN_DIR/lu"; then
+        spinner_stop "err" "Failed to download Mac binary"
+        info "URL: $MAC_DOWNLOAD_URL"
+        exit 1
+    fi
+    chmod +x "$MAC_BIN_DIR/lu"
+    spinner_stop "ok" "Installed lu binary"
+
+    # Add to PATH if needed
+    if ! echo "$PATH" | grep -q "$MAC_BIN_DIR"; then
+        SHELL_RC=""
+        if [ -f "$HOME/.zshrc" ]; then
+            SHELL_RC="$HOME/.zshrc"
+        elif [ -f "$HOME/.bashrc" ]; then
+            SHELL_RC="$HOME/.bashrc"
+        fi
+        if [ -n "$SHELL_RC" ] && ! grep -q "$MAC_BIN_DIR" "$SHELL_RC" 2>/dev/null; then
+            echo "export PATH=\"$MAC_BIN_DIR:\$PATH\"" >> "$SHELL_RC"
+            ok "Added $MAC_BIN_DIR to PATH in $SHELL_RC"
+        fi
+    fi
+
+    MAC_LU_VERSION=$("$MAC_BIN_DIR/lu" --version 2>/dev/null | cut -d' ' -f2 || echo "unknown")
+    ok "Mac CLI version: $MAC_LU_VERSION"
 fi
 
 # =============================================================================
