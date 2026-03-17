@@ -603,9 +603,7 @@ fn update_mac_binary(tag: &str) -> Result<bool> {
 
     // Download to temp file
     let temp_path = std::env::temp_dir().join("lu-update-temp");
-    let url = format!(
-        "https://github.com/{REPO}/releases/download/{tag}/{BINARY_NAME}"
-    );
+    let url = format!("https://github.com/{REPO}/releases/download/{tag}/{BINARY_NAME}");
 
     let status = std::process::Command::new("curl")
         .args(["-sSL", "-o", temp_path.to_str().unwrap(), &url])
@@ -660,9 +658,7 @@ fn update_mcp(tag: &str) -> Result<bool> {
 
     let spinner = Spinner::new("Updating MCP server...");
 
-    let url = format!(
-        "https://github.com/{REPO}/releases/download/{tag}/ludolph-mcp-{tag}.tar.gz"
-    );
+    let url = format!("https://github.com/{REPO}/releases/download/{tag}/ludolph-mcp-{tag}.tar.gz");
 
     // Backup current MCP
     let backup_dir = ludolph_dir().join("mcp.bak");
@@ -696,7 +692,10 @@ fn update_mcp(tag: &str) -> Result<bool> {
     }
 
     spinner.finish();
-    StatusLine::ok(format!("MCP server updated ({current_version} → {latest_version})")).print();
+    StatusLine::ok(format!(
+        "MCP server updated ({current_version} → {latest_version})"
+    ))
+    .print();
 
     // Restart service
     mcp_restart_service()?;
@@ -723,9 +722,8 @@ fn update_pi_binary(tag: &str, host: &str, user: &str) -> Result<bool> {
     let spinner = Spinner::new(&format!("Updating Pi ({host})..."));
 
     // Download binary directly on Pi
-    let download_url = format!(
-        "https://github.com/{REPO}/releases/download/{tag}/lu-aarch64-unknown-linux-gnu"
-    );
+    let download_url =
+        format!("https://github.com/{REPO}/releases/download/{tag}/lu-aarch64-unknown-linux-gnu");
 
     let ssh_cmd = format!(
         "curl -sSL -o /tmp/lu-new '{download_url}' && \
@@ -801,7 +799,10 @@ pub async fn update() -> Result<()> {
     );
 
     // Show current state
-    StatusLine::ok(format!("Current: lu v{current_cli}, MCP v{current_mcp}, Pi v{pi_version}")).print();
+    StatusLine::ok(format!(
+        "Current: lu v{current_cli}, MCP v{current_mcp}, Pi v{pi_version}"
+    ))
+    .print();
     StatusLine::ok(format!("Latest: v{latest_version}")).print();
     println!();
 
@@ -826,7 +827,10 @@ pub async fn update() -> Result<()> {
     }
     if pi_needs_update {
         if let Some(pi) = pi_info {
-            println!("  - Pi binary ({}): {pi_version} → {latest_version}", pi.host);
+            println!(
+                "  - Pi binary ({}): {pi_version} → {latest_version}",
+                pi.host
+            );
         }
     }
     if !pi_reachable && pi_info.is_some() {
