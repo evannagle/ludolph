@@ -405,7 +405,7 @@ pub async fn doctor() -> ExitCode {
 // =============================================================================
 
 /// Uninstall Ludolph from specified targets.
-#[allow(clippy::fn_params_excessive_bools)]
+#[allow(clippy::fn_params_excessive_bools, unused_variables)]
 pub fn uninstall(mac: bool, pi: bool, all: bool, yes: bool) -> Result<()> {
     println!();
     println!("{}", style("Ludolph Uninstall").bold());

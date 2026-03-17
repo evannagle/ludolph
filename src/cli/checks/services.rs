@@ -8,11 +8,14 @@ use std::fs;
 use std::time::Duration;
 
 use super::{CheckContext, CheckResult};
+#[cfg(target_os = "macos")]
 use crate::config;
 
+#[cfg(target_os = "macos")]
 const CHANNEL_PORT: u16 = 8202;
 
 /// Get the ludolph directory (~/.ludolph).
+#[cfg(target_os = "macos")]
 fn ludolph_dir() -> std::path::PathBuf {
     config::config_dir()
 }
