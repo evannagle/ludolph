@@ -1,5 +1,6 @@
 """Tests for context loading module."""
 
+import json
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -73,3 +74,71 @@ def test_inject_principles_includes_philosophy(tmp_path):
     assert "CONVERSATION PRINCIPLES" in system_msg["content"]
     assert "My Philosophy" in system_msg["content"]
     assert "Be kind" in system_msg["content"]
+
+
+def test_load_topics_returns_open_topics(tmp_path):
+    """load_topics returns open topics for a user."""
+    import context
+
+    conv_dir = tmp_path / ".lu" / "conversations"
+    conv_dir.mkdir(parents=True)
+    state_file = conv_dir / "user_123.json"
+    state_file.write_text(json.dumps({
+        "id": "user_123",
+        "topics": ["Project notes", "Recipe question"],
+        "resolved": ["Birthday reminder"],
+        "current": "Project notes"
+    }))
+
+    with patch.object(context, "get_vault_path", return_value=tmp_path):
+        result = context.load_topics("user_123")
+
+    assert result is not None
+    assert "Project notes" in result
+    assert "Recipe question" in result
+    assert "current" in result.lower() or "Current" in result
+
+
+def test_load_topics_returns_empty_for_no_state(tmp_path):
+    """load_topics returns empty string when no state exists."""
+    import context
+
+    with patch.object(context, "get_vault_path", return_value=tmp_path):
+        result = context.load_topics("nonexistent")
+
+    assert result == ""
+
+
+def test_load_topics_returns_empty_for_no_topics(tmp_path):
+    """load_topics returns empty string when topics array is empty."""
+    import context
+
+    conv_dir = tmp_path / ".lu" / "conversations"
+    conv_dir.mkdir(parents=True)
+    state_file = conv_dir / "user_456.json"
+    state_file.write_text(json.dumps({
+        "id": "user_456",
+        "topics": [],
+        "resolved": ["Old topic"],
+        "current": None
+    }))
+
+    with patch.object(context, "get_vault_path", return_value=tmp_path):
+        result = context.load_topics("user_456")
+
+    assert result == ""
+
+
+def test_load_topics_handles_malformed_json(tmp_path):
+    """load_topics returns empty string for malformed JSON."""
+    import context
+
+    conv_dir = tmp_path / ".lu" / "conversations"
+    conv_dir.mkdir(parents=True)
+    state_file = conv_dir / "user_bad.json"
+    state_file.write_text("not valid json {{{")
+
+    with patch.object(context, "get_vault_path", return_value=tmp_path):
+        result = context.load_topics("user_bad")
+
+    assert result == ""

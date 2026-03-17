@@ -4,6 +4,7 @@ This module provides conversation principles and context that gets injected
 into the system prompt before sending requests to the LLM.
 """
 
+import json
 from pathlib import Path
 
 from security import get_vault_path
@@ -57,6 +58,41 @@ Avoid:
 - "Great! Awesome!" empty acknowledgments
 - Forgetting topics that were raised
 """
+
+
+def load_topics(user_id: str) -> str:
+    """
+    Load open topics for a user from conversation state.
+
+    Args:
+        user_id: User identifier (e.g., Telegram user ID)
+
+    Returns:
+        Formatted string of open topics, or empty string if none
+    """
+    vault = get_vault_path()
+    state_file = vault / ".lu" / "conversations" / f"{user_id}.json"
+
+    if not state_file.exists():
+        return ""
+
+    try:
+        state = json.loads(state_file.read_text())
+        topics = state.get("topics", [])
+        current = state.get("current")
+
+        if not topics:
+            return ""
+
+        lines = []
+        if current:
+            lines.append(f"Current focus: {current}")
+        lines.append(f"Open topics: {', '.join(topics)}")
+
+        return "\n".join(lines)
+
+    except Exception:
+        return ""
 
 
 def load_philosophy() -> str | None:
