@@ -413,11 +413,12 @@ pub fn uninstall(mac: bool, pi: bool, all: bool, yes: bool) -> Result<()> {
 
     // Determine what to uninstall
     // If no flags provided, default to mac only on macOS
+    #[cfg(target_os = "macos")]
     let uninstall_mac = mac || all || !pi;
-    let uninstall_pi = pi || all;
-
     #[cfg(not(target_os = "macos"))]
     let uninstall_mac = false;
+
+    let uninstall_pi = pi || all;
 
     if !uninstall_mac && !uninstall_pi {
         println!("  Usage: lu uninstall [--mac] [--pi] [--all]");

@@ -1,7 +1,10 @@
 //! Service-related diagnostic checks.
 
-use std::fs;
 use std::process::Command;
+
+#[cfg(target_os = "macos")]
+use std::fs;
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 
 use super::{CheckContext, CheckResult};
@@ -151,7 +154,7 @@ pub fn pi_service_running(ctx: &CheckContext) -> CheckResult {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
 
