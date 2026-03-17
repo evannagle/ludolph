@@ -110,100 +110,88 @@ Avoid:
 - Forgetting topics that were raised
 ```
 
-### 3. Memory Integration
+### 3. Topic Storage
 
-Location: `src/memory.rs`
+Location: `.lu/conversations/{user_id}.json` in vault
 
-Add topics table to existing SQLite schema:
+Topics stay in vault files (already implemented in `conversation_scope` tool). This keeps storage Mac-side where tools can access it directly.
 
-```sql
-CREATE TABLE IF NOT EXISTS topics (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    topic TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'open',  -- open, resolved, stale
-    created_at TEXT NOT NULL,
-    resolved_at TEXT,
-    UNIQUE(user_id, topic)
-);
-CREATE INDEX IF NOT EXISTS idx_topics_user_status ON topics(user_id, status);
+Architecture note: `memory.rs` (Rust) runs on Pi for local message caching. Topic state lives in vault files accessible to Mac's Python MCP server.
+
+File structure:
+```json
+{
+  "id": "user_123",
+  "created": "2026-03-16T...",
+  "topics": ["Parker project", "Call Mom", "Recipe"],
+  "resolved": ["Parker project"],
+  "current": "Call Mom",
+  "notes": []
+}
 ```
 
-New methods on Memory struct:
-
-```rust
-pub fn add_topics(&self, user_id: i64, topics: &[&str]) -> Result<()>
-pub fn resolve_topic(&self, user_id: i64, topic: &str) -> Result<bool>
-pub fn get_open_topics(&self, user_id: i64) -> Result<Vec<String>>
-pub fn clear_topics(&self, user_id: i64) -> Result<()>
-pub fn expire_stale_topics(&self, user_id: i64, max_age_hours: u32) -> Result<u32>
-```
-
-### 4. conversation_scope Tool Update
+### 4. conversation_scope Tool
 
 Location: `src/mcp/tools/conversation.py`
 
-Change from file-based storage to calling memory via MCP endpoint. Add new MCP endpoints:
+Already implemented with vault file storage. No changes needed to storage mechanism.
 
+Add helper to check for stale topics (>24h):
+```python
+def expire_stale_topics(conversation_id: str, max_age_hours: int = 24) -> int:
+    """Move topics older than max_age_hours to 'stale' status."""
+    ...
 ```
-POST /memory/topics/add     { user_id, topics: [] }
-POST /memory/topics/resolve { user_id, topic }
-GET  /memory/topics/open    { user_id }
-POST /memory/topics/clear   { user_id }
-```
-
-Tool becomes thin wrapper around these endpoints.
 
 ### 5. Context Loading
 
-Location: `src/llm.rs`
+Location: `src/mcp/server.py` (Mac-side, where LLM calls happen)
 
-Update `build_system_prompt()` load order:
+The Mac MCP server builds context before calling LLM. Update to include:
 
-1. Core principles (hardcoded in Rust)
-2. Philosophy file via `load_philosophy_context()`
-3. Open topics via memory
-4. Lu.md via existing `load_lu_context()`
-5. Recent messages via existing memory loading
+1. Core principles (added to system prompt construction)
+2. Philosophy file via `read_file` tool
+3. Open topics via `conversation_scope(action="list")`
+4. Lu.md (existing)
 
-New function:
+New helper in server.py:
 
-```rust
-async fn load_philosophy_context(&self) -> Option<String> {
-    let result = self
-        .execute_tool("read_file", &json!({"path": ".lu/philosophy.md"}))
-        .await;
+```python
+async def load_philosophy_context() -> str | None:
+    """Load .lu/philosophy.md, create with defaults if missing."""
+    result = call_tool("read_file", {"path": ".lu/philosophy.md"})
 
-    if result.contains("not found") {
-        // Create default philosophy file
-        self.execute_tool("write_file", &json!({
+    if "not found" in result.get("content", "").lower():
+        # Create default
+        call_tool("write_file", {
             "path": ".lu/philosophy.md",
             "content": DEFAULT_PHILOSOPHY
-        })).await;
-        Some(DEFAULT_PHILOSOPHY.to_string())
-    } else if result.contains("Error:") {
-        None
-    } else {
-        Some(result)
-    }
-}
+        })
+        return DEFAULT_PHILOSOPHY
+
+    return result.get("content")
 ```
 
 ### 6. Open Topics in Context
 
-When building the system prompt, include open topics:
+Before each LLM call, check for open topics:
 
-```rust
-let open_topics = self.memory.get_open_topics(user_id)?;
-let topics_context = if open_topics.is_empty() {
-    String::new()
-} else {
-    format!(
-        "\n\n## Open Topics\nThese topics were raised but not yet resolved:\n{}",
-        open_topics.iter().map(|t| format!("- {}", t)).collect::<Vec<_>>().join("\n")
+```python
+def get_topics_context(user_id: str) -> str:
+    """Get open topics for inclusion in system prompt."""
+    result = conversation_scope(
+        conversation_id=user_id,
+        action="list"
     )
-};
+
+    # Parse result and format for prompt
+    if "No topics" in result:
+        return ""
+
+    return f"\n\n## Open Topics\n{result}"
 ```
+
+This gets prepended to the user's context so Lu always knows what's unresolved.
 
 ## Edge Cases
 
@@ -219,10 +207,10 @@ let topics_context = if open_topics.is_empty() {
 
 | File | Change |
 |------|--------|
-| `src/llm.rs` | Add principles to prompt, load philosophy file, include open topics |
-| `src/memory.rs` | Add topics table and methods |
-| `src/mcp/tools/conversation.py` | Switch from file-based to memory-based |
-| `src/mcp/server.py` | Add /memory/topics/* endpoints |
+| `src/mcp/server.py` | Add philosophy loading, topics context, update chat endpoint |
+| `src/mcp/tools/conversation.py` | Add stale topic expiration |
+| `src/mcp/llm.py` | Update system prompt with core principles |
+| `src/setup.rs` | Update setup wizard to use new principles |
 
 ## Testing
 
