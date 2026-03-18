@@ -3,7 +3,7 @@
 Aggregates tools from all domain-specific modules and provides
 a unified interface for tool definitions and execution.
 
-Custom tools in ~/.ludolph/custom_tools/ are auto-discovered and loaded.
+Skills in ~/.ludolph/skills/ are auto-discovered and loaded.
 """
 
 import importlib.util
@@ -77,9 +77,9 @@ _CORE_HANDLERS = {
 }
 
 
-def _load_custom_tools() -> tuple[list[dict], dict[str, Any]]:
+def _load_skills() -> tuple[list[dict], dict[str, Any]]:
     """
-    Load user/AI-created tools from ~/.ludolph/custom_tools/.
+    Load user-created skills from ~/.ludolph/skills/.
 
     Each .py file can export:
     - TOOLS: list of tool definitions (dicts)
@@ -88,18 +88,24 @@ def _load_custom_tools() -> tuple[list[dict], dict[str, Any]]:
     Returns:
         Tuple of (tools_list, handlers_dict)
     """
-    custom_dir = Path.home() / ".ludolph" / "custom_tools"
+    skills_dir = Path.home() / ".ludolph" / "skills"
+    legacy_dir = Path.home() / ".ludolph" / "custom_tools"
     tools: list[dict] = []
     handlers: dict[str, Any] = {}
 
-    if not custom_dir.exists():
+    # Migration: rename custom_tools/ to skills/
+    if legacy_dir.exists() and not skills_dir.exists():
+        legacy_dir.rename(skills_dir)
+        print("Migrated custom_tools/ to skills/")
+
+    if not skills_dir.exists():
         return tools, handlers
 
-    for py_file in sorted(custom_dir.glob("*.py")):
+    for py_file in sorted(skills_dir.glob("*.py")):
         if py_file.name.startswith("_"):
             continue
 
-        module_name = f"ludolph_custom_{py_file.stem}"
+        module_name = f"ludolph_skill_{py_file.stem}"
         try:
             spec = importlib.util.spec_from_file_location(module_name, py_file)
             if spec is None or spec.loader is None:
@@ -115,30 +121,30 @@ def _load_custom_tools() -> tuple[list[dict], dict[str, Any]]:
                 handlers.update(module.HANDLERS)
 
         except Exception as e:
-            # Log warning but don't crash - custom tools shouldn't break core
-            print(f"Warning: Failed to load custom tool {py_file.name}: {e}")
+            # Log warning but don't crash - skills shouldn't break core
+            print(f"Warning: Failed to load skill {py_file.name}: {e}")
 
     return tools, handlers
 
 
-# Load custom tools and combine with core
-_custom_tools, _custom_handlers = _load_custom_tools()
-TOOLS = list(_CORE_TOOLS) + _custom_tools
-HANDLERS = {**_CORE_HANDLERS, **_custom_handlers}
+# Load skills and combine with core
+_skills, _skill_handlers = _load_skills()
+TOOLS = list(_CORE_TOOLS) + _skills
+HANDLERS = {**_CORE_HANDLERS, **_skill_handlers}
 
 
 def reload_tools() -> None:
-    """Reload custom tools without restarting the server.
+    """Reload skills without restarting the server.
 
-    Called by SIGHUP handler to hot-reload custom tools.
+    Called by SIGHUP handler to hot-reload skills.
     """
     global TOOLS, HANDLERS
 
-    _custom_tools, _custom_handlers = _load_custom_tools()
-    TOOLS = list(_CORE_TOOLS) + _custom_tools
-    HANDLERS = {**_CORE_HANDLERS, **_custom_handlers}
+    _skills, _skill_handlers = _load_skills()
+    TOOLS = list(_CORE_TOOLS) + _skills
+    HANDLERS = {**_CORE_HANDLERS, **_skill_handlers}
 
-    print(f"Reloaded tools: {len(TOOLS)} total ({len(_custom_tools)} custom)")
+    print(f"Reloaded tools: {len(TOOLS)} total ({len(_skills)} skills)")
 
 
 def get_tool_definitions() -> list[dict]:

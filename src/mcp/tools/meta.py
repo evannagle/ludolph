@@ -1,7 +1,7 @@
 """Meta-tools for dynamic tool creation and management.
 
-Allows Lu to create, list, and delete custom tools at runtime.
-Custom tools are stored in ~/.ludolph/custom_tools/ and auto-loaded.
+Allows Lu to create, list, and delete skills at runtime.
+Skills are stored in ~/.ludolph/skills/ and auto-loaded.
 """
 
 import os
@@ -9,8 +9,8 @@ import re
 import signal
 from pathlib import Path
 
-# Custom tools directory
-CUSTOM_TOOLS_DIR = Path.home() / ".ludolph" / "custom_tools"
+# Skills directory
+SKILLS_DIR = Path.home() / ".ludolph" / "skills"
 
 # Forbidden patterns in tool code (security)
 FORBIDDEN_PATTERNS = [
@@ -27,22 +27,22 @@ FORBIDDEN_PATTERNS = [
 
 TOOLS = [
     {
-        "name": "list_custom_tools",
-        "description": "List all custom tools in ~/.ludolph/custom_tools/",
+        "name": "list_skills",
+        "description": "List all skills in ~/.ludolph/skills/",
         "input_schema": {
             "type": "object",
             "properties": {},
         },
     },
     {
-        "name": "create_tool",
-        "description": "Create a new custom tool. Code must define TOOLS list (each with 'name', 'description', 'input_schema' in snake_case) and HANDLERS dict. IMPORTANT: Use 'input_schema' NOT 'parameters' or 'inputSchema'. Subprocess/eval/exec forbidden.",
+        "name": "create_skill",
+        "description": "Create a new skill. Code must define TOOLS list (each with 'name', 'description', 'input_schema' in snake_case) and HANDLERS dict. IMPORTANT: Use 'input_schema' NOT 'parameters' or 'inputSchema'. Subprocess/eval/exec forbidden.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "Tool name (alphanumeric and underscores only, no .py extension)",
+                    "description": "Skill name (alphanumeric and underscores only, no .py extension)",
                 },
                 "code": {
                     "type": "string",
@@ -53,14 +53,14 @@ TOOLS = [
         },
     },
     {
-        "name": "delete_tool",
-        "description": "Delete a custom tool file",
+        "name": "delete_skill",
+        "description": "Delete a skill file",
         "input_schema": {
             "type": "object",
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "Tool name to delete (without .py extension)",
+                    "description": "Skill name to delete (without .py extension)",
                 },
             },
             "required": ["name"],
@@ -68,7 +68,7 @@ TOOLS = [
     },
     {
         "name": "reload_tools",
-        "description": "Reload all tools (including newly created custom tools). Sends SIGHUP to the server.",
+        "description": "Reload all tools (including newly created skills). Sends SIGHUP to the server.",
         "input_schema": {
             "type": "object",
             "properties": {},
@@ -85,25 +85,25 @@ TOOLS = [
 ]
 
 
-def _ensure_custom_dir() -> Path:
-    """Ensure the custom tools directory exists."""
-    CUSTOM_TOOLS_DIR.mkdir(parents=True, exist_ok=True)
-    return CUSTOM_TOOLS_DIR
+def _ensure_skills_dir() -> Path:
+    """Ensure the skills directory exists."""
+    SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    return SKILLS_DIR
 
 
-def _validate_tool_name(name: str) -> str | None:
-    """Validate tool name. Returns error message or None if valid."""
+def _validate_skill_name(name: str) -> str | None:
+    """Validate skill name. Returns error message or None if valid."""
     if not name:
-        return "Tool name is required"
+        return "Skill name is required"
     if not re.match(r"^[a-zA-Z][a-zA-Z0-9_]*$", name):
-        return "Tool name must start with a letter and contain only alphanumeric characters and underscores"
+        return "Skill name must start with a letter and contain only alphanumeric characters and underscores"
     if name.startswith("_"):
-        return "Tool name cannot start with underscore"
+        return "Skill name cannot start with underscore"
     return None
 
 
-def _validate_tool_code(code: str) -> str | None:
-    """Validate tool code for security and correctness. Returns error message or None if valid."""
+def _validate_skill_code(code: str) -> str | None:
+    """Validate skill code for security and correctness. Returns error message or None if valid."""
     if not code:
         return "Code is required"
 
@@ -164,19 +164,19 @@ def _validate_tool_code(code: str) -> str | None:
 
     # Try to compile (syntax check)
     try:
-        compile(code, "<custom_tool>", "exec")
+        compile(code, "<skill>", "exec")
     except SyntaxError as e:
         return f"Syntax error: {e}"
 
     return None
 
 
-def _list_custom_tools(args: dict) -> dict:
-    """List all custom tools."""
-    custom_dir = _ensure_custom_dir()
+def _list_skills(args: dict) -> dict:
+    """List all skills."""
+    skills_dir = _ensure_skills_dir()
 
-    tools = []
-    for py_file in sorted(custom_dir.glob("*.py")):
+    skills = []
+    for py_file in sorted(skills_dir.glob("*.py")):
         if py_file.name.startswith("_"):
             continue
 
@@ -185,72 +185,75 @@ def _list_custom_tools(args: dict) -> dict:
             content = py_file.read_text(encoding="utf-8")
             # Count tools defined
             tool_count = content.count('"name":') + content.count("'name':")
-            tools.append(f"- {py_file.stem} ({tool_count} tool(s))")
+            skills.append(f"- {py_file.stem} ({tool_count} tool(s))")
         except Exception:
-            tools.append(f"- {py_file.stem} (error reading)")
+            skills.append(f"- {py_file.stem} (error reading)")
 
-    if not tools:
+    if not skills:
         return {
-            "content": f"No custom tools found in {custom_dir}\n\nUse create_tool to add one.",
+            "content": f"No skills found in {skills_dir}\n\nUse create_skill to add one.",
             "error": None,
         }
 
     return {
-        "content": f"Custom tools in {custom_dir}:\n\n" + "\n".join(tools),
+        "content": f"Skills in {skills_dir}:\n\n" + "\n".join(skills),
         "error": None,
     }
 
 
-def _create_tool(args: dict) -> dict:
-    """Create a new custom tool."""
+def _create_skill(args: dict) -> dict:
+    """Create a new skill."""
     name = args.get("name", "").strip()
     code = args.get("code", "")
 
     # Validate name
-    name_error = _validate_tool_name(name)
+    name_error = _validate_skill_name(name)
     if name_error:
         return {"content": "", "error": name_error}
 
     # Validate code
-    code_error = _validate_tool_code(code)
+    code_error = _validate_skill_code(code)
     if code_error:
         return {"content": "", "error": code_error}
 
-    custom_dir = _ensure_custom_dir()
-    file_path = custom_dir / f"{name}.py"
+    skills_dir = _ensure_skills_dir()
+    file_path = skills_dir / f"{name}.py"
 
     # Check if exists
     if file_path.exists():
-        return {"content": "", "error": f"Tool '{name}' already exists. Delete it first to replace."}
+        return {
+            "content": "",
+            "error": f"Skill '{name}' already exists. Delete it first to replace.",
+        }
 
     # Write the file
     file_path.write_text(code, encoding="utf-8")
 
     return {
-        "content": f"Created custom tool: {file_path}\n\nUse reload_tools to load it.",
+        "content": f"Created skill: {file_path}\n\nUse reload_tools to load it.",
         "error": None,
     }
 
 
-def _delete_tool(args: dict) -> dict:
-    """Delete a custom tool."""
+def _delete_skill(args: dict) -> dict:
+    """Delete a skill."""
     name = args.get("name", "").strip()
 
     # Validate name
-    name_error = _validate_tool_name(name)
+    name_error = _validate_skill_name(name)
     if name_error:
         return {"content": "", "error": name_error}
 
-    custom_dir = _ensure_custom_dir()
-    file_path = custom_dir / f"{name}.py"
+    skills_dir = _ensure_skills_dir()
+    file_path = skills_dir / f"{name}.py"
 
     if not file_path.exists():
-        return {"content": "", "error": f"Tool '{name}' not found"}
+        return {"content": "", "error": f"Skill '{name}' not found"}
 
     file_path.unlink()
 
     return {
-        "content": f"Deleted custom tool: {name}\n\nUse reload_tools to apply changes.",
+        "content": f"Deleted skill: {name}\n\nUse reload_tools to apply changes.",
         "error": None,
     }
 
@@ -280,9 +283,9 @@ def _complete_setup(args: dict) -> dict:
 
 
 HANDLERS = {
-    "list_custom_tools": _list_custom_tools,
-    "create_tool": _create_tool,
-    "delete_tool": _delete_tool,
+    "list_skills": _list_skills,
+    "create_skill": _create_skill,
+    "delete_skill": _delete_skill,
     "reload_tools": _reload_tools,
     "complete_setup": _complete_setup,
 }

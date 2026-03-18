@@ -818,8 +818,8 @@ if ! $IS_PI; then
         exit 1
     fi
 
-    # Create custom_tools directory (preserved across updates)
-    mkdir -p "$LOCAL_DIR/custom_tools"
+    # Create skills directory (preserved across updates)
+    mkdir -p "$LOCAL_DIR/skills"
 
     spinner_stop "ok" "Vault server downloaded"
 
