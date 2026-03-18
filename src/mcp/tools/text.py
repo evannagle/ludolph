@@ -52,9 +52,7 @@ TOOLS = [
         "description": "Extract blockquotes from markdown files",
         "input_schema": {
             "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "Path to file or directory"}
-            },
+            "properties": {"path": {"type": "string", "description": "Path to file or directory"}},
             "required": ["path"],
         },
     },

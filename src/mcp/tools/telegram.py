@@ -111,12 +111,14 @@ def _log_to_vault(role: str, content: str) -> None:
 def _add_to_history(role: str, content: str, message_id: int | None = None) -> None:
     """Add a message to conversation history."""
     history = _load_history()
-    history.append({
-        "role": role,
-        "content": content,
-        "message_id": message_id,
-        "timestamp": datetime.now().isoformat(),
-    })
+    history.append(
+        {
+            "role": role,
+            "content": content,
+            "message_id": message_id,
+            "timestamp": datetime.now().isoformat(),
+        }
+    )
     _save_history(history)
 
     # Also log to vault

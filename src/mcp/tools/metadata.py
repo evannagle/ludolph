@@ -26,9 +26,7 @@ TOOLS = [
         "description": "Extract YAML frontmatter from a markdown file",
         "input_schema": {
             "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "Path to the markdown file"}
-            },
+            "properties": {"path": {"type": "string", "description": "Path to the markdown file"}},
             "required": ["path"],
         },
     },
@@ -161,7 +159,7 @@ def serialize_frontmatter(frontmatter: dict) -> str:
                     lines.append(f"  - {item}")
         elif isinstance(value, str):
             # Quote if contains special characters
-            if any(c in value for c in ':{}[]#&*!|>\'"%@`'):
+            if any(c in value for c in ":{}[]#&*!|>'\"%@`"):
                 lines.append(f'{key}: "{value}"')
             else:
                 lines.append(f"{key}: {value}")

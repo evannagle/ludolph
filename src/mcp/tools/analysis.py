@@ -54,9 +54,7 @@ TOOLS = [
         "description": "Extract footnote definitions and references from a markdown file",
         "input_schema": {
             "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "Path to the markdown file"}
-            },
+            "properties": {"path": {"type": "string", "description": "Path to the markdown file"}},
             "required": ["path"],
         },
     },
@@ -65,9 +63,7 @@ TOOLS = [
         "description": "Extract embedded content references (![[file]]) from a markdown file",
         "input_schema": {
             "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "Path to the markdown file"}
-            },
+            "properties": {"path": {"type": "string", "description": "Path to the markdown file"}},
             "required": ["path"],
         },
     },

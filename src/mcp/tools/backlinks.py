@@ -61,9 +61,7 @@ def _get_backlinks(args: dict) -> dict:
 
     # Build pattern to match wikilinks to this file
     # Matches [[target]] or [[target|alias]]
-    pattern = re.compile(
-        rf"\[\[{re.escape(target_name)}(?:\|[^\]]+)?\]\]", re.IGNORECASE
-    )
+    pattern = re.compile(rf"\[\[{re.escape(target_name)}(?:\|[^\]]+)?\]\]", re.IGNORECASE)
 
     vault = get_vault_path()
     results = []

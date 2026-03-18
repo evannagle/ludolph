@@ -31,12 +31,16 @@ def app_client_with_philosophy(tmp_path):
     # User conversation state with topics
     conv_dir = lu_dir / "conversations"
     conv_dir.mkdir()
-    (conv_dir / "456.json").write_text(json.dumps({
-        "id": "456",
-        "topics": ["Build feature", "Fix bug"],
-        "current": "Build feature",
-        "updated": "2026-03-16T12:00:00Z"
-    }))
+    (conv_dir / "456.json").write_text(
+        json.dumps(
+            {
+                "id": "456",
+                "topics": ["Build feature", "Fix bug"],
+                "current": "Build feature",
+                "updated": "2026-03-16T12:00:00Z",
+            }
+        )
+    )
 
     # Configure environment
     os.environ["VAULT_PATH"] = str(tmp_path)
@@ -69,8 +73,10 @@ def test_full_philosophy_context_flow(app_client_with_philosophy):
 
     client, tmp_path = app_client_with_philosophy
 
-    with patch("server.llm_chat") as mock_llm, \
-         patch.object(context, "get_vault_path", return_value=tmp_path):
+    with (
+        patch("server.llm_chat") as mock_llm,
+        patch.object(context, "get_vault_path", return_value=tmp_path),
+    ):
         mock_llm.return_value = {"content": "Got it!", "tool_calls": None, "usage": {}}
 
         response = client.post(
@@ -78,11 +84,11 @@ def test_full_philosophy_context_flow(app_client_with_philosophy):
             json={
                 "messages": [
                     {"role": "system", "content": "You are Lu."},
-                    {"role": "user", "content": "What's on my list?"}
+                    {"role": "user", "content": "What's on my list?"},
                 ],
-                "user_id": 456
+                "user_id": 456,
             },
-            headers={"Authorization": "Bearer test-token"}
+            headers={"Authorization": "Bearer test-token"},
         )
 
     # Verify request succeeded
@@ -96,10 +102,7 @@ def test_full_philosophy_context_flow(app_client_with_philosophy):
     messages = call_args.kwargs.get("messages", call_args[1].get("messages", []))
 
     # Find system message
-    system_msg = next(
-        (m for m in messages if m.get("role") == "system"),
-        None
-    )
+    system_msg = next((m for m in messages if m.get("role") == "system"), None)
     assert system_msg is not None, "System message should exist"
 
     content = system_msg["content"]

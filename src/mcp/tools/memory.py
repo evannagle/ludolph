@@ -306,7 +306,8 @@ def _list_conversation_dates(args: dict) -> dict:
         return {"content": "No conversation history found", "error": None}
 
     return {
-        "content": f"Conversation history available for {len(dates)} date(s):\n" + "\n".join(f"- {d}" for d in dates),
+        "content": f"Conversation history available for {len(dates)} date(s):\n"
+        + "\n".join(f"- {d}" for d in dates),
         "error": None,
     }
 

@@ -177,10 +177,12 @@ def conversation_scope(
     elif action == "note":
         if not note:
             return "Error: 'note' required for note action"
-        state["notes"].append({
-            "time": datetime.now(timezone.utc).isoformat(),
-            "note": note,
-        })
+        state["notes"].append(
+            {
+                "time": datetime.now(timezone.utc).isoformat(),
+                "note": note,
+            }
+        )
         _save_state(conversation_id, state)
         return f"Note added. Total notes: {len(state['notes'])}"
 

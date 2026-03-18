@@ -40,10 +40,10 @@ def test_chat_includes_conversation_principles(client):
             json={
                 "messages": [
                     {"role": "system", "content": "You are Lu."},
-                    {"role": "user", "content": "hello"}
+                    {"role": "user", "content": "hello"},
                 ]
             },
-            headers={"Authorization": "Bearer test-token"}
+            headers={"Authorization": "Bearer test-token"},
         )
 
         assert response.status_code == 200
@@ -66,12 +66,8 @@ def test_chat_creates_system_message_if_none_exists(client):
 
         response = client.post(
             "/chat",
-            json={
-                "messages": [
-                    {"role": "user", "content": "hello"}
-                ]
-            },
-            headers={"Authorization": "Bearer test-token"}
+            json={"messages": [{"role": "user", "content": "hello"}]},
+            headers={"Authorization": "Bearer test-token"},
         )
 
         assert response.status_code == 200
@@ -94,10 +90,10 @@ def test_chat_preserves_original_system_content(client):
             json={
                 "messages": [
                     {"role": "system", "content": "You are Lu, a helpful assistant."},
-                    {"role": "user", "content": "hello"}
+                    {"role": "user", "content": "hello"},
                 ]
             },
-            headers={"Authorization": "Bearer test-token"}
+            headers={"Authorization": "Bearer test-token"},
         )
 
         assert response.status_code == 200
@@ -137,23 +133,22 @@ def test_chat_includes_open_topics(app_client):
     conv_dir = tmp_path / ".lu" / "conversations"
     conv_dir.mkdir(parents=True)
     state_file = conv_dir / "123.json"
-    state_file.write_text(json.dumps({
-        "id": "123",
-        "topics": ["Work project", "Dinner plans"],
-        "current": "Work project"
-    }))
+    state_file.write_text(
+        json.dumps(
+            {"id": "123", "topics": ["Work project", "Dinner plans"], "current": "Work project"}
+        )
+    )
 
-    with patch("server.llm_chat") as mock_llm, \
-         patch.object(context, "get_vault_path", return_value=tmp_path):
+    with (
+        patch("server.llm_chat") as mock_llm,
+        patch.object(context, "get_vault_path", return_value=tmp_path),
+    ):
         mock_llm.return_value = {"content": "hi", "tool_calls": None, "usage": {}}
 
         response = client.post(
             "/chat",
-            json={
-                "messages": [{"role": "user", "content": "hello"}],
-                "user_id": 123
-            },
-            headers={"Authorization": "Bearer test-token"}
+            json={"messages": [{"role": "user", "content": "hello"}], "user_id": 123},
+            headers={"Authorization": "Bearer test-token"},
         )
 
         assert response.status_code == 200

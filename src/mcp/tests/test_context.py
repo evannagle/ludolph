@@ -83,12 +83,16 @@ def test_load_topics_returns_open_topics(tmp_path):
     conv_dir = tmp_path / ".lu" / "conversations"
     conv_dir.mkdir(parents=True)
     state_file = conv_dir / "user_123.json"
-    state_file.write_text(json.dumps({
-        "id": "user_123",
-        "topics": ["Project notes", "Recipe question"],
-        "resolved": ["Birthday reminder"],
-        "current": "Project notes"
-    }))
+    state_file.write_text(
+        json.dumps(
+            {
+                "id": "user_123",
+                "topics": ["Project notes", "Recipe question"],
+                "resolved": ["Birthday reminder"],
+                "current": "Project notes",
+            }
+        )
+    )
 
     with patch.object(context, "get_vault_path", return_value=tmp_path):
         result = context.load_topics("user_123")
@@ -116,12 +120,9 @@ def test_load_topics_returns_empty_for_no_topics(tmp_path):
     conv_dir = tmp_path / ".lu" / "conversations"
     conv_dir.mkdir(parents=True)
     state_file = conv_dir / "user_456.json"
-    state_file.write_text(json.dumps({
-        "id": "user_456",
-        "topics": [],
-        "resolved": ["Old topic"],
-        "current": None
-    }))
+    state_file.write_text(
+        json.dumps({"id": "user_456", "topics": [], "resolved": ["Old topic"], "current": None})
+    )
 
     with patch.object(context, "get_vault_path", return_value=tmp_path):
         result = context.load_topics("user_456")

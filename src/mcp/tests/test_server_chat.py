@@ -30,20 +30,26 @@ def client():
 
 def test_chat_requires_auth(client):
     """Chat endpoint requires authentication."""
-    response = client.post("/chat", json={
-        "model": "claude-sonnet-4",
-        "messages": [{"role": "user", "content": "Hi"}],
-    })
+    response = client.post(
+        "/chat",
+        json={
+            "model": "claude-sonnet-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+        },
+    )
     assert response.status_code == 401
 
 
 def test_chat_returns_response(client):
     """Chat endpoint returns LLM response."""
-    with patch("mcp.server.llm_chat", return_value={
-        "content": "Hello!",
-        "tool_calls": None,
-        "usage": {"prompt_tokens": 10, "completion_tokens": 5},
-    }):
+    with patch(
+        "mcp.server.llm_chat",
+        return_value={
+            "content": "Hello!",
+            "tool_calls": None,
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        },
+    ):
         response = client.post(
             "/chat",
             json={
@@ -167,10 +173,15 @@ def test_chat_rejects_missing_messages(client):
 
 def test_chat_stream_returns_sse(client):
     """Chat stream returns Server-Sent Events."""
-    with patch("mcp.server.llm_chat_stream", return_value=iter([
-        {"content": "Hello", "tool_calls": None},
-        {"content": " world", "tool_calls": None},
-    ])):
+    with patch(
+        "mcp.server.llm_chat_stream",
+        return_value=iter(
+            [
+                {"content": "Hello", "tool_calls": None},
+                {"content": " world", "tool_calls": None},
+            ]
+        ),
+    ):
         response = client.post(
             "/chat/stream",
             json={"model": "claude-sonnet-4", "messages": [{"role": "user", "content": "Hi"}]},

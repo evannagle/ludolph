@@ -104,7 +104,10 @@ def _patch_file(args: dict) -> dict:
                 content += "\n"
             content += f"\n## {heading}\n\n{new_section_content}\n"
             path.write_text(content, encoding="utf-8")
-            return {"content": f"Created new section '{heading}' in {args.get('path')}", "error": None}
+            return {
+                "content": f"Created new section '{heading}' in {args.get('path')}",
+                "error": None,
+            }
         else:
             return {"content": "", "error": f"Heading not found: {heading}"}
 

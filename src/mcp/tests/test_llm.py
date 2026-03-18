@@ -61,11 +61,17 @@ def test_chat_raises_on_auth_error():
 
     from llm import LlmAuthError, chat
 
-    with patch("llm.completion", side_effect=litellm.AuthenticationError(
-        message="Invalid API key",
-        llm_provider="anthropic",
-        model="claude-sonnet-4",
-    )), pytest.raises(LlmAuthError):
+    with (
+        patch(
+            "llm.completion",
+            side_effect=litellm.AuthenticationError(
+                message="Invalid API key",
+                llm_provider="anthropic",
+                model="claude-sonnet-4",
+            ),
+        ),
+        pytest.raises(LlmAuthError),
+    ):
         chat(model="claude-sonnet-4", messages=[{"role": "user", "content": "Hi"}])
 
 
@@ -75,11 +81,17 @@ def test_chat_raises_on_budget_exceeded():
 
     from llm import LlmBudgetError, chat
 
-    with patch("llm.completion", side_effect=litellm.BudgetExceededError(
-        message="Budget exceeded",
-        current_cost=100.0,
-        max_budget=50.0,
-    )), pytest.raises(LlmBudgetError):
+    with (
+        patch(
+            "llm.completion",
+            side_effect=litellm.BudgetExceededError(
+                message="Budget exceeded",
+                current_cost=100.0,
+                max_budget=50.0,
+            ),
+        ),
+        pytest.raises(LlmBudgetError),
+    ):
         chat(model="claude-sonnet-4", messages=[{"role": "user", "content": "Hi"}])
 
 
@@ -89,11 +101,17 @@ def test_chat_raises_on_rate_limit():
 
     from llm import LlmRateLimitError, chat
 
-    with patch("llm.completion", side_effect=litellm.RateLimitError(
-        message="Rate limit exceeded",
-        llm_provider="anthropic",
-        model="claude-sonnet-4",
-    )), pytest.raises(LlmRateLimitError):
+    with (
+        patch(
+            "llm.completion",
+            side_effect=litellm.RateLimitError(
+                message="Rate limit exceeded",
+                llm_provider="anthropic",
+                model="claude-sonnet-4",
+            ),
+        ),
+        pytest.raises(LlmRateLimitError),
+    ):
         chat(model="claude-sonnet-4", messages=[{"role": "user", "content": "Hi"}])
 
 
@@ -103,12 +121,18 @@ def test_chat_raises_on_api_error():
 
     from llm import LlmApiError, chat
 
-    with patch("llm.completion", side_effect=litellm.APIError(
-        message="API error",
-        llm_provider="anthropic",
-        model="claude-sonnet-4",
-        status_code=500,
-    )), pytest.raises(LlmApiError):
+    with (
+        patch(
+            "llm.completion",
+            side_effect=litellm.APIError(
+                message="API error",
+                llm_provider="anthropic",
+                model="claude-sonnet-4",
+                status_code=500,
+            ),
+        ),
+        pytest.raises(LlmApiError),
+    ):
         chat(model="claude-sonnet-4", messages=[{"role": "user", "content": "Hi"}])
 
 
@@ -127,10 +151,12 @@ def test_chat_stream_yields_chunks():
     mock_chunk2.choices[0].delta.tool_calls = None
 
     with patch("llm.completion", return_value=iter([mock_chunk1, mock_chunk2])):
-        chunks = list(chat_stream(
-            model="claude-sonnet-4",
-            messages=[{"role": "user", "content": "Hi"}],
-        ))
+        chunks = list(
+            chat_stream(
+                model="claude-sonnet-4",
+                messages=[{"role": "user", "content": "Hi"}],
+            )
+        )
 
     assert len(chunks) == 2
     assert chunks[0]["content"] == "Hello"

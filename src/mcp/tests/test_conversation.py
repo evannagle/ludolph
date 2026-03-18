@@ -21,13 +21,17 @@ def test_expire_stale_topics_moves_old_topics(tmp_path):
 
     old_time = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
     state_file = conv_dir / "user_123.json"
-    state_file.write_text(json.dumps({
-        "id": "user_123",
-        "updated": old_time,
-        "topics": ["Old topic"],
-        "resolved": [],
-        "current": "Old topic"
-    }))
+    state_file.write_text(
+        json.dumps(
+            {
+                "id": "user_123",
+                "updated": old_time,
+                "topics": ["Old topic"],
+                "resolved": [],
+                "current": "Old topic",
+            }
+        )
+    )
 
     with patch.object(conversation, "get_vault_path", return_value=tmp_path):
         count = conversation.expire_stale_topics("user_123", max_age_hours=24)
@@ -48,13 +52,17 @@ def test_expire_stale_topics_keeps_recent_topics(tmp_path):
 
     recent_time = datetime.now(timezone.utc).isoformat()
     state_file = conv_dir / "user_123.json"
-    state_file.write_text(json.dumps({
-        "id": "user_123",
-        "updated": recent_time,
-        "topics": ["Recent topic"],
-        "resolved": [],
-        "current": "Recent topic"
-    }))
+    state_file.write_text(
+        json.dumps(
+            {
+                "id": "user_123",
+                "updated": recent_time,
+                "topics": ["Recent topic"],
+                "resolved": [],
+                "current": "Recent topic",
+            }
+        )
+    )
 
     with patch.object(conversation, "get_vault_path", return_value=tmp_path):
         count = conversation.expire_stale_topics("user_123", max_age_hours=24)
