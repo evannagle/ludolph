@@ -62,6 +62,26 @@ impl Default for UserConversation {
 /// the lock across await points in some operations.
 type ConversationState = Arc<AsyncMutex<HashMap<u64, UserConversation>>>;
 
+/// Consolidate multiple messages into a single prompt.
+///
+/// If there's only one message, returns it unchanged.
+/// Multiple messages are formatted with explicit numbering so the LLM
+/// understands they were sent in sequence.
+fn consolidate_messages(messages: &[String]) -> String {
+    match messages.len() {
+        0 => String::new(),
+        1 => messages[0].clone(),
+        _ => {
+            let mut prompt = String::from("[Multiple messages from user]\n\n");
+            for (i, msg) in messages.iter().enumerate() {
+                prompt.push_str(&format!("Message {}: {}\n", i + 1, msg));
+            }
+            prompt.push_str("\n---\n\nPlease respond to all of the above as a single conversation.");
+            prompt
+        }
+    }
+}
+
 /// Set a reaction emoji on a message.
 async fn set_reaction(bot: &Bot, chat_id: ChatId, message_id: MessageId, emoji: &str) {
     let _ = bot
@@ -993,4 +1013,30 @@ fn spawn_sse_listener(mcp_config: &McpConfig, llm: Llm, channel: Channel) {
 
         tracing::warn!("SSE event channel closed - listener shutting down");
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_consolidate_single_message() {
+        let msgs = vec!["Hello".to_string()];
+        assert_eq!(consolidate_messages(&msgs), "Hello");
+    }
+
+    #[test]
+    fn test_consolidate_multiple_messages() {
+        let msgs = vec!["Hello".to_string(), "How are you?".to_string()];
+        let result = consolidate_messages(&msgs);
+        assert!(result.contains("Message 1: Hello"));
+        assert!(result.contains("Message 2: How are you?"));
+        assert!(result.contains("Please respond to all"));
+    }
+
+    #[test]
+    fn test_consolidate_empty_returns_empty() {
+        let msgs: Vec<String> = vec![];
+        assert_eq!(consolidate_messages(&msgs), "");
+    }
 }
