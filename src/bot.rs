@@ -204,6 +204,211 @@ async fn get_bot_info(token: &str) -> Result<BotInfo> {
 /// Version from Cargo.toml
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Process messages for a user with debouncing and cancellation support.
+///
+/// This function runs in a loop:
+/// 1. Collects all pending messages
+/// 2. Consolidates into single prompt
+/// 3. Sends to LLM with cancellation support
+/// 4. If new messages arrive during processing, restarts
+/// 5. When complete (or cancelled), cleans up state
+async fn process_user_conversation(
+    user_id: u64,
+    state: ConversationState,
+    bot: Bot,
+    llm: Llm,
+    chat_id: ChatId,
+) {
+    loop {
+        // Step 1: Get pending messages (short lock)
+        let (messages, cancel_token, needs_placeholder) = {
+            let mut guard = state.lock().await;
+            let conv = match guard.get_mut(&user_id) {
+                Some(c) => c,
+                None => return, // User state was cleared
+            };
+
+            if conv.pending.is_empty() {
+                // Nothing to process, we're done
+                conv.processing = false;
+                conv.cancel_token = None;
+                return;
+            }
+
+            // Take all pending messages
+            let msgs: Vec<String> = conv.pending.drain(..).collect();
+            let token = conv.cancel_token.clone().unwrap_or_else(CancellationToken::new);
+            let needs_ph = conv.placeholder_id.is_none();
+
+            (msgs, token, needs_ph)
+        }; // Lock dropped here
+
+        // Step 2: Create placeholder OUTSIDE the lock (involves await)
+        let placeholder_id = if needs_placeholder {
+            let msg = bot.send_message(chat_id, "...").await.ok();
+            let msg_id = msg.as_ref().map(|m| m.id);
+
+            // Store placeholder ID (short lock)
+            if let Some(id) = msg_id {
+                let mut guard = state.lock().await;
+                if let Some(conv) = guard.get_mut(&user_id) {
+                    conv.placeholder_id = Some(id);
+                }
+            }
+            msg_id
+        } else {
+            let guard = state.lock().await;
+            guard.get(&user_id).and_then(|c| c.placeholder_id)
+        };
+
+        // Step 3: Consolidate messages
+        let prompt = consolidate_messages(&messages);
+        tracing::info!(
+            "Processing {} message(s) for user {}: {:?}",
+            messages.len(),
+            user_id,
+            if messages.len() == 1 {
+                messages[0].chars().take(50).collect::<String>()
+            } else {
+                format!("{} messages", messages.len())
+            }
+        );
+
+        // Step 4: Create closure to check for new messages
+        let state_clone = state.clone();
+        let check_new_messages = move || {
+            // Use try_lock to avoid blocking - if we can't get lock, assume no new messages
+            match state_clone.try_lock() {
+                Ok(guard) => guard
+                    .get(&user_id)
+                    .map(|c| !c.pending.is_empty())
+                    .unwrap_or(false),
+                Err(_) => false,
+            }
+        };
+
+        // Step 5: Process with cancellation
+        #[allow(clippy::cast_possible_wrap)]
+        let result = llm
+            .chat_cancellable(
+                &prompt,
+                Some(user_id as i64),
+                cancel_token.clone(),
+                check_new_messages,
+                |response| {
+                    // Final response callback - update placeholder
+                    if let Some(msg_id) = placeholder_id {
+                        let formatted = to_telegram_html(response);
+                        let bot_clone = bot.clone();
+
+                        tokio::spawn(async move {
+                            let _ = bot_clone
+                                .edit_message_text(chat_id, msg_id, &formatted)
+                                .parse_mode(ParseMode::Html)
+                                .await;
+                        });
+                    }
+                },
+            )
+            .await;
+
+        match result {
+            Ok(Some(response)) => {
+                // Check if new messages arrived during processing
+                let has_new = {
+                    let guard = state.lock().await;
+                    guard
+                        .get(&user_id)
+                        .map(|c| !c.pending.is_empty())
+                        .unwrap_or(false)
+                };
+
+                if has_new {
+                    // New messages arrived, restart with consolidated
+                    tracing::info!("New messages arrived for user {}, restarting", user_id);
+                    continue;
+                }
+
+                // Send final response
+                if let Some(msg_id) = placeholder_id {
+                    let formatted_final = to_telegram_html(&response);
+                    let _ = bot
+                        .edit_message_text(chat_id, msg_id, &formatted_final)
+                        .parse_mode(ParseMode::Html)
+                        .await;
+                }
+
+                // Clear state and exit
+                {
+                    let mut guard = state.lock().await;
+                    if let Some(conv) = guard.get_mut(&user_id) {
+                        conv.processing = false;
+                        conv.cancel_token = None;
+                        conv.placeholder_id = None;
+                    }
+                }
+
+                // Mark success
+                // Note: We can't access msg.id here, so skip reaction update
+                tracing::info!("Chat complete for user {}", user_id);
+                return;
+            }
+            Ok(None) => {
+                // Cancelled or new messages detected during polling
+                let has_new = {
+                    let guard = state.lock().await;
+                    guard
+                        .get(&user_id)
+                        .map(|c| !c.pending.is_empty())
+                        .unwrap_or(false)
+                };
+
+                if has_new {
+                    // Restart with new messages
+                    tracing::info!("Restarting for user {} due to new messages", user_id);
+                    continue;
+                }
+
+                // User cancelled, cleanup
+                tracing::info!("Chat cancelled for user {}", user_id);
+                if let Some(msg_id) = placeholder_id {
+                    let _ = bot.delete_message(chat_id, msg_id).await;
+                }
+
+                {
+                    let mut guard = state.lock().await;
+                    if let Some(conv) = guard.get_mut(&user_id) {
+                        conv.processing = false;
+                        conv.cancel_token = None;
+                        conv.placeholder_id = None;
+                    }
+                }
+                return;
+            }
+            Err(e) => {
+                // Error - report and cleanup
+                tracing::error!("Chat error for user {}: {}", user_id, e);
+                if let Some(msg_id) = placeholder_id {
+                    let error_msg = format_api_error(&e);
+                    let _ = bot
+                        .edit_message_text(chat_id, msg_id, &error_msg)
+                        .await;
+                }
+
+                {
+                    let mut guard = state.lock().await;
+                    if let Some(conv) = guard.get_mut(&user_id) {
+                        conv.processing = false;
+                        conv.cancel_token = None;
+                        conv.placeholder_id = None;
+                    }
+                }
+                return;
+            }
+        }
+    }
+}
+
 pub async fn run() -> Result<()> {
     let config = Config::load()?;
 
