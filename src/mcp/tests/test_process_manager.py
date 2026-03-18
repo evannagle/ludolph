@@ -60,7 +60,10 @@ class TestProcessManager(unittest.TestCase):
         """Create a mock subprocess."""
         process = AsyncMock()
         process.returncode = None
-        process.stdin = AsyncMock()
+        # stdin.write() is sync, stdin.drain() is async
+        process.stdin = MagicMock()
+        process.stdin.write = MagicMock()
+        process.stdin.drain = AsyncMock()
         process.stdout = AsyncMock()
         process.stderr = AsyncMock()
         process.terminate = MagicMock()
@@ -81,9 +84,7 @@ class TestProcessManager(unittest.TestCase):
                     stdout=AsyncMock(),
                 )
 
-                await self.manager._spawn_mcp(
-                    "@modelcontextprotocol/mcp-server-slack", None
-                )
+                await self.manager._spawn_mcp("@modelcontextprotocol/mcp-server-slack", None)
 
                 # Check npx was called
                 call_args = mock_exec.call_args
@@ -223,9 +224,7 @@ class TestProcessManager(unittest.TestCase):
                 return_value=(json.dumps(response) + "\n").encode()
             )
 
-            result = await self.manager.call_tool(
-                mcp, "read_file", {"path": "test.txt"}
-            )
+            result = await self.manager.call_tool(mcp, "read_file", {"path": "test.txt"})
 
             # Verify method params
             write_calls = mock_process.stdin.write.call_args_list
@@ -252,9 +251,7 @@ class TestProcessManager(unittest.TestCase):
         async def run_test():
             mock_process = self._create_mock_process()
             mcp = McpProcess(name="test", process=mock_process)
-            mcp.last_used = (
-                time.time() - KEEP_WARM_SECONDS - 60
-            )  # Older than threshold
+            mcp.last_used = time.time() - KEEP_WARM_SECONDS - 60  # Older than threshold
             self.manager._processes["test"] = mcp
 
             stopped = await self.manager.cleanup_idle()
