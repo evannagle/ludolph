@@ -158,7 +158,7 @@ async fn register_commands(token: &str) -> Result<()> {
             {"command": "mcp", "description": "Show MCP connection details and tools"},
             {"command": "wake", "description": "Wake up Mac via Wake-on-LAN"},
             {"command": "help", "description": "Show available commands"},
-            {"command": "cancel", "description": "Cancel setup in progress"},
+            {"command": "cancel", "description": "Cancel current operation"},
         ]
     });
 
