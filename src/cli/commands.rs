@@ -804,7 +804,6 @@ pub async fn update() -> Result<()> {
     ))
     .print();
     StatusLine::ok(format!("Latest: v{latest_version}")).print();
-    println!();
 
     // Check what needs updating
     let cli_needs_update = current_cli != latest_version;
@@ -818,6 +817,7 @@ pub async fn update() -> Result<()> {
     }
 
     // Show what will be updated
+    println!();
     println!("Updates available:");
     if cli_needs_update {
         println!("  - Mac binary: {current_cli} → {latest_version}");
