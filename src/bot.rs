@@ -2,10 +2,13 @@
 
 #![allow(clippy::too_many_lines)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+
+use tokio::sync::Mutex as AsyncMutex;
+use tokio_util::sync::CancellationToken;
 
 use anyhow::{Context, Result};
 use console::style;
@@ -23,6 +26,41 @@ use crate::memory::Memory;
 use crate::setup::{SETUP_SYSTEM_PROMPT, initial_setup_message};
 use crate::telegram::to_telegram_html;
 use crate::ui::StatusLine;
+
+/// Tracks a user's pending messages and current processing state.
+///
+/// Used to consolidate rapid successive messages into a single LLM request
+/// and enable cancellation of in-flight requests.
+struct UserConversation {
+    /// Messages waiting to be processed (or added mid-processing)
+    pending: VecDeque<String>,
+    /// Token to cancel current LLM request
+    cancel_token: Option<CancellationToken>,
+    /// Whether we're currently processing for this user
+    processing: bool,
+    /// Placeholder message ID for streaming edits
+    placeholder_id: Option<MessageId>,
+    /// Chat ID for this user (needed for cleanup)
+    chat_id: Option<ChatId>,
+}
+
+impl Default for UserConversation {
+    fn default() -> Self {
+        Self {
+            pending: VecDeque::new(),
+            cancel_token: None,
+            processing: false,
+            placeholder_id: None,
+            chat_id: None,
+        }
+    }
+}
+
+/// Global state: user_id -> conversation state.
+///
+/// Uses tokio::sync::Mutex (not std::sync::Mutex) because we need to hold
+/// the lock across await points in some operations.
+type ConversationState = Arc<AsyncMutex<HashMap<u64, UserConversation>>>;
 
 /// Set a reaction emoji on a message.
 async fn set_reaction(bot: &Bot, chat_id: ChatId, message_id: MessageId, emoji: &str) {
