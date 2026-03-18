@@ -345,6 +345,7 @@ impl Llm {
     /// # Errors
     ///
     /// Returns an error if the MCP server is unreachable or returns an error.
+    #[allow(dead_code)] // Kept for backward compatibility
     pub async fn chat_streaming<F>(
         &self,
         user_message: &str,
@@ -379,6 +380,7 @@ impl Llm {
     /// # Errors
     ///
     /// Returns an error if the MCP server is unreachable or returns an error.
+    #[allow(clippy::cognitive_complexity)]
     pub async fn chat_cancellable<F, C>(
         &self,
         user_message: &str,

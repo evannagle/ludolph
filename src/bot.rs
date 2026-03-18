@@ -30,6 +30,7 @@ use crate::ui::StatusLine;
 ///
 /// Used to consolidate rapid successive messages into a single LLM request
 /// and enable cancellation of in-flight requests.
+#[derive(Default)]
 struct UserConversation {
     /// Messages waiting to be processed (or added mid-processing)
     pending: VecDeque<String>,
@@ -43,23 +44,42 @@ struct UserConversation {
     chat_id: Option<ChatId>,
 }
 
-impl Default for UserConversation {
-    fn default() -> Self {
-        Self {
-            pending: VecDeque::new(),
-            cancel_token: None,
-            processing: false,
-            placeholder_id: None,
-            chat_id: None,
-        }
-    }
-}
-
-/// Global state: user_id -> conversation state.
+/// Global state: `user_id` -> conversation state.
 ///
-/// Uses tokio::sync::Mutex (not std::sync::Mutex) because we need to hold
+/// Uses `tokio::sync::Mutex` (not `std::sync::Mutex`) because we need to hold
 /// the lock across await points in some operations.
 type ConversationState = Arc<AsyncMutex<HashMap<u64, UserConversation>>>;
+
+/// Queue a message for a user and determine if processing should start.
+///
+/// Returns true if a new processing task should be spawned.
+#[allow(clippy::significant_drop_tightening)]
+async fn queue_message_for_user(
+    state: &ConversationState,
+    user_id: u64,
+    text: &str,
+    chat_id: ChatId,
+) -> bool {
+    let mut guard = state.lock().await;
+    let conv = guard.entry(user_id).or_default();
+
+    // Store chat_id for later use
+    conv.chat_id = Some(chat_id);
+
+    // Add message to pending queue
+    conv.pending.push_back(text.to_string());
+
+    // If already processing, message will be picked up by poller
+    if conv.processing {
+        tracing::debug!("User {} already processing, message queued", user_id);
+        false
+    } else {
+        // Start processing
+        conv.processing = true;
+        conv.cancel_token = Some(CancellationToken::new());
+        true
+    }
+}
 
 /// Consolidate multiple messages into a single prompt.
 ///
@@ -73,9 +93,10 @@ fn consolidate_messages(messages: &[String]) -> String {
         _ => {
             let mut prompt = String::from("[Multiple messages from user]\n\n");
             for (i, msg) in messages.iter().enumerate() {
-                prompt.push_str(&format!("Message {}: {}\n", i + 1, msg));
+                let _ = writeln!(prompt, "Message {}: {}", i + 1, msg);
             }
-            prompt.push_str("\n---\n\nPlease respond to all of the above as a single conversation.");
+            prompt
+                .push_str("\n---\n\nPlease respond to all of the above as a single conversation.");
             prompt
         }
     }
@@ -211,6 +232,8 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// 3. Sends to LLM with cancellation support
 /// 4. If new messages arrive during processing, restarts
 /// 5. When complete (or cancelled), cleans up state
+#[allow(clippy::cognitive_complexity)]
+#[allow(clippy::significant_drop_tightening)]
 async fn process_user_conversation(
     user_id: u64,
     state: ConversationState,
@@ -222,9 +245,8 @@ async fn process_user_conversation(
         // Step 1: Get pending messages (short lock)
         let (messages, cancel_token, needs_placeholder) = {
             let mut guard = state.lock().await;
-            let conv = match guard.get_mut(&user_id) {
-                Some(c) => c,
-                None => return, // User state was cleared
+            let Some(conv) = guard.get_mut(&user_id) else {
+                return; // User state was cleared
             };
 
             if conv.pending.is_empty() {
@@ -236,7 +258,10 @@ async fn process_user_conversation(
 
             // Take all pending messages
             let msgs: Vec<String> = conv.pending.drain(..).collect();
-            let token = conv.cancel_token.clone().unwrap_or_else(CancellationToken::new);
+            let token = conv
+                .cancel_token
+                .clone()
+                .unwrap_or_else(CancellationToken::new);
             let needs_ph = conv.placeholder_id.is_none();
 
             (msgs, token, needs_ph)
@@ -277,13 +302,9 @@ async fn process_user_conversation(
         let state_clone = state.clone();
         let check_new_messages = move || {
             // Use try_lock to avoid blocking - if we can't get lock, assume no new messages
-            match state_clone.try_lock() {
-                Ok(guard) => guard
-                    .get(&user_id)
-                    .map(|c| !c.pending.is_empty())
-                    .unwrap_or(false),
-                Err(_) => false,
-            }
+            state_clone
+                .try_lock()
+                .is_ok_and(|guard| guard.get(&user_id).is_some_and(|c| !c.pending.is_empty()))
         };
 
         // Step 5: Process with cancellation
@@ -316,10 +337,7 @@ async fn process_user_conversation(
                 // Check if new messages arrived during processing
                 let has_new = {
                     let guard = state.lock().await;
-                    guard
-                        .get(&user_id)
-                        .map(|c| !c.pending.is_empty())
-                        .unwrap_or(false)
+                    guard.get(&user_id).is_some_and(|c| !c.pending.is_empty())
                 };
 
                 if has_new {
@@ -356,10 +374,7 @@ async fn process_user_conversation(
                 // Cancelled or new messages detected during polling
                 let has_new = {
                     let guard = state.lock().await;
-                    guard
-                        .get(&user_id)
-                        .map(|c| !c.pending.is_empty())
-                        .unwrap_or(false)
+                    guard.get(&user_id).is_some_and(|c| !c.pending.is_empty())
                 };
 
                 if has_new {
@@ -389,9 +404,7 @@ async fn process_user_conversation(
                 tracing::error!("Chat error for user {}: {}", user_id, e);
                 if let Some(msg_id) = placeholder_id {
                     let error_msg = format_api_error(&e);
-                    let _ = bot
-                        .edit_message_text(chat_id, msg_id, &error_msg)
-                        .await;
+                    let _ = bot.edit_message_text(chat_id, msg_id, &error_msg).await;
                 }
 
                 {
@@ -754,27 +767,8 @@ pub async fn run() -> Result<()> {
                     tracing::info!("Received chat message from user {}: {}", uid, text);
 
                     // Add message to queue and potentially start processing
-                    let should_spawn = {
-                        let mut guard = conversation_state.lock().await;
-                        let conv = guard.entry(uid).or_default();
-
-                        // Store chat_id for later use
-                        conv.chat_id = Some(msg.chat.id);
-
-                        // Add message to pending queue
-                        conv.pending.push_back(text.to_string());
-
-                        // If already processing, message will be picked up by poller
-                        if conv.processing {
-                            tracing::debug!("User {} already processing, message queued", uid);
-                            false
-                        } else {
-                            // Start processing
-                            conv.processing = true;
-                            conv.cancel_token = Some(CancellationToken::new());
-                            true
-                        }
-                    }; // Lock dropped here before spawn
+                    let should_spawn =
+                        queue_message_for_user(&conversation_state, uid, text, msg.chat.id).await;
 
                     if should_spawn {
                         // Show processing indicators
