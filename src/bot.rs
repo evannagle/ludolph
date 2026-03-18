@@ -5,7 +5,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
@@ -724,106 +723,64 @@ pub async fn run() -> Result<()> {
                         }
                     }
                 } else {
-                    // Normal chat with streaming
-                    tracing::info!("Processing chat message from user {}: {}", uid, text);
-                    set_reaction(&bot, msg.chat.id, msg.id, "👀").await;
-                    let typing = start_typing(bot.clone(), msg.chat.id);
+                    // Normal chat with debouncing
+                    tracing::info!("Received chat message from user {}: {}", uid, text);
 
-                    // Send placeholder message for streaming edits
-                    let placeholder_result = bot.send_message(msg.chat.id, "...").await;
+                    // Add message to queue and potentially start processing
+                    let should_spawn = {
+                        let mut guard = conversation_state.lock().await;
+                        let conv = guard.entry(uid).or_default();
 
-                    if let Ok(placeholder) = placeholder_result {
-                        let placeholder_id = placeholder.id;
-                        let stream_bot = bot.clone();
-                        let stream_chat_id = msg.chat.id;
-                        let last_edit = Arc::new(Mutex::new(Instant::now()));
-                        let edit_counter = Arc::new(Mutex::new(0u32));
+                        // Store chat_id for later use
+                        conv.chat_id = Some(msg.chat.id);
 
-                        #[allow(clippy::cast_possible_wrap)]
-                        let result = llm
-                            .chat_streaming(text, Some(uid as i64), |partial: &str| {
-                                // Debounce edits to every 500ms
-                                let mut last = last_edit.lock().unwrap();
-                                if last.elapsed() >= Duration::from_millis(500) {
-                                    // Clone values for the spawned task
-                                    let formatted = to_telegram_html(partial);
-                                    let text_with_indicator = format!("{formatted}...");
-                                    let bot_clone = stream_bot.clone();
-                                    let chat_id = stream_chat_id;
-                                    let msg_id = placeholder_id;
-                                    let counter = edit_counter.clone();
+                        // Add message to pending queue
+                        conv.pending.push_back(text.to_string());
 
-                                    tokio::spawn(async move {
-                                        // Increment counter for debugging
-                                        if let Ok(mut c) = counter.lock() {
-                                            *c += 1;
-                                            tracing::trace!("Stream edit #{}", *c);
-                                        }
-                                        let _ = bot_clone
-                                            .edit_message_text(
-                                                chat_id,
-                                                msg_id,
-                                                &text_with_indicator,
-                                            )
-                                            .parse_mode(ParseMode::Html)
-                                            .await;
-                                    });
+                        // If already processing, message will be picked up by poller
+                        if conv.processing {
+                            tracing::debug!("User {} already processing, message queued", uid);
+                            false
+                        } else {
+                            // Start processing
+                            conv.processing = true;
+                            conv.cancel_token = Some(CancellationToken::new());
+                            true
+                        }
+                    }; // Lock dropped here before spawn
 
-                                    *last = Instant::now();
-                                }
-                            })
+                    if should_spawn {
+                        // Show processing indicators
+                        set_reaction(&bot, msg.chat.id, msg.id, "👀").await;
+
+                        // Spawn processing task
+                        let state_clone = conversation_state.clone();
+                        let bot_clone = bot.clone();
+                        let llm_clone = llm.clone();
+                        let chat_id = msg.chat.id;
+                        let msg_id = msg.id;
+
+                        tokio::spawn(async move {
+                            process_user_conversation(
+                                uid,
+                                state_clone.clone(),
+                                bot_clone.clone(),
+                                llm_clone,
+                                chat_id,
+                            )
                             .await;
 
-                        tracing::info!("Streaming chat result received for user {}", uid);
-                        drop(typing);
-
-                        match result {
-                            Ok(response) => {
-                                // Final edit without "..." indicator
-                                let formatted_final = to_telegram_html(&response);
-                                let _ = bot
-                                    .edit_message_text(
-                                        msg.chat.id,
-                                        placeholder_id,
-                                        &formatted_final,
-                                    )
-                                    .parse_mode(ParseMode::Html)
-                                    .await;
-
-                                set_reaction(&bot, msg.chat.id, msg.id, "✅").await;
-                                clear_reactions(&bot, msg.chat.id, msg.id).await;
-                                // Return empty - we already sent via edit
-                                String::new()
-                            }
-                            Err(e) => {
-                                // Delete placeholder and send error
-                                let _ = bot.delete_message(msg.chat.id, placeholder_id).await;
-                                set_reaction(&bot, msg.chat.id, msg.id, "❌").await;
-                                clear_reactions(&bot, msg.chat.id, msg.id).await;
-                                format_api_error(&e)
-                            }
-                        }
+                            // Update reaction on completion
+                            set_reaction(&bot_clone, chat_id, msg_id, "✅").await;
+                            clear_reactions(&bot_clone, chat_id, msg_id).await;
+                        });
                     } else {
-                        // Fallback to non-streaming if placeholder failed
-                        #[allow(clippy::cast_possible_wrap)]
-                        let result = llm.chat(text, Some(uid as i64)).await;
-
-                        tracing::info!("Chat result received for user {}", uid);
-                        drop(typing);
-
-                        match result {
-                            Ok(response) => {
-                                set_reaction(&bot, msg.chat.id, msg.id, "✅").await;
-                                clear_reactions(&bot, msg.chat.id, msg.id).await;
-                                response
-                            }
-                            Err(e) => {
-                                set_reaction(&bot, msg.chat.id, msg.id, "❌").await;
-                                clear_reactions(&bot, msg.chat.id, msg.id).await;
-                                format_api_error(&e)
-                            }
-                        }
+                        // Message queued, show pending indicator
+                        set_reaction(&bot, msg.chat.id, msg.id, "⏳").await;
                     }
+
+                    // Return empty - response will be sent by processing task
+                    String::new()
                 };
 
                 // Send formatted response (skip if empty - streaming already handled it)
