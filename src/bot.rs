@@ -296,12 +296,16 @@ pub async fn run() -> Result<()> {
     // Track users currently in setup mode
     let setup_users: Arc<Mutex<HashSet<u64>>> = Arc::new(Mutex::new(HashSet::new()));
 
+    // Track per-user conversation state for message debouncing
+    let conversation_state: ConversationState = Arc::new(AsyncMutex::new(HashMap::new()));
+
     Box::pin(teloxide::repl(bot, move |bot: Bot, msg: Message| {
         let llm = llm.clone();
         let allowed_users = allowed_users.clone();
         let mcp_config = mcp_config.clone();
         let bot_name = bot_name.clone();
         let setup_users = setup_users.clone();
+        let conversation_state = conversation_state.clone();
         async move {
             // Check if user is authorized
             let user_id = msg.from.as_ref().map(|u| u.id.0);
