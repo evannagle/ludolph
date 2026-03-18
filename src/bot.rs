@@ -637,13 +637,40 @@ pub async fn run() -> Result<()> {
                             }
                         }
                         "/cancel" => {
+                            // Handle setup cancellation
                             if in_setup {
                                 if let Ok(mut guard) = setup_users.lock() {
                                     guard.remove(&uid);
                                 }
                                 "Setup cancelled.".to_string()
                             } else {
-                                "Nothing to cancel.".to_string()
+                                // Handle chat cancellation
+                                let result = {
+                                    let mut guard = conversation_state.lock().await;
+                                    if let Some(conv) = guard.get_mut(&uid) {
+                                        if conv.processing {
+                                            // Cancel current request
+                                            if let Some(token) = &conv.cancel_token {
+                                                token.cancel();
+                                            }
+                                            // Clear pending messages
+                                            conv.pending.clear();
+                                            // Return placeholder to delete
+                                            conv.placeholder_id.take()
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                }; // Lock dropped here before await
+
+                                if let Some(msg_id) = result {
+                                    let _ = bot.delete_message(msg.chat.id, msg_id).await;
+                                    "Cancelled.".to_string()
+                                } else {
+                                    "Nothing to cancel.".to_string()
+                                }
                             }
                         }
                         "/version" => {
