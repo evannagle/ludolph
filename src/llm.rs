@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use serde_json::{Map, Value};
+use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::mcp_client::{ChatContent, ChatMessage, ChatRequest, ChatResponse, McpClient, ToolCall};
@@ -358,6 +359,122 @@ impl Llm {
         let result = self.chat(user_message, user_id).await?;
         on_text(&result);
         Ok(result)
+    }
+
+    /// Chat with cancellation and new-message detection support.
+    ///
+    /// Cancellation is checked at yield points:
+    /// - Before each LLM call
+    /// - Between tool executions (after each tool completes)
+    ///
+    /// Note: During a single HTTP request to the MCP proxy, cancellation cannot
+    /// interrupt mid-flight. Multi-tool conversations provide more frequent
+    /// cancellation opportunities.
+    ///
+    /// # Returns
+    /// - `Ok(Some(response))` - completed successfully
+    /// - `Ok(None)` - cancelled by token OR new messages detected
+    /// - `Err(e)` - error occurred
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the MCP server is unreachable or returns an error.
+    pub async fn chat_cancellable<F, C>(
+        &self,
+        user_message: &str,
+        user_id: Option<i64>,
+        cancel_token: CancellationToken,
+        check_new_messages: C,
+        on_text: F,
+    ) -> Result<Option<String>>
+    where
+        F: Fn(&str) + Send + Sync,
+        C: Fn() -> bool + Send,
+    {
+        let tools = self.get_tools().await?;
+        let mut messages = self.prepare_messages(user_message, user_id).await;
+
+        tracing::debug!(
+            "Starting cancellable chat with {} messages, {} tools",
+            messages.len(),
+            tools.len()
+        );
+
+        loop {
+            // Check for cancellation before starting LLM request
+            if cancel_token.is_cancelled() {
+                tracing::debug!("Chat cancelled before LLM call");
+                return Ok(None);
+            }
+
+            // Check for new messages before starting LLM request
+            if check_new_messages() {
+                tracing::debug!("New messages detected before LLM call");
+                return Ok(None);
+            }
+
+            // Make the LLM call
+            // Note: This HTTP request cannot be interrupted mid-flight
+            let response = self.call_llm(&messages, &tools).await?;
+
+            // Handle tool calls with cancellation checks between each tool
+            if let Some(tool_calls) = &response.tool_calls {
+                if !tool_calls.is_empty() {
+                    tracing::debug!("Received {} tool calls", tool_calls.len());
+
+                    // Add assistant message with tool calls
+                    messages.push(ChatMessage {
+                        role: "assistant".to_string(),
+                        content: ChatContent::Blocks(vec![serde_json::json!({
+                            "type": "tool_use",
+                            "tool_calls": tool_calls,
+                        })]),
+                    });
+
+                    // Execute tools with cancellation checks between each
+                    let mut results = Vec::new();
+                    for tc in tool_calls {
+                        // Check for cancellation between tools
+                        if cancel_token.is_cancelled() {
+                            tracing::debug!("Chat cancelled between tool executions");
+                            return Ok(None);
+                        }
+                        if check_new_messages() {
+                            tracing::debug!("New messages detected between tool executions");
+                            return Ok(None);
+                        }
+
+                        let input: Value = serde_json::from_str(&tc.function.arguments)
+                            .unwrap_or_else(|_| Value::Object(Map::default()));
+
+                        tracing::debug!("Executing tool: {}", tc.function.name);
+                        let result = self.execute_tool(&tc.function.name, &input).await;
+
+                        results.push(serde_json::json!({
+                            "type": "tool_result",
+                            "tool_use_id": tc.id,
+                            "content": result,
+                        }));
+                    }
+
+                    messages.push(ChatMessage {
+                        role: "user".to_string(),
+                        content: ChatContent::Blocks(results),
+                    });
+
+                    continue;
+                }
+            }
+
+            let content = response.content.unwrap_or_default();
+            tracing::debug!("Chat complete, returning {} chars", content.len());
+
+            // Call the callback with final result
+            on_text(&content);
+
+            self.store_message(user_id, "assistant", &content);
+            return Ok(Some(content));
+        }
     }
 
     /// Chat with a custom system prompt, tracking if `complete_setup` is called.
