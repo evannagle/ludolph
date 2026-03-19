@@ -3,6 +3,7 @@ mod complete_setup;
 mod create_file;
 mod list_dir;
 mod read_file;
+pub mod schedule;
 mod search;
 
 use serde_json::Value;
@@ -14,7 +15,7 @@ pub struct Tool {
     pub input_schema: Value,
 }
 
-/// Get tool definitions for local execution.
+/// Get tool definitions for local execution (vault tools only).
 pub fn get_tool_definitions() -> Vec<Tool> {
     vec![
         read_file::definition(),
@@ -24,6 +25,24 @@ pub fn get_tool_definitions() -> Vec<Tool> {
         create_file::definition(),
         complete_setup::definition(),
     ]
+}
+
+/// Get schedule tool definitions.
+pub fn get_schedule_tool_definitions() -> Vec<Tool> {
+    schedule::definitions()
+}
+
+/// Check if a tool name is a schedule tool.
+pub fn is_schedule_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "create_schedule"
+            | "list_schedules"
+            | "update_schedule"
+            | "delete_schedule"
+            | "run_schedule_now"
+            | "get_schedule_history"
+    )
 }
 
 /// Execute a tool locally (for Mac or standalone Pi with local vault).

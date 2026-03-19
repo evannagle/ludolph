@@ -27,6 +27,12 @@ pub struct Config {
     /// Memory configuration for conversation context
     #[serde(default)]
     pub memory: MemoryConfig,
+    /// Focus configuration for file tracking
+    #[serde(default)]
+    pub focus: FocusConfig,
+    /// Scheduler configuration for automated tasks
+    #[serde(default)]
+    pub scheduler: SchedulerConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,6 +168,70 @@ impl Default for MemoryConfig {
     }
 }
 
+/// Focus configuration for file tracking.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FocusConfig {
+    /// Maximum files to keep in focus per user (default: 5)
+    #[serde(default = "default_max_focus_files")]
+    pub max_files: usize,
+    /// Files expire after this many seconds (default: 3600 = 1 hour)
+    #[serde(default = "default_focus_max_age_secs")]
+    pub max_age_secs: u64,
+    /// Characters to store for preview (default: 500)
+    #[serde(default = "default_focus_preview_chars")]
+    pub preview_chars: usize,
+}
+
+const fn default_max_focus_files() -> usize {
+    5
+}
+
+const fn default_focus_max_age_secs() -> u64 {
+    3600 // 1 hour
+}
+
+const fn default_focus_preview_chars() -> usize {
+    500
+}
+
+impl Default for FocusConfig {
+    fn default() -> Self {
+        Self {
+            max_files: default_max_focus_files(),
+            max_age_secs: default_focus_max_age_secs(),
+            preview_chars: default_focus_preview_chars(),
+        }
+    }
+}
+
+/// Scheduler configuration for automated tasks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchedulerConfig {
+    /// How often to check for due schedules in seconds (default: 60)
+    #[serde(default = "default_scheduler_check_interval")]
+    pub check_interval_secs: u64,
+    /// Maximum concurrent schedule executions (default: 3)
+    #[serde(default = "default_scheduler_max_concurrent")]
+    pub max_concurrent: usize,
+}
+
+const fn default_scheduler_check_interval() -> u64 {
+    60
+}
+
+const fn default_scheduler_max_concurrent() -> usize {
+    3
+}
+
+impl Default for SchedulerConfig {
+    fn default() -> Self {
+        Self {
+            check_interval_secs: default_scheduler_check_interval(),
+            max_concurrent: default_scheduler_max_concurrent(),
+        }
+    }
+}
+
 fn default_model() -> String {
     "claude-sonnet-4-20250514".to_string()
 }
@@ -231,6 +301,8 @@ impl Config {
             mcp,
             channel: ChannelConfig::from_env(),
             memory: MemoryConfig::default(),
+            focus: FocusConfig::default(),
+            scheduler: SchedulerConfig::default(),
         }
     }
 }

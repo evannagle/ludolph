@@ -10,10 +10,12 @@ use serde_json::{Map, Value};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
+use crate::focus::{Focus, format_focus_context};
 use crate::mcp_client::{ChatContent, ChatMessage, ChatRequest, ChatResponse, McpClient, ToolCall};
 use crate::memory::Memory;
+use crate::scheduler::{Scheduler, format_schedule_context};
 use crate::setup::SETUP_COMPLETE_MARKER;
-use crate::tools::{Tool, execute_tool_local};
+use crate::tools::{Tool, execute_tool_local, get_schedule_tool_definitions, is_schedule_tool};
 
 /// Result of a setup-aware chat session.
 pub struct SetupChatResult {
@@ -38,6 +40,8 @@ pub struct Llm {
     model: String,
     tool_backend: ToolBackend,
     memory: Option<Arc<Memory>>,
+    focus: Option<Arc<Focus>>,
+    scheduler: Option<Arc<Scheduler>>,
 }
 
 impl Clone for Llm {
@@ -47,6 +51,8 @@ impl Clone for Llm {
             model: self.model.clone(),
             tool_backend: self.tool_backend.clone(),
             memory: self.memory.clone(),
+            focus: self.focus.clone(),
+            scheduler: self.scheduler.clone(),
         }
     }
 }
@@ -57,7 +63,35 @@ impl Llm {
     /// # Errors
     ///
     /// Returns an error if MCP configuration is not present in config.
+    #[allow(dead_code)] // Kept for backward compatibility
     pub fn from_config_with_memory(config: &Config, memory: Option<Arc<Memory>>) -> Result<Self> {
+        Self::from_config_with_context(config, memory, None)
+    }
+
+    /// Create an LLM client from config with optional memory and focus.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if MCP configuration is not present in config.
+    pub fn from_config_with_context(
+        config: &Config,
+        memory: Option<Arc<Memory>>,
+        focus: Option<Arc<Focus>>,
+    ) -> Result<Self> {
+        Self::from_config_full(config, memory, focus, None)
+    }
+
+    /// Create an LLM client from config with all context options.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if MCP configuration is not present in config.
+    pub fn from_config_full(
+        config: &Config,
+        memory: Option<Arc<Memory>>,
+        focus: Option<Arc<Focus>>,
+        scheduler: Option<Arc<Scheduler>>,
+    ) -> Result<Self> {
         let mcp_config = config
             .mcp
             .as_ref()
@@ -85,6 +119,8 @@ impl Llm {
             model,
             tool_backend,
             memory,
+            focus,
+            scheduler,
         })
     }
 
@@ -97,7 +133,23 @@ impl Llm {
     }
 
     /// Execute a tool using the configured backend.
-    async fn execute_tool(&self, name: &str, input: &Value) -> String {
+    async fn execute_tool(&self, name: &str, input: &Value, user_id: Option<i64>) -> String {
+        // Handle schedule tools specially
+        if is_schedule_tool(name) {
+            if let Some(scheduler) = &self.scheduler {
+                let uid = user_id.unwrap_or(0);
+                let result = crate::tools::schedule::execute(name, input, scheduler, uid);
+
+                // Handle immediate schedule execution
+                if let Some(schedule_id) = result.strip_prefix("SCHEDULE_RUN_NOW:") {
+                    return self.execute_schedule_now(scheduler, schedule_id, uid).await;
+                }
+
+                return result;
+            }
+            return "Error: Scheduler not configured".to_string();
+        }
+
         match &self.tool_backend {
             ToolBackend::Local { vault_path } => execute_tool_local(name, input, vault_path).await,
             ToolBackend::Mcp { client } => client
@@ -107,16 +159,138 @@ impl Llm {
         }
     }
 
-    /// Get tool definitions from the configured backend.
-    async fn get_tools(&self) -> Result<Vec<Tool>> {
-        match &self.tool_backend {
-            ToolBackend::Local { .. } => Ok(crate::tools::get_tool_definitions()),
-            ToolBackend::Mcp { client } => client.get_tool_definitions().await,
+    /// Execute a schedule immediately and record the run.
+    #[allow(clippy::cognitive_complexity)]
+    async fn execute_schedule_now(
+        &self,
+        scheduler: &Arc<Scheduler>,
+        schedule_info: &str,
+        user_id: i64,
+    ) -> String {
+        use crate::scheduler::RunStatus;
+
+        // Parse "schedule_id:schedule_name"
+        let parts: Vec<&str> = schedule_info.splitn(2, ':').collect();
+        let schedule_id = parts.first().unwrap_or(&"");
+
+        // Get the schedule
+        let schedule = match scheduler.get(schedule_id) {
+            Ok(Some(s)) => s,
+            Ok(None) => return format!("Error: Schedule '{schedule_id}' not found"),
+            Err(e) => return format!("Error getting schedule: {e}"),
+        };
+
+        let schedule_name = &schedule.name;
+
+        // Record run start
+        let run_id = match scheduler.record_run_start(schedule_id, user_id) {
+            Ok(id) => id,
+            Err(e) => return format!("Error recording run start: {e}"),
+        };
+
+        // Execute the schedule's prompt
+        // We use a simple single-turn chat to avoid recursion issues
+        let prompt = &schedule.prompt;
+        tracing::info!("Executing schedule '{schedule_name}' immediately");
+
+        let result = self.execute_schedule_prompt(prompt, user_id).await;
+
+        // Record run completion
+        match &result {
+            Ok(response) => {
+                let summary = if response.len() > 500 {
+                    format!("{}...", &response[..497])
+                } else {
+                    response.clone()
+                };
+
+                if let Err(e) = scheduler.record_run_complete(
+                    run_id,
+                    schedule_id,
+                    RunStatus::Success,
+                    Some(&summary),
+                    None,
+                ) {
+                    tracing::error!("Failed to record run completion: {e}");
+                }
+
+                format!("Executed schedule '{schedule_name}' successfully.\n\nResult:\n{response}")
+            }
+            Err(e) => {
+                let error_msg = format!("{e}");
+                if let Err(record_err) = scheduler.record_run_complete(
+                    run_id,
+                    schedule_id,
+                    RunStatus::Error,
+                    None,
+                    Some(&error_msg),
+                ) {
+                    tracing::error!("Failed to record run error: {record_err}");
+                }
+
+                format!("Schedule '{schedule_name}' failed: {error_msg}")
+            }
         }
     }
 
-    /// Build system prompt with memory and vault context.
-    async fn build_system_prompt(&self) -> String {
+    /// Execute a schedule's prompt without full conversation context.
+    ///
+    /// This is a simplified execution path to avoid recursion when
+    /// running schedules immediately from within a tool call.
+    /// Uses a minimal system prompt to avoid the recursive call chain.
+    async fn execute_schedule_prompt(&self, prompt: &str, _user_id: i64) -> Result<String> {
+        // Get vault tools only (no schedule tools to avoid recursion)
+        let tools = match &self.tool_backend {
+            ToolBackend::Local { .. } => crate::tools::get_tool_definitions(),
+            ToolBackend::Mcp { client } => client.get_tool_definitions().await?,
+        };
+
+        // Use a minimal system prompt to avoid recursion through build_system_prompt
+        let system = format!(
+            "You are Ludolph, a helpful assistant with access to the user's Obsidian vault at {}. \
+             Execute the following scheduled task. Be concise in your response.",
+            self.vault_description()
+        );
+
+        let messages = vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: ChatContent::Text(system),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: ChatContent::Text(prompt.to_string()),
+            },
+        ];
+
+        // Simple single-turn execution (no tool loop to avoid recursion)
+        let request = ChatRequest {
+            model: self.model.clone(),
+            messages,
+            tools: Some(Self::tools_to_json(&tools)),
+        };
+
+        let response = self.mcp_client.chat(&request).await?;
+        Ok(response.content.unwrap_or_default())
+    }
+
+    /// Get tool definitions from the configured backend.
+    async fn get_tools(&self) -> Result<Vec<Tool>> {
+        let mut tools = match &self.tool_backend {
+            ToolBackend::Local { .. } => crate::tools::get_tool_definitions(),
+            ToolBackend::Mcp { client } => client.get_tool_definitions().await?,
+        };
+
+        // Add schedule tools if scheduler is available
+        if self.scheduler.is_some() {
+            tools.extend(get_schedule_tool_definitions());
+        }
+
+        Ok(tools)
+    }
+
+    /// Build system prompt with memory, focus, schedule, and vault context.
+    async fn build_system_prompt(&self, user_id: Option<i64>) -> String {
         let memory_context = if self.memory.is_some() {
             "\n\nYou have access to conversation history with this user. \
              Recent messages are included below. For older conversations, \
@@ -124,6 +298,9 @@ impl Llm {
         } else {
             ""
         };
+
+        let focus_context = self.get_focus_context(user_id);
+        let schedule_context = self.get_schedule_context(user_id);
 
         let lu_context = self
             .load_lu_context()
@@ -141,11 +318,61 @@ impl Llm {
              - Simple lists when helpful. Use bullet points sparingly.\n\
              - No emojis unless the user uses them first.\n\
              - Be concise. Get to the point.\n\
-             - If you have multiple questions, ask one at a time.{}{}",
+             - If you have multiple questions, ask one at a time.{}{}{}{}",
             self.vault_description(),
             memory_context,
+            focus_context,
+            schedule_context,
             lu_context
         )
+    }
+
+    /// Get focus context for system prompt.
+    fn get_focus_context(&self, user_id: Option<i64>) -> String {
+        if let (Some(focus), Some(uid)) = (&self.focus, user_id) {
+            match focus.get_focus(uid) {
+                Ok(files) if !files.is_empty() => format_focus_context(&files),
+                _ => String::new(),
+            }
+        } else {
+            String::new()
+        }
+    }
+
+    /// Get schedule context for system prompt.
+    fn get_schedule_context(&self, user_id: Option<i64>) -> String {
+        if let (Some(scheduler), Some(uid)) = (&self.scheduler, user_id) {
+            match scheduler.get_active_schedules(uid) {
+                Ok(schedules) if !schedules.is_empty() => format_schedule_context(&schedules),
+                _ => String::new(),
+            }
+        } else {
+            String::new()
+        }
+    }
+
+    /// Track file access after a `read_file` tool call.
+    fn track_file_access(
+        &self,
+        user_id: Option<i64>,
+        tool_name: &str,
+        input: &Value,
+        result: &str,
+    ) {
+        // Only track read_file calls that succeeded
+        if tool_name != "read_file" || result.starts_with("Error:") {
+            return;
+        }
+
+        let Some(focus) = &self.focus else { return };
+        let Some(uid) = user_id else { return };
+        let Some(path) = input.get("path").and_then(|v| v.as_str()) else {
+            return;
+        };
+
+        if let Err(e) = focus.touch(uid, path, result) {
+            tracing::warn!("Failed to track file focus: {e}");
+        }
     }
 
     /// Load conversation history from memory.
@@ -184,7 +411,7 @@ impl Llm {
     /// Try to load Lu.md content from the vault.
     async fn load_lu_context(&self) -> Option<String> {
         let result = self
-            .execute_tool("read_file", &serde_json::json!({"path": "Lu.md"}))
+            .execute_tool("read_file", &serde_json::json!({"path": "Lu.md"}), None)
             .await;
 
         if result.contains("Error:") || result.contains("not found") || result.is_empty() {
@@ -212,7 +439,11 @@ impl Llm {
     }
 
     /// Process tool calls and return results.
-    async fn process_tool_calls(&self, tool_calls: &[ToolCall]) -> Vec<Value> {
+    async fn process_tool_calls(
+        &self,
+        tool_calls: &[ToolCall],
+        user_id: Option<i64>,
+    ) -> Vec<Value> {
         let mut results = Vec::new();
 
         for tc in tool_calls {
@@ -222,8 +453,11 @@ impl Llm {
             tracing::debug!("Executing tool: {}", tc.function.name);
             tracing::trace!("Tool input: {:?}", input);
 
-            let result = self.execute_tool(&tc.function.name, &input).await;
+            let result = self.execute_tool(&tc.function.name, &input, user_id).await;
             tracing::trace!("Tool {} returned {} bytes", tc.function.name, result.len());
+
+            // Track file access for focus layer
+            self.track_file_access(user_id, &tc.function.name, &input, &result);
 
             results.push(serde_json::json!({
                 "type": "tool_result",
@@ -256,7 +490,10 @@ impl Llm {
         loop {
             let response = self.call_llm(&messages, &tools).await?;
 
-            if self.handle_tool_calls(&response, &mut messages).await {
+            if self
+                .handle_tool_calls(&response, &mut messages, user_id)
+                .await
+            {
                 continue;
             }
 
@@ -270,7 +507,7 @@ impl Llm {
 
     /// Prepare messages for a chat request.
     async fn prepare_messages(&self, user_message: &str, user_id: Option<i64>) -> Vec<ChatMessage> {
-        let system = self.build_system_prompt().await;
+        let system = self.build_system_prompt(user_id).await;
         let mut messages = self.load_conversation_history(user_id);
 
         messages.insert(
@@ -309,6 +546,7 @@ impl Llm {
         &self,
         response: &ChatResponse,
         messages: &mut Vec<ChatMessage>,
+        user_id: Option<i64>,
     ) -> bool {
         let Some(tool_calls) = &response.tool_calls else {
             return false;
@@ -328,7 +566,7 @@ impl Llm {
             })]),
         });
 
-        let results = self.process_tool_calls(tool_calls).await;
+        let results = self.process_tool_calls(tool_calls, user_id).await;
         messages.push(ChatMessage {
             role: "user".to_string(),
             content: ChatContent::Blocks(results),
@@ -450,7 +688,10 @@ impl Llm {
                             .unwrap_or_else(|_| Value::Object(Map::default()));
 
                         tracing::debug!("Executing tool: {}", tc.function.name);
-                        let result = self.execute_tool(&tc.function.name, &input).await;
+                        let result = self.execute_tool(&tc.function.name, &input, user_id).await;
+
+                        // Track file access for focus layer
+                        self.track_file_access(user_id, &tc.function.name, &input, &result);
 
                         results.push(serde_json::json!({
                             "type": "tool_result",
@@ -543,7 +784,10 @@ impl Llm {
                         let input: Value = serde_json::from_str(&tc.function.arguments)
                             .unwrap_or_else(|_| Value::Object(Map::default()));
 
-                        let result = self.execute_tool(&tc.function.name, &input).await;
+                        let result = self.execute_tool(&tc.function.name, &input, user_id).await;
+
+                        // Track file access for focus layer
+                        self.track_file_access(user_id, &tc.function.name, &input, &result);
 
                         // Check if this is the complete_setup tool
                         if tc.function.name == "complete_setup"

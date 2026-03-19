@@ -19,9 +19,11 @@ use tokio::time::{Duration, interval};
 use crate::api::{AppState, run_server};
 use crate::channel::Channel;
 use crate::config::{Config, McpConfig, config_dir};
+use crate::focus::Focus;
 use crate::llm::Llm;
 use crate::mcp_client::{DisconnectReason, McpClient};
 use crate::memory::Memory;
+use crate::scheduler::Scheduler;
 use crate::setup::{SETUP_SYSTEM_PROMPT, initial_setup_message};
 use crate::telegram::to_telegram_html;
 use crate::ui::StatusLine;
@@ -476,6 +478,39 @@ pub async fn run() -> Result<()> {
         }
     };
 
+    // Initialize focus (file tracking)
+    let focus = match Focus::open(&config_dir().join("focus.db"), &config.focus) {
+        Ok(foc) => {
+            let (max_files, max_age, preview_chars) = foc.config();
+            StatusLine::ok(format!(
+                "Focus: max={max_files}, age={}m, preview={preview_chars}",
+                max_age / 60
+            ))
+            .print();
+            Some(Arc::new(foc))
+        }
+        Err(e) => {
+            StatusLine::error(format!("Focus disabled: {e}")).print();
+            None
+        }
+    };
+
+    // Initialize scheduler (automated tasks)
+    let scheduler = match Scheduler::open(&config_dir().join("schedules.db"), &config.scheduler) {
+        Ok(sched) => {
+            StatusLine::ok(format!(
+                "Scheduler: interval={}s",
+                config.scheduler.check_interval_secs
+            ))
+            .print();
+            Some(Arc::new(sched))
+        }
+        Err(e) => {
+            StatusLine::error(format!("Scheduler disabled: {e}")).print();
+            None
+        }
+    };
+
     // Initialize channel API server for Claude Code communication
     let channel = Channel::new();
 
@@ -500,7 +535,7 @@ pub async fn run() -> Result<()> {
 
     // Run bot
     let bot = Bot::new(&config.telegram.bot_token);
-    let llm = Llm::from_config_with_memory(&config, memory)?;
+    let llm = Llm::from_config_full(&config, memory, focus, scheduler.clone())?;
     let allowed_users: HashSet<u64> = config.telegram.allowed_users.iter().copied().collect();
     let mcp_config = config.mcp.clone();
     let bot_name = bot_info.name.clone();
@@ -508,6 +543,17 @@ pub async fn run() -> Result<()> {
     // Spawn SSE event listener if MCP is configured
     if let Some(ref mcp) = mcp_config {
         spawn_sse_listener(mcp, llm.clone(), channel.clone());
+    }
+
+    // Spawn background scheduler task if scheduler is available
+    if let Some(ref sched) = scheduler {
+        spawn_scheduler_task(
+            sched.clone(),
+            llm.clone(),
+            bot.clone(),
+            mcp_config.clone(),
+            config.scheduler.check_interval_secs,
+        );
     }
 
     // Track users currently in setup mode
@@ -1199,6 +1245,148 @@ fn spawn_sse_listener(mcp_config: &McpConfig, llm: Llm, channel: Channel) {
         }
 
         tracing::warn!("SSE event channel closed - listener shutting down");
+    });
+}
+
+/// Spawn background task to check and execute scheduled tasks.
+///
+/// Checks for due schedules every `check_interval_secs` seconds,
+/// executes them via the LLM, and sends notifications.
+fn spawn_scheduler_task(
+    scheduler: Arc<Scheduler>,
+    llm: Llm,
+    bot: Bot,
+    mcp_config: Option<McpConfig>,
+    check_interval_secs: u64,
+) {
+    use crate::scheduler::RunStatus;
+    use teloxide::types::ChatId;
+
+    tokio::spawn(async move {
+        let mut interval = interval(Duration::from_secs(check_interval_secs));
+        tracing::info!(
+            "Scheduler task started, checking every {}s",
+            check_interval_secs
+        );
+
+        loop {
+            interval.tick().await;
+
+            let due = match scheduler.get_due_schedules() {
+                Ok(list) => list,
+                Err(e) => {
+                    tracing::error!("Failed to get due schedules: {e}");
+                    continue;
+                }
+            };
+
+            if due.is_empty() {
+                continue;
+            }
+
+            tracing::info!("Found {} due schedule(s) to execute", due.len());
+
+            for schedule in due {
+                let user_id = schedule.user_id;
+                let schedule_id = schedule.id.clone();
+                let schedule_name = schedule.name.clone();
+
+                tracing::info!(
+                    "Executing schedule '{}' (ID: {}) for user {}",
+                    schedule_name,
+                    schedule_id,
+                    user_id
+                );
+
+                // Record run start
+                let run_id = match scheduler.record_run_start(&schedule_id, user_id) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        tracing::error!("Failed to record run start: {e}");
+                        continue;
+                    }
+                };
+
+                // Wake Mac if needed (using MCP client)
+                if let Some(ref mcp) = mcp_config {
+                    let client = McpClient::from_config(mcp);
+                    let status = client.get_status().await;
+                    if !status.connected {
+                        if let Some(ref _mac_addr) = mcp.mac_address {
+                            if let Err(e) = client.wake_mac() {
+                                tracing::warn!(
+                                    "Failed to wake Mac for schedule '{}': {}",
+                                    schedule_name,
+                                    e
+                                );
+                                // Wait a bit and check again
+                                tokio::time::sleep(Duration::from_secs(30)).await;
+                            }
+                        }
+                    }
+                }
+
+                // Send pre-notification if enabled
+                if schedule.notify_before {
+                    let msg = format!("Starting scheduled task: {schedule_name}");
+                    let _ = bot.send_message(ChatId(user_id), &msg).await;
+                }
+
+                // Execute the schedule's prompt via LLM
+                let result = llm.chat(&schedule.prompt, Some(user_id)).await;
+
+                // Record run completion and send notification
+                match result {
+                    Ok(response) => {
+                        let summary = if response.len() > 500 {
+                            format!("{}...", &response[..497])
+                        } else {
+                            response.clone()
+                        };
+
+                        if let Err(e) = scheduler.record_run_complete(
+                            run_id,
+                            &schedule_id,
+                            RunStatus::Success,
+                            Some(&summary),
+                            None,
+                        ) {
+                            tracing::error!("Failed to record run completion: {}", e);
+                        }
+
+                        if schedule.notify_after {
+                            let msg = format!("Completed: {schedule_name}\n\n{response}");
+                            let formatted = to_telegram_html(&msg);
+                            let _ = bot
+                                .send_message(ChatId(user_id), &formatted)
+                                .parse_mode(teloxide::types::ParseMode::Html)
+                                .await;
+                        }
+
+                        tracing::info!("Schedule '{}' completed successfully", schedule_name);
+                    }
+                    Err(e) => {
+                        let error_msg = format!("{e}");
+
+                        if let Err(record_err) = scheduler.record_run_complete(
+                            run_id,
+                            &schedule_id,
+                            RunStatus::Error,
+                            None,
+                            Some(&error_msg),
+                        ) {
+                            tracing::error!("Failed to record run error: {record_err}");
+                        }
+
+                        // Always notify on error
+                        let msg = format!("Schedule '{schedule_name}' failed:\n{error_msg}");
+                        let _ = bot.send_message(ChatId(user_id), &msg).await;
+
+                        tracing::error!("Schedule '{schedule_name}' failed: {error_msg}");
+                    }
+                }
+            }
+        }
     });
 }
 
