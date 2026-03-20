@@ -759,7 +759,7 @@ fn update_pi_binary(tag: &str, host: &str, user: &str) -> Result<bool> {
 }
 
 #[cfg(not(target_os = "macos"))]
-#[allow(clippy::unnecessary_wraps)]
+#[allow(clippy::unnecessary_wraps, clippy::missing_const_for_fn)]
 fn update_pi_binary(_tag: &str, _host: &str, _user: &str) -> Result<bool> {
     // Pi update only runs from Mac
     Ok(false)
