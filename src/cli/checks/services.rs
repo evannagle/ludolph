@@ -157,6 +157,89 @@ pub fn pi_service_running(ctx: &CheckContext) -> CheckResult {
     }
 }
 
+/// Check MCP configuration consistency.
+///
+/// Validates that:
+/// - Launchd plist uses the correct port (8202)
+/// - Auth token in plist matches `~/.ludolph/mcp_token`
+/// - Claude Code's `~/.mcp.json` has matching token
+pub fn mcp_config_consistent(_ctx: &CheckContext) -> CheckResult {
+    #[cfg(not(target_os = "macos"))]
+    {
+        CheckResult::skip("MCP config check only runs on macOS")
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        use std::path::PathBuf;
+
+        let home = std::env::var("HOME").unwrap_or_default();
+        let plist_path = PathBuf::from(&home).join("Library/LaunchAgents/dev.ludolph.mcp.plist");
+        let mcp_json_path = PathBuf::from(&home).join(".mcp.json");
+        let token_path = ludolph_dir().join("mcp_token");
+
+        // Check plist exists
+        if !plist_path.exists() {
+            return CheckResult::fail(
+                "Launchd plist not found",
+                "Run installer: ./scripts/install-mcp.sh",
+                "mcp-plist-missing",
+            );
+        }
+
+        // Read plist and check port
+        let plist_content = match fs::read_to_string(&plist_path) {
+            Ok(c) => c,
+            Err(e) => {
+                return CheckResult::fail(
+                    format!("Cannot read plist: {e}"),
+                    "Check file permissions",
+                    "mcp-plist-unreadable",
+                );
+            }
+        };
+
+        // Check port in plist (look for <string>8201</string> or <string>8202</string>)
+        if plist_content.contains("<string>8201</string>")
+            && plist_content.contains("<key>PORT</key>")
+        {
+            return CheckResult::fail(
+                "Launchd plist uses wrong port (8201 instead of 8202)",
+                "Update plist PORT to 8202 or re-run installer:\n\
+                 ./scripts/install-mcp.sh",
+                "mcp-port-mismatch",
+            );
+        }
+
+        // Load canonical token
+        let canonical_token = match fs::read_to_string(&token_path) {
+            Ok(t) => t.trim().to_string(),
+            Err(_) => {
+                return CheckResult::fail(
+                    "No MCP token file found",
+                    "Run installer: ./scripts/install-mcp.sh",
+                    "mcp-token-missing",
+                );
+            }
+        };
+
+        // Check ~/.mcp.json token consistency
+        if mcp_json_path.exists() {
+            if let Ok(content) = fs::read_to_string(&mcp_json_path) {
+                if content.contains("CHANNEL_AUTH_TOKEN") && !content.contains(&canonical_token) {
+                    return CheckResult::fail(
+                        "Token mismatch: ~/.mcp.json has different token than ~/.ludolph/mcp_token",
+                        format!("Update CHANNEL_AUTH_TOKEN in ~/.mcp.json to:\n{canonical_token}"),
+                        "mcp-token-mismatch",
+                    );
+                }
+            }
+        }
+
+        CheckResult::pass("MCP configuration consistent")
+    }
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;

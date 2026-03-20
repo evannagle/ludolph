@@ -22,7 +22,7 @@ set -euo pipefail
 MCP_DIR="$HOME/.ludolph/mcp"
 LAUNCHD_PLIST="$HOME/Library/LaunchAgents/dev.ludolph.mcp.plist"
 SERVICE_NAME="dev.ludolph.mcp"
-DEFAULT_PORT=8201
+DEFAULT_PORT=8202
 
 # Parse arguments
 INSTALL_SEMANTIC=true

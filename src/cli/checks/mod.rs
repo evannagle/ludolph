@@ -15,7 +15,7 @@ use crate::config::Config;
 
 pub use config::{config_exists, config_valid, vault_accessible};
 pub use network::{pi_mcp_connectivity, pi_reachable};
-pub use services::{mac_mcp_running, pi_service_running};
+pub use services::{mac_mcp_running, mcp_config_consistent, pi_service_running};
 
 /// Result of running a diagnostic check.
 #[derive(Debug, Clone)]
@@ -184,9 +184,15 @@ pub fn all_checks() -> Vec<Check> {
             run: vault_accessible,
         },
         Check {
+            name: "mcp_config_consistent",
+            label: "MCP configuration consistent",
+            depends_on: &["config_valid"],
+            run: mcp_config_consistent,
+        },
+        Check {
             name: "mac_mcp_running",
             label: "Mac MCP server running",
-            depends_on: &["config_valid"],
+            depends_on: &["mcp_config_consistent"],
             run: mac_mcp_running,
         },
         Check {
