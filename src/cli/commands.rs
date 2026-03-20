@@ -334,7 +334,8 @@ fn mcp_restart_service() -> Result<()> {
 // =============================================================================
 
 /// Run diagnostic checks and report results.
-pub async fn doctor() -> ExitCode {
+#[allow(clippy::too_many_lines)]
+pub async fn doctor(fix: bool) -> ExitCode {
     println!();
     println!("{}", style("Ludolph Doctor").bold());
     println!();
@@ -348,6 +349,7 @@ pub async fn doctor() -> ExitCode {
     .expect("spawn_blocking failed");
 
     let mut has_failures = false;
+    let mut has_mcp_failure = false;
     let mut diagnosis: Option<(&str, &str)> = None;
 
     for (name, result) in &results {
@@ -363,9 +365,16 @@ pub async fn doctor() -> ExitCode {
                 has_failures = true;
                 StatusLine::error(message).print();
 
-                // Print fix hint indented
-                for line in fix_hint.lines() {
-                    println!("      {}", style(line).dim());
+                // Track if MCP config has issues
+                if *name == "mcp_config_consistent" {
+                    has_mcp_failure = true;
+                }
+
+                // Print fix hint indented (only if not in fix mode)
+                if !fix {
+                    for line in fix_hint.lines() {
+                        println!("      {}", style(line).dim());
+                    }
                 }
 
                 // Remember first failure for diagnosis
@@ -375,6 +384,64 @@ pub async fn doctor() -> ExitCode {
             }
             CheckResult::Skip { reason } => {
                 StatusLine::skip(format!("Cannot check: {name} ({reason})")).print();
+            }
+        }
+    }
+
+    // Attempt fixes if requested
+    if fix && has_mcp_failure {
+        println!();
+        println!("{}", style("Attempting fixes...").bold());
+
+        // Run fix in blocking task
+        let fix_result = tokio::task::spawn_blocking(checks::fix_mcp_config)
+            .await
+            .expect("spawn_blocking failed");
+
+        match fix_result {
+            Ok(result) if result.fixed => {
+                StatusLine::ok(&result.message).print();
+
+                // Re-run checks to verify
+                println!();
+                println!("{}", style("Verifying...").bold());
+
+                let verify_results = tokio::task::spawn_blocking(|| {
+                    let (_, results) = checks::run_all_checks();
+                    results
+                })
+                .await
+                .expect("spawn_blocking failed");
+
+                let mut verify_failures = false;
+                for (name, result) in &verify_results {
+                    match result {
+                        CheckResult::Pass { message } => {
+                            StatusLine::ok(message).print();
+                        }
+                        CheckResult::Fail { message, .. } => {
+                            verify_failures = true;
+                            StatusLine::error(message).print();
+                        }
+                        CheckResult::Skip { reason } => {
+                            StatusLine::skip(format!("Cannot check: {name} ({reason})")).print();
+                        }
+                    }
+                }
+
+                println!();
+                if verify_failures {
+                    ui::status::print_error("Some issues remain after fixes", None);
+                    return ExitCode::FAILURE;
+                }
+                ui::status::print_success("All checks passed after fixes", None);
+                return ExitCode::SUCCESS;
+            }
+            Ok(result) => {
+                StatusLine::skip(&result.message).print();
+            }
+            Err(e) => {
+                StatusLine::error(format!("Fix failed: {e}")).print();
             }
         }
     }
@@ -391,6 +458,12 @@ pub async fn doctor() -> ExitCode {
                 ))
                 .yellow()
             );
+            if !fix {
+                println!(
+                    "{}",
+                    style("TIP: Run `lu doctor --fix` to attempt automatic repair").dim()
+                );
+            }
         }
         println!();
         ExitCode::FAILURE
@@ -858,6 +931,25 @@ pub async fn update() -> Result<()> {
             .unwrap_or(false);
 
     let any_updated = cli_updated || mcp_updated || pi_updated;
+
+    // After MCP update, verify/repair config
+    #[cfg(target_os = "macos")]
+    if mcp_updated {
+        print!("Verifying MCP configuration... ");
+        match checks::fix_mcp_config() {
+            Ok(result) if result.fixed => {
+                println!("{}", style("fixed").green());
+                println!("      {}", style(&result.message).dim());
+            }
+            Ok(_) => {
+                println!("{}", style("ok").green());
+            }
+            Err(e) => {
+                println!("{}", style("warning").yellow());
+                println!("      Config repair failed: {e}");
+            }
+        }
+    }
 
     println!();
     if any_updated {

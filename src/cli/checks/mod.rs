@@ -15,7 +15,7 @@ use crate::config::Config;
 
 pub use config::{config_exists, config_valid, vault_accessible};
 pub use network::{pi_mcp_connectivity, pi_reachable};
-pub use services::{mac_mcp_running, mcp_config_consistent, pi_service_running};
+pub use services::{fix_mcp_config, mac_mcp_running, mcp_config_consistent, pi_service_running};
 
 /// Result of running a diagnostic check.
 #[derive(Debug, Clone)]

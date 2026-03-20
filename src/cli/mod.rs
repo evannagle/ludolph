@@ -55,7 +55,11 @@ pub enum Command {
         action: PluginAction,
     },
     /// Diagnose Ludolph installation
-    Doctor,
+    Doctor {
+        /// Attempt to automatically fix detected issues
+        #[arg(long)]
+        fix: bool,
+    },
     /// Uninstall Ludolph
     Uninstall {
         /// Uninstall from Mac only

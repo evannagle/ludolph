@@ -5,7 +5,12 @@ use std::process::Command;
 #[cfg(target_os = "macos")]
 use std::fs;
 #[cfg(target_os = "macos")]
+use std::path::PathBuf;
+#[cfg(target_os = "macos")]
 use std::time::Duration;
+
+#[cfg(target_os = "macos")]
+use anyhow::Result;
 
 use super::{CheckContext, CheckResult};
 #[cfg(target_os = "macos")]
@@ -240,6 +245,131 @@ pub fn mcp_config_consistent(_ctx: &CheckContext) -> CheckResult {
     }
 }
 
+// =============================================================================
+// Fix Functions
+// =============================================================================
+
+/// Result of attempting to fix a configuration issue.
+#[derive(Debug, Clone)]
+pub struct FixResult {
+    /// Whether any fixes were applied.
+    pub fixed: bool,
+    /// Description of what was fixed (or why it couldn't be fixed).
+    pub message: String,
+}
+
+impl FixResult {
+    /// Create a result indicating fixes were applied.
+    #[must_use]
+    pub fn fixed(message: impl Into<String>) -> Self {
+        Self {
+            fixed: true,
+            message: message.into(),
+        }
+    }
+
+    /// Create a result indicating no fixes were needed.
+    #[must_use]
+    pub fn no_fix_needed(message: impl Into<String>) -> Self {
+        Self {
+            fixed: false,
+            message: message.into(),
+        }
+    }
+}
+
+/// Attempt to fix MCP configuration issues.
+///
+/// This function repairs:
+/// - Plist port (8201 -> 8202)
+/// - Token mismatch in `~/.mcp.json`
+/// - Missing plist (by returning an error suggesting re-running setup)
+///
+/// Returns a `FixResult` indicating what was fixed.
+#[cfg(target_os = "macos")]
+pub fn fix_mcp_config() -> Result<FixResult> {
+    let home = std::env::var("HOME")?;
+    let plist_path = PathBuf::from(&home).join("Library/LaunchAgents/dev.ludolph.mcp.plist");
+    let mcp_json_path = PathBuf::from(&home).join(".mcp.json");
+    let token_path = ludolph_dir().join("mcp_token");
+
+    let mut fixes: Vec<String> = Vec::new();
+    let mut needs_restart = false;
+
+    // Check if plist exists
+    if !plist_path.exists() {
+        return Ok(FixResult::no_fix_needed(
+            "Plist missing - run `lu setup mcp` to create it",
+        ));
+    }
+
+    // Fix 1: Plist port
+    if let Ok(content) = fs::read_to_string(&plist_path) {
+        if content.contains("<string>8201</string>") && content.contains("<key>PORT</key>") {
+            let fixed_content = content.replace("<string>8201</string>", "<string>8202</string>");
+            fs::write(&plist_path, fixed_content)?;
+            fixes.push("Updated plist port to 8202".to_string());
+            needs_restart = true;
+        }
+    }
+
+    // Fix 2: Token in ~/.mcp.json
+    if token_path.exists() && mcp_json_path.exists() {
+        let canonical_token = fs::read_to_string(&token_path)?.trim().to_string();
+
+        if let Ok(content) = fs::read_to_string(&mcp_json_path) {
+            // Check if CHANNEL_AUTH_TOKEN exists but doesn't match
+            if content.contains("CHANNEL_AUTH_TOKEN") && !content.contains(&canonical_token) {
+                // Parse JSON, update token, write back
+                if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(servers) = json.get_mut("mcpServers") {
+                        if let Some(ludolph) = servers.get_mut("ludolph") {
+                            if let Some(env) = ludolph.get_mut("env") {
+                                if let Some(token) = env.get_mut("CHANNEL_AUTH_TOKEN") {
+                                    *token = serde_json::Value::String(canonical_token);
+
+                                    let updated = serde_json::to_string_pretty(&json)?;
+                                    fs::write(&mcp_json_path, updated)?;
+                                    fixes.push(
+                                        "Updated CHANNEL_AUTH_TOKEN in ~/.mcp.json".to_string(),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Reload launchd service if we made plist changes
+    if needs_restart {
+        let _ = Command::new("launchctl")
+            .args(["unload", plist_path.to_str().unwrap()])
+            .status();
+
+        std::thread::sleep(Duration::from_secs(1));
+
+        let _ = Command::new("launchctl")
+            .args(["load", plist_path.to_str().unwrap()])
+            .status();
+
+        fixes.push("Reloaded launchd service".to_string());
+    }
+
+    if fixes.is_empty() {
+        Ok(FixResult::no_fix_needed("No fixes needed"))
+    } else {
+        Ok(FixResult::fixed(fixes.join(", ")))
+    }
+}
+
+/// Stub for non-macOS platforms.
+#[cfg(not(target_os = "macos"))]
+pub fn fix_mcp_config() -> anyhow::Result<FixResult> {
+    Ok(FixResult::no_fix_needed("MCP fix only runs on macOS"))
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
@@ -249,5 +379,16 @@ mod tests {
         // Token loading depends on home directory
         // Just verify it doesn't panic
         let _ = load_auth_token();
+    }
+
+    #[test]
+    fn fix_result_constructors() {
+        let fixed = FixResult::fixed("test fix");
+        assert!(fixed.fixed);
+        assert_eq!(fixed.message, "test fix");
+
+        let no_fix = FixResult::no_fix_needed("nothing to do");
+        assert!(!no_fix.fixed);
+        assert_eq!(no_fix.message, "nothing to do");
     }
 }
