@@ -26,23 +26,23 @@ fn ludolph_dir() -> std::path::PathBuf {
 }
 
 /// Load auth token from config files.
+///
+/// Tries `channel_token` first, then `mcp_token`. Skips empty files.
 #[cfg(target_os = "macos")]
 fn load_auth_token() -> Option<String> {
     let ludolph_dir = ludolph_dir();
-    let channel_token_file = ludolph_dir.join("channel_token");
-    let mcp_token_file = ludolph_dir.join("mcp_token");
 
-    if channel_token_file.exists() {
-        fs::read_to_string(&channel_token_file)
-            .ok()
-            .map(|s| s.trim().to_string())
-    } else if mcp_token_file.exists() {
-        fs::read_to_string(&mcp_token_file)
-            .ok()
-            .map(|s| s.trim().to_string())
-    } else {
-        None
+    for filename in &["channel_token", "mcp_token"] {
+        let path = ludolph_dir.join(filename);
+        if let Ok(content) = fs::read_to_string(&path) {
+            let trimmed = content.trim().to_string();
+            if !trimmed.is_empty() {
+                return Some(trimmed);
+            }
+        }
     }
+
+    None
 }
 
 /// Test if a health endpoint is responding.
@@ -162,11 +162,60 @@ pub fn pi_service_running(ctx: &CheckContext) -> CheckResult {
     }
 }
 
+/// Check if MCP port is available or held by a healthy process.
+pub fn mac_mcp_port_available(ctx: &CheckContext) -> CheckResult {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = ctx;
+        CheckResult::skip("MCP port check only runs on macOS")
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = ctx;
+
+        // Check if anything is listening on the MCP port
+        let output = Command::new("lsof")
+            .args(["-ti", &format!(":{CHANNEL_PORT}")])
+            .output();
+
+        let Ok(output) = output else {
+            return CheckResult::skip("Could not run lsof to check port");
+        };
+
+        if !output.status.success() || output.stdout.is_empty() {
+            // Nothing listening — port is available
+            return CheckResult::pass(format!("Port {CHANNEL_PORT} available"));
+        }
+
+        // Something is listening — check if health endpoint responds
+        let auth_token = load_auth_token().unwrap_or_default();
+        let mcp_url = format!("http://localhost:{CHANNEL_PORT}/health");
+
+        if test_health(&mcp_url, &auth_token) {
+            CheckResult::pass(format!("Port {CHANNEL_PORT} in use by healthy MCP server"))
+        } else {
+            let pids = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            CheckResult::fail(
+                format!(
+                    "Port {CHANNEL_PORT} held by stale process (PID: {})",
+                    pids.lines().collect::<Vec<_>>().join(", ")
+                ),
+                format!(
+                    "Kill stale process: kill {pids}\n\
+                     Then restart: launchctl kickstart gui/$(id -u)/dev.ludolph.mcp"
+                ),
+                "mcp-port-conflict",
+            )
+        }
+    }
+}
+
 /// Check MCP configuration consistency.
 ///
 /// Validates that:
 /// - Launchd plist uses the correct port (8202)
-/// - Auth token in plist matches `~/.ludolph/mcp_token`
+/// - Auth token in plist matches the canonical token
 /// - Claude Code's `~/.mcp.json` has matching token
 pub fn mcp_config_consistent(_ctx: &CheckContext) -> CheckResult {
     #[cfg(not(target_os = "macos"))]
@@ -181,7 +230,6 @@ pub fn mcp_config_consistent(_ctx: &CheckContext) -> CheckResult {
         let home = std::env::var("HOME").unwrap_or_default();
         let plist_path = PathBuf::from(&home).join("Library/LaunchAgents/dev.ludolph.mcp.plist");
         let mcp_json_path = PathBuf::from(&home).join(".mcp.json");
-        let token_path = ludolph_dir().join("mcp_token");
 
         // Check plist exists
         if !plist_path.exists() {
@@ -216,16 +264,13 @@ pub fn mcp_config_consistent(_ctx: &CheckContext) -> CheckResult {
             );
         }
 
-        // Load canonical token
-        let canonical_token = match fs::read_to_string(&token_path) {
-            Ok(t) => t.trim().to_string(),
-            Err(_) => {
-                return CheckResult::fail(
-                    "No MCP token file found",
-                    "Run installer: ./scripts/install-mcp.sh",
-                    "mcp-token-missing",
-                );
-            }
+        // Load canonical token (checks channel_token first, then mcp_token)
+        let Some(canonical_token) = load_auth_token() else {
+            return CheckResult::fail(
+                "No auth token file found",
+                "Check ~/.ludolph/channel_token or ~/.ludolph/mcp_token",
+                "mcp-token-missing",
+            );
         };
 
         // Check ~/.mcp.json token consistency
@@ -233,7 +278,7 @@ pub fn mcp_config_consistent(_ctx: &CheckContext) -> CheckResult {
             if let Ok(content) = fs::read_to_string(&mcp_json_path) {
                 if content.contains("CHANNEL_AUTH_TOKEN") && !content.contains(&canonical_token) {
                     return CheckResult::fail(
-                        "Token mismatch: ~/.mcp.json has different token than ~/.ludolph/mcp_token",
+                        "Token mismatch: ~/.mcp.json has different token than auth token file",
                         format!("Update CHANNEL_AUTH_TOKEN in ~/.mcp.json to:\n{canonical_token}"),
                         "mcp-token-mismatch",
                     );
@@ -261,6 +306,7 @@ pub struct FixResult {
 impl FixResult {
     /// Create a result indicating fixes were applied.
     #[must_use]
+    #[allow(dead_code)]
     pub fn fixed(message: impl Into<String>) -> Self {
         Self {
             fixed: true,
@@ -291,7 +337,6 @@ pub fn fix_mcp_config() -> Result<FixResult> {
     let home = std::env::var("HOME")?;
     let plist_path = PathBuf::from(&home).join("Library/LaunchAgents/dev.ludolph.mcp.plist");
     let mcp_json_path = PathBuf::from(&home).join(".mcp.json");
-    let token_path = ludolph_dir().join("mcp_token");
 
     let mut fixes: Vec<String> = Vec::new();
     let mut needs_restart = false;
@@ -313,26 +358,24 @@ pub fn fix_mcp_config() -> Result<FixResult> {
         }
     }
 
-    // Fix 2: Token in ~/.mcp.json
-    if token_path.exists() && mcp_json_path.exists() {
-        let canonical_token = fs::read_to_string(&token_path)?.trim().to_string();
+    // Fix 2: Token in ~/.mcp.json (uses load_auth_token for channel_token/mcp_token fallback)
+    if let Some(canonical_token) = load_auth_token() {
+        if mcp_json_path.exists() {
+            if let Ok(content) = fs::read_to_string(&mcp_json_path) {
+                if content.contains("CHANNEL_AUTH_TOKEN") && !content.contains(&canonical_token) {
+                    if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&content) {
+                        if let Some(servers) = json.get_mut("mcpServers") {
+                            if let Some(ludolph) = servers.get_mut("ludolph") {
+                                if let Some(env) = ludolph.get_mut("env") {
+                                    if let Some(token) = env.get_mut("CHANNEL_AUTH_TOKEN") {
+                                        *token = serde_json::Value::String(canonical_token);
 
-        if let Ok(content) = fs::read_to_string(&mcp_json_path) {
-            // Check if CHANNEL_AUTH_TOKEN exists but doesn't match
-            if content.contains("CHANNEL_AUTH_TOKEN") && !content.contains(&canonical_token) {
-                // Parse JSON, update token, write back
-                if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(servers) = json.get_mut("mcpServers") {
-                        if let Some(ludolph) = servers.get_mut("ludolph") {
-                            if let Some(env) = ludolph.get_mut("env") {
-                                if let Some(token) = env.get_mut("CHANNEL_AUTH_TOKEN") {
-                                    *token = serde_json::Value::String(canonical_token);
-
-                                    let updated = serde_json::to_string_pretty(&json)?;
-                                    fs::write(&mcp_json_path, updated)?;
-                                    fixes.push(
-                                        "Updated CHANNEL_AUTH_TOKEN in ~/.mcp.json".to_string(),
-                                    );
+                                        let updated = serde_json::to_string_pretty(&json)?;
+                                        fs::write(&mcp_json_path, updated)?;
+                                        fixes.push(
+                                            "Updated CHANNEL_AUTH_TOKEN in ~/.mcp.json".to_string(),
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -342,7 +385,27 @@ pub fn fix_mcp_config() -> Result<FixResult> {
         }
     }
 
-    // Reload launchd service if we made plist changes
+    // Fix 3: Kill stale process on MCP port
+    let port_output = Command::new("lsof")
+        .args(["-ti", &format!(":{CHANNEL_PORT}")])
+        .output();
+    if let Ok(output) = port_output {
+        if output.status.success() && !output.stdout.is_empty() {
+            // Something is on the port — check if it's healthy
+            let auth_token = load_auth_token().unwrap_or_default();
+            let mcp_url = format!("http://localhost:{CHANNEL_PORT}/health");
+            if !test_health(&mcp_url, &auth_token) {
+                let pids = String::from_utf8_lossy(&output.stdout);
+                for pid in pids.trim().lines() {
+                    let _ = Command::new("kill").arg(pid.trim()).status();
+                }
+                fixes.push(format!("Killed stale process on port {CHANNEL_PORT}"));
+                needs_restart = true;
+            }
+        }
+    }
+
+    // Reload launchd service if we made changes
     if needs_restart {
         let _ = Command::new("launchctl")
             .args(["unload", plist_path.to_str().unwrap()])
@@ -366,6 +429,7 @@ pub fn fix_mcp_config() -> Result<FixResult> {
 
 /// Stub for non-macOS platforms.
 #[cfg(not(target_os = "macos"))]
+#[allow(clippy::unnecessary_wraps)]
 pub fn fix_mcp_config() -> anyhow::Result<FixResult> {
     Ok(FixResult::no_fix_needed("MCP fix only runs on macOS"))
 }

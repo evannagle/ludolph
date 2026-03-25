@@ -41,8 +41,18 @@ jobs:
       - run: cargo check --all-features
 
   clippy:
-    name: Clippy
+    name: Clippy (Linux)
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+      - run: cargo clippy --all-features -- -D warnings
+
+  clippy-macos:
+    name: Clippy (macOS)
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@v1

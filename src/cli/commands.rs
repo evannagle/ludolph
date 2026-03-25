@@ -292,6 +292,19 @@ fn mcp_restart_service() -> Result<()> {
             .join("Library/LaunchAgents/dev.ludolph.mcp.plist");
 
         if plist.exists() {
+            // Kill any stale process holding the MCP port before restarting
+            let port_output = std::process::Command::new("lsof")
+                .args(["-ti", ":8202"])
+                .output();
+            if let Ok(output) = port_output {
+                if output.status.success() && !output.stdout.is_empty() {
+                    let pids = String::from_utf8_lossy(&output.stdout);
+                    for pid in pids.trim().lines() {
+                        let _ = std::process::Command::new("kill").arg(pid.trim()).status();
+                    }
+                }
+            }
+
             let _ = std::process::Command::new("launchctl")
                 .args(["unload", plist.to_str().unwrap()])
                 .status();
@@ -365,8 +378,11 @@ pub async fn doctor(fix: bool) -> ExitCode {
                 has_failures = true;
                 StatusLine::error(message).print();
 
-                // Track if MCP config has issues
-                if *name == "mcp_config_consistent" {
+                // Track if MCP-related checks fail
+                if matches!(
+                    *name,
+                    "mcp_config_consistent" | "mac_mcp_port_available" | "mac_mcp_running"
+                ) {
                     has_mcp_failure = true;
                 }
 
