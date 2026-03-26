@@ -254,8 +254,23 @@ impl Config {
         let path = config_path();
         let contents = std::fs::read_to_string(&path)
             .with_context(|| format!("Failed to read config from {}", path.display()))?;
-        let config: Self =
+        let mut config: Self =
             toml::from_str(&contents).with_context(|| "Failed to parse config.toml")?;
+
+        // If no channel auth token configured, try token files
+        if config.channel.auth_token.is_empty() {
+            let dir = config_dir();
+            for filename in &["channel_token", "mcp_token"] {
+                if let Ok(content) = std::fs::read_to_string(dir.join(filename)) {
+                    let trimmed = content.trim().to_string();
+                    if !trimmed.is_empty() {
+                        config.channel.auth_token = trimmed;
+                        break;
+                    }
+                }
+            }
+        }
+
         Ok(config)
     }
 
