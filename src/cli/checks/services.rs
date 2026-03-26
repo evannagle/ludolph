@@ -14,10 +14,7 @@ use anyhow::Result;
 
 use super::{CheckContext, CheckResult};
 #[cfg(target_os = "macos")]
-use crate::config;
-
-#[cfg(target_os = "macos")]
-const CHANNEL_PORT: u16 = 8202;
+use crate::config::{self, DEFAULT_CHANNEL_PORT};
 
 /// Get the ludolph directory (~/.ludolph).
 #[cfg(target_os = "macos")]
@@ -88,10 +85,12 @@ pub fn mac_mcp_running(ctx: &CheckContext) -> CheckResult {
             );
         };
 
-        let mcp_url = format!("http://localhost:{CHANNEL_PORT}/health");
+        let mcp_url = format!("http://localhost:{DEFAULT_CHANNEL_PORT}/health");
 
         if test_health(&mcp_url, &auth_token) {
-            CheckResult::pass(format!("Mac MCP server healthy (port {CHANNEL_PORT})"))
+            CheckResult::pass(format!(
+                "Mac MCP server healthy (port {DEFAULT_CHANNEL_PORT})"
+            ))
         } else {
             CheckResult::fail(
                 "Mac MCP server not responding",
@@ -176,7 +175,7 @@ pub fn mac_mcp_port_available(ctx: &CheckContext) -> CheckResult {
 
         // Check if anything is listening on the MCP port
         let output = Command::new("lsof")
-            .args(["-ti", &format!(":{CHANNEL_PORT}")])
+            .args(["-ti", &format!(":{DEFAULT_CHANNEL_PORT}")])
             .output();
 
         let Ok(output) = output else {
@@ -185,20 +184,22 @@ pub fn mac_mcp_port_available(ctx: &CheckContext) -> CheckResult {
 
         if !output.status.success() || output.stdout.is_empty() {
             // Nothing listening — port is available
-            return CheckResult::pass(format!("Port {CHANNEL_PORT} available"));
+            return CheckResult::pass(format!("Port {DEFAULT_CHANNEL_PORT} available"));
         }
 
         // Something is listening — check if health endpoint responds
         let auth_token = load_auth_token().unwrap_or_default();
-        let mcp_url = format!("http://localhost:{CHANNEL_PORT}/health");
+        let mcp_url = format!("http://localhost:{DEFAULT_CHANNEL_PORT}/health");
 
         if test_health(&mcp_url, &auth_token) {
-            CheckResult::pass(format!("Port {CHANNEL_PORT} in use by healthy MCP server"))
+            CheckResult::pass(format!(
+                "Port {DEFAULT_CHANNEL_PORT} in use by healthy MCP server"
+            ))
         } else {
             let pids = String::from_utf8_lossy(&output.stdout).trim().to_string();
             CheckResult::fail(
                 format!(
-                    "Port {CHANNEL_PORT} held by stale process (PID: {})",
+                    "Port {DEFAULT_CHANNEL_PORT} held by stale process (PID: {})",
                     pids.lines().collect::<Vec<_>>().join(", ")
                 ),
                 format!(
@@ -387,19 +388,21 @@ pub fn fix_mcp_config() -> Result<FixResult> {
 
     // Fix 3: Kill stale process on MCP port
     let port_output = Command::new("lsof")
-        .args(["-ti", &format!(":{CHANNEL_PORT}")])
+        .args(["-ti", &format!(":{DEFAULT_CHANNEL_PORT}")])
         .output();
     if let Ok(output) = port_output {
         if output.status.success() && !output.stdout.is_empty() {
             // Something is on the port — check if it's healthy
             let auth_token = load_auth_token().unwrap_or_default();
-            let mcp_url = format!("http://localhost:{CHANNEL_PORT}/health");
+            let mcp_url = format!("http://localhost:{DEFAULT_CHANNEL_PORT}/health");
             if !test_health(&mcp_url, &auth_token) {
                 let pids = String::from_utf8_lossy(&output.stdout);
                 for pid in pids.trim().lines() {
                     let _ = Command::new("kill").arg(pid.trim()).status();
                 }
-                fixes.push(format!("Killed stale process on port {CHANNEL_PORT}"));
+                fixes.push(format!(
+                    "Killed stale process on port {DEFAULT_CHANNEL_PORT}"
+                ));
                 needs_restart = true;
             }
         }

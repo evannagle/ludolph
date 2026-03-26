@@ -294,7 +294,7 @@ fn mcp_restart_service() -> Result<()> {
         if plist.exists() {
             // Kill any stale process holding the MCP port before restarting
             let port_output = std::process::Command::new("lsof")
-                .args(["-ti", ":8202"])
+                .args(["-ti", &format!(":{}", crate::config::DEFAULT_CHANNEL_PORT)])
                 .output();
             if let Ok(output) = port_output {
                 if output.status.success() && !output.stdout.is_empty() {

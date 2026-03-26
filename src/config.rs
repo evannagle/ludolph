@@ -104,8 +104,11 @@ pub struct ChannelConfig {
     pub auth_token: String,
 }
 
+/// Default port for the channel API server.
+pub const DEFAULT_CHANNEL_PORT: u16 = 8202;
+
 const fn default_channel_port() -> u16 {
-    8202
+    DEFAULT_CHANNEL_PORT
 }
 
 impl Default for ChannelConfig {
@@ -257,16 +260,13 @@ impl Config {
         let mut config: Self =
             toml::from_str(&contents).with_context(|| "Failed to parse config.toml")?;
 
-        // If no channel auth token configured, try token files
+        // If no channel auth token configured, try token file
         if config.channel.auth_token.is_empty() {
-            let dir = config_dir();
-            for filename in &["channel_token", "mcp_token"] {
-                if let Ok(content) = std::fs::read_to_string(dir.join(filename)) {
-                    let trimmed = content.trim().to_string();
-                    if !trimmed.is_empty() {
-                        config.channel.auth_token = trimmed;
-                        break;
-                    }
+            let token_path = config_dir().join("channel_token");
+            if let Ok(content) = std::fs::read_to_string(&token_path) {
+                let trimmed = content.trim().to_string();
+                if !trimmed.is_empty() {
+                    config.channel.auth_token = trimmed;
                 }
             }
         }

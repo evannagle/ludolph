@@ -15,12 +15,9 @@ use console::style;
 use std::fs;
 
 #[cfg(target_os = "macos")]
-use crate::config;
+use crate::config::{self, DEFAULT_CHANNEL_PORT};
 use crate::config::{Config, PiConfig};
 use crate::ui::{self, Spinner, StatusLine};
-
-#[cfg(target_os = "macos")]
-const CHANNEL_PORT: u16 = 8202;
 
 /// Get the ludolph directory (~/.ludolph).
 #[cfg(target_os = "macos")]
@@ -66,11 +63,14 @@ fn load_auth_token() -> Option<String> {
 #[cfg(target_os = "macos")]
 fn check_mac_mcp(auth_token: &str) -> Result<bool> {
     let spinner = Spinner::new("Checking Mac MCP server...");
-    let mcp_url = format!("http://localhost:{CHANNEL_PORT}/health");
+    let mcp_url = format!("http://localhost:{DEFAULT_CHANNEL_PORT}/health");
 
     if test_health(&mcp_url, auth_token)? {
         spinner.finish();
-        StatusLine::ok(format!("Mac MCP server healthy (port {CHANNEL_PORT})")).print();
+        StatusLine::ok(format!(
+            "Mac MCP server healthy (port {DEFAULT_CHANNEL_PORT})"
+        ))
+        .print();
         Ok(true)
     } else {
         spinner.finish_error();

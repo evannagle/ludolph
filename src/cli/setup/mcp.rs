@@ -21,10 +21,8 @@ use anyhow::{Context, Result};
 #[cfg(target_os = "macos")]
 use console::style;
 
-use crate::config::{self, Config};
+use crate::config::{self, Config, DEFAULT_CHANNEL_PORT};
 use crate::ui::{self, Spinner, StatusLine};
-
-const MCP_PORT: u16 = 8202;
 
 /// Get the ludolph directory (~/.ludolph).
 fn ludolph_dir() -> PathBuf {
@@ -197,7 +195,7 @@ fn write_mcp_json(
                 "args": [mcp_dir.join("mcp_server.py").to_str().unwrap()],
                 "env": {
                     "PI_HOST": pi_host,
-                    "PI_CHANNEL_PORT": MCP_PORT.to_string(),
+                    "PI_CHANNEL_PORT": DEFAULT_CHANNEL_PORT.to_string(),
                     "CHANNEL_AUTH_TOKEN": auth_token,
                     "PYTHONPATH": mcp_dir.to_str().unwrap()
                 }
@@ -293,7 +291,7 @@ fn create_launchd_plist(
         mcp_dir.display(),
         vault_path.display(),
         auth_token,
-        MCP_PORT,
+        DEFAULT_CHANNEL_PORT,
         mcp_dir.display(),
         claude_api_key,
         mcp_dir.display(),
@@ -355,7 +353,7 @@ fn verify_mcp_running(auth_token: &str) -> bool {
 
         let client = reqwest::blocking::Client::new();
         let resp = client
-            .get(format!("http://localhost:{MCP_PORT}/health"))
+            .get(format!("http://localhost:{DEFAULT_CHANNEL_PORT}/health"))
             .header("Authorization", format!("Bearer {auth_token}"))
             .timeout(std::time::Duration::from_secs(5))
             .send();
@@ -498,7 +496,7 @@ fn start_and_verify_service(
     // Verify it's running
     if verify_mcp_running(auth_token) {
         spinner.finish();
-        StatusLine::ok(format!("MCP server running on port {MCP_PORT}")).print();
+        StatusLine::ok(format!("MCP server running on port {DEFAULT_CHANNEL_PORT}")).print();
     } else {
         spinner.finish_error();
         println!();
