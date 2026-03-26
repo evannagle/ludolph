@@ -444,8 +444,47 @@ pub async fn run() -> Result<()> {
 
     // Validate vault or MCP connection
     if let Some(ref mcp) = config.mcp {
-        // Using MCP - vault is on remote Mac
-        StatusLine::ok(format!("MCP: {}", mcp.url)).print();
+        // Test MCP connectivity before reporting status
+        let client = McpClient::from_config(mcp);
+        let status = client.get_status().await;
+
+        if status.connected && !status.using_fallback {
+            StatusLine::ok(format!("MCP: {}", status.endpoint)).print();
+        } else if status.connected && status.using_fallback {
+            StatusLine::ok(format!(
+                "MCP: connected via fallback (primary {} unreachable)",
+                mcp.url
+            ))
+            .print();
+        } else {
+            let reason = match &status.disconnect_reason {
+                Some(DisconnectReason::Unreachable) => "connection refused or timed out",
+                Some(DisconnectReason::AuthFailed) => "authentication failed",
+                Some(DisconnectReason::Error(e)) => e.as_str(),
+                None => "unknown error",
+            };
+            StatusLine::error(format!("MCP: unreachable ({reason})")).print();
+            crate::ui::status::hint("Is the Mac awake? Check `lu doctor` for diagnostics.");
+
+            // Notify first allowed user via Telegram
+            let startup_notify = config
+                .telegram
+                .allowed_users
+                .first()
+                .and_then(|uid| i64::try_from(*uid).ok())
+                .map(ChatId);
+            if let Some(chat_id) = startup_notify {
+                let notify_bot = Bot::new(&config.telegram.bot_token);
+                let msg = format!(
+                    "MCP startup check failed: {reason}\n\
+                     Primary URL: {}",
+                    mcp.url
+                );
+                if let Err(e) = notify_bot.send_message(chat_id, &msg).await {
+                    tracing::warn!("Failed to send MCP startup notification: {e}");
+                }
+            }
+        }
     } else if let Some(ref vault) = config.vault {
         // Using local vault
         if !vault.path.exists() {
