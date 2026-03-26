@@ -39,24 +39,14 @@ fn test_health(url: &str, auth_token: &str) -> Result<bool> {
 
     Ok(resp.is_ok_and(|r| r.status().is_success()))
 }
-/// Load auth token from config files.
+/// Load auth token from `~/.ludolph/channel_token`.
 #[cfg(target_os = "macos")]
 fn load_auth_token() -> Option<String> {
-    let ludolph_dir = ludolph_dir();
-    let channel_token_file = ludolph_dir.join("channel_token");
-    let mcp_token_file = ludolph_dir.join("mcp_token");
-
-    if channel_token_file.exists() {
-        fs::read_to_string(&channel_token_file)
-            .ok()
-            .map(|s| s.trim().to_string())
-    } else if mcp_token_file.exists() {
-        fs::read_to_string(&mcp_token_file)
-            .ok()
-            .map(|s| s.trim().to_string())
-    } else {
-        None
-    }
+    let path = ludolph_dir().join("channel_token");
+    fs::read_to_string(&path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// Check Mac MCP server health.

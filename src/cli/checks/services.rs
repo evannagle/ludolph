@@ -22,24 +22,14 @@ fn ludolph_dir() -> std::path::PathBuf {
     config::config_dir()
 }
 
-/// Load auth token from config files.
-///
-/// Tries `channel_token` first, then `mcp_token`. Skips empty files.
+/// Load auth token from `~/.ludolph/channel_token`.
 #[cfg(target_os = "macos")]
 fn load_auth_token() -> Option<String> {
-    let ludolph_dir = ludolph_dir();
-
-    for filename in &["channel_token", "mcp_token"] {
-        let path = ludolph_dir.join(filename);
-        if let Ok(content) = fs::read_to_string(&path) {
-            let trimmed = content.trim().to_string();
-            if !trimmed.is_empty() {
-                return Some(trimmed);
-            }
-        }
-    }
-
-    None
+    let path = ludolph_dir().join("channel_token");
+    fs::read_to_string(&path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// Test if a health endpoint is responding.
@@ -80,7 +70,7 @@ pub fn mac_mcp_running(ctx: &CheckContext) -> CheckResult {
         let Some(auth_token) = load_auth_token() else {
             return CheckResult::fail(
                 "No MCP auth token found",
-                "Check ~/.ludolph/channel_token or ~/.ludolph/mcp_token",
+                "Run `lu setup mcp` to generate ~/.ludolph/channel_token",
                 "mcp-no-token",
             );
         };
@@ -265,11 +255,11 @@ pub fn mcp_config_consistent(_ctx: &CheckContext) -> CheckResult {
             );
         }
 
-        // Load canonical token (checks channel_token first, then mcp_token)
+        // Load canonical token from channel_token
         let Some(canonical_token) = load_auth_token() else {
             return CheckResult::fail(
                 "No auth token file found",
-                "Check ~/.ludolph/channel_token or ~/.ludolph/mcp_token",
+                "Run `lu setup mcp` to generate ~/.ludolph/channel_token",
                 "mcp-token-missing",
             );
         };
@@ -359,7 +349,7 @@ pub fn fix_mcp_config() -> Result<FixResult> {
         }
     }
 
-    // Fix 2: Token in ~/.mcp.json (uses load_auth_token for channel_token/mcp_token fallback)
+    // Fix 2: Token in ~/.mcp.json
     if let Some(canonical_token) = load_auth_token() {
         if mcp_json_path.exists() {
             if let Ok(content) = fs::read_to_string(&mcp_json_path) {
