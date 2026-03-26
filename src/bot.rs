@@ -542,7 +542,13 @@ pub async fn run() -> Result<()> {
 
     // Spawn SSE event listener if MCP is configured
     if let Some(ref mcp) = mcp_config {
-        spawn_sse_listener(mcp, llm.clone(), channel.clone());
+        let notify_user = config
+            .telegram
+            .allowed_users
+            .first()
+            .and_then(|uid| i64::try_from(*uid).ok())
+            .map(ChatId);
+        spawn_sse_listener(mcp, llm.clone(), channel.clone(), bot.clone(), notify_user);
     }
 
     // Spawn background scheduler task if scheduler is available
@@ -1206,9 +1212,16 @@ async fn handle_mcp_remove(
 ///
 /// This connects to the MCP event stream and processes channel messages,
 /// allowing the bot to respond to messages sent via the Mac's channel system.
-fn spawn_sse_listener(mcp_config: &McpConfig, llm: Llm, channel: Channel) {
+fn spawn_sse_listener(
+    mcp_config: &McpConfig,
+    llm: Llm,
+    channel: Channel,
+    bot: Bot,
+    notify_user: Option<ChatId>,
+) {
     let sse_config = crate::sse_client::SseConfig {
         url: mcp_config.url.clone(),
+        fallback_url: mcp_config.fallback_url.clone(),
         auth_token: mcp_config.auth_token.clone(),
         subscriber_id: "pi_bot".to_string(),
     };
@@ -1218,10 +1231,38 @@ fn spawn_sse_listener(mcp_config: &McpConfig, llm: Llm, channel: Channel) {
     tokio::spawn(async move {
         let (tx, mut rx) = tokio::sync::mpsc::channel(100);
 
+        // Build state-change callback that sends Telegram notifications
+        let on_state_change: Option<crate::sse_client::StateCallback> =
+            notify_user.map(|chat_id| -> crate::sse_client::StateCallback {
+                let bot = bot.clone();
+                Box::new(move |state: crate::sse_client::ConnectionState| {
+                    use crate::sse_client::ConnectionState;
+                    let msg = match state {
+                        ConnectionState::Primary => "MCP connection restored (primary)".to_string(),
+                        ConnectionState::Fallback => {
+                            "MCP using fallback connection. Primary URL unreachable.".to_string()
+                        }
+                        ConnectionState::Disconnected => {
+                            "MCP disconnected. Both primary and fallback URLs unreachable. \
+                             Channel messages won't be processed until connection is restored."
+                                .to_string()
+                        }
+                    };
+
+                    let bot = bot.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = bot.send_message(chat_id, msg).await {
+                            tracing::error!("Failed to send SSE state notification: {}", e);
+                        }
+                    });
+                })
+            });
+
         // Spawn SSE connection (runs forever with reconnection)
         let sse_config_clone = sse_config.clone();
         tokio::spawn(async move {
-            if let Err(e) = crate::sse_client::connect(sse_config_clone, tx).await {
+            if let Err(e) = crate::sse_client::connect(sse_config_clone, tx, on_state_change).await
+            {
                 tracing::error!("SSE client fatal error: {}", e);
             }
         });
