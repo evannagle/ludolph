@@ -18,7 +18,7 @@ mod verify;
 use anyhow::Result;
 use console::style;
 
-use crate::config::Config;
+use crate::config::{Config, IndexTier};
 use crate::ui::{self, Spinner, StatusLine};
 
 pub use credentials::{LlmProvider, collect_credentials};
@@ -159,6 +159,9 @@ pub async fn setup() -> Result<()> {
         StatusLine::ok(format!("Pi: {}@{}", pi.user, pi.host)).print();
     }
 
+    // Phase 2.5: Vault index setup
+    setup_vault_index(&cfg).await?;
+
     // Phase 3: MCP setup (Mac only)
     if !is_running_on_pi() {
         setup_mcp().await?;
@@ -180,6 +183,86 @@ pub async fn setup() -> Result<()> {
             "Commands:\n  lu            Start the Telegram bot\n  lu status     Check service status",
         ),
     );
+
+    Ok(())
+}
+
+/// Run the vault index tier selection and initial indexing step.
+///
+/// Counts markdown files in the vault, prompts the user to choose a tier,
+/// saves the choice to config, and runs the initial index.
+/// On failure, prints a skip status rather than aborting setup.
+async fn setup_vault_index(cfg: &Config) -> Result<()> {
+    let Some(ref vault) = cfg.vault else {
+        return Ok(());
+    };
+
+    let vault_path_str = shellexpand::tilde(&vault.path.to_string_lossy()).to_string();
+    let vault_path = std::path::Path::new(&vault_path_str);
+
+    if !vault_path.exists() {
+        return Ok(());
+    }
+
+    let file_count = walkdir::WalkDir::new(vault_path)
+        .into_iter()
+        .filter_entry(|e| !e.file_name().to_string_lossy().starts_with('.'))
+        .filter_map(Result::ok)
+        .filter(|e| {
+            e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "md")
+        })
+        .count();
+
+    #[allow(clippy::cast_precision_loss)]
+    let est_cost = {
+        let chunks_est = file_count as f64 * 3.0;
+        let input_tokens = chunks_est * 250.0;
+        let output_tokens = chunks_est * 50.0;
+        input_tokens.mul_add(0.25, output_tokens * 1.25) / 1_000_000.0
+    };
+    let est_time_standard = if file_count < 1000 { "~30 seconds" } else { "~2 minutes" };
+    let est_time_deep = if file_count < 1000 { "~30 minutes" } else { "~3 hours" };
+
+    println!();
+    println!("  Vault found: {file_count} files");
+    println!();
+    println!("  How should Lu learn your vault?");
+    println!();
+    println!("    1. Quick    — file map only (free, ~5 seconds)");
+    println!("    2. Standard — chunked index (free, {est_time_standard})");
+    println!("    3. Deep     — chunked + AI summaries (~${est_cost:.0}, {est_time_deep})");
+    println!();
+
+    let tier_choice = ui::prompt::prompt_with_default("Choose [1/2/3]", "2", None)?;
+    let tier = match tier_choice.trim() {
+        "1" => IndexTier::Quick,
+        "3" => IndexTier::Deep,
+        _ => IndexTier::Standard,
+    };
+
+    // Update config with chosen tier and save.
+    let mut updated_cfg = Config::load()?;
+    updated_cfg.index.tier = tier;
+    updated_cfg.save()?;
+
+    // Run initial index.
+    let spinner = Spinner::new(&format!("Indexing vault ({tier})..."));
+    let indexer = crate::index::indexer::Indexer::new(vault_path.to_path_buf(), tier);
+    match indexer.run(false).await {
+        Ok(stats) => {
+            spinner.finish();
+            StatusLine::ok(format!(
+                "{} files indexed, {} chunks",
+                stats.files_indexed, stats.chunks_created,
+            ))
+            .print();
+        }
+        Err(e) => {
+            spinner.finish_error();
+            tracing::error!("Initial indexing failed: {}", e);
+            StatusLine::skip(format!("Indexing failed: {e}. Retry with `lu index`")).print();
+        }
+    }
 
     Ok(())
 }
