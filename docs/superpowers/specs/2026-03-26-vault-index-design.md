@@ -21,16 +21,20 @@ A tiered vault indexing system that chunks and optionally enriches vault content
 
 ## Storage Layout
 
+The index lives inside the vault at `<vault>/.ludolph/index/`. This is invisible to Obsidian (which ignores dotfolders by default) and co-locates the index with its source data — the index survives vault moves and doesn't require a separate path mapping.
+
 ```
-~/.ludolph/index/
-  manifest.json
-  chunks/
-    notes/
-      meeting-2026-03.json
-      chord-theory.json
-    daily/
-      2026-03-26.json
-    ...mirrors vault folder structure...
+<vault>/
+  .ludolph/
+    index/
+      manifest.json
+      chunks/
+        notes/
+          meeting-2026-03.json
+          chord-theory.json
+        daily/
+          2026-03-26.json
+        ...mirrors vault folder structure...
 ```
 
 ### manifest.json
@@ -42,9 +46,16 @@ A tiered vault indexing system that chunks and optionally enriches vault content
   "file_count": 7749,
   "chunk_count": 22341,
   "last_indexed": "2026-03-26T10:00:00Z",
-  "version": 1
+  "version": 1,
+  "folders": {
+    "notes": { "file_count": 342, "chunk_count": 1205 },
+    "daily": { "file_count": 365, "chunk_count": 730 },
+    "projects": { "file_count": 89, "chunk_count": 456 }
+  }
 }
 ```
+
+The `folders` field provides a top-level directory breakdown with file and chunk counts, computed during indexing. This powers the `vault_map()` tool without requiring a runtime directory scan.
 
 ### Chunk File Format
 
@@ -62,7 +73,7 @@ One JSON file per source note, mirroring vault folder structure:
   },
   "chunks": [
     {
-      "id": "chord-theory-001",
+      "id": "chord-theory-0",
       "heading_path": ["Chord Theory", "Tritone Substitutions"],
       "content": "raw chunk text...",
       "summary": "Explains tritone substitution as replacing a dominant chord with one a tritone away...",
@@ -73,11 +84,20 @@ One JSON file per source note, mirroring vault folder structure:
 }
 ```
 
-- `source_hash` enables cheap staleness detection
-- `tier` tracks what processing level was applied
+- `source_hash` enables cheap staleness detection (xxhash of file contents)
+- `tier` tracks what processing level was actually applied (may differ from configured tier if enrichment failed)
+- `id` is `{file_stem}-{position_index}` (e.g., `chord-theory-0`, `chord-theory-1`)
 - Quick tier: manifest only, no chunk files
 - Standard tier: chunks with content, no summary
 - Deep tier: chunks with content + Claude-generated summary
+
+### Edge Cases
+
+- **Files with no headings** — the entire body (after frontmatter) becomes a single chunk with an empty `heading_path`. Size guard still applies if the body exceeds 1000 chars.
+- **Frontmatter-only / empty-body files** — indexed in the manifest file count but produce zero chunks. No chunk file is written.
+- **Non-markdown files** — only `.md` files are indexed, consistent with the existing search tool. All other file types are skipped.
+- **Very large files** (>100KB) — chunked normally but capped at 200 chunks per file. Files exceeding this are partially indexed with a warning logged.
+- **Filename collisions** — if both `notes/foo.md` and `notes/foo/bar.md` exist, the chunk file for `foo.md` is written as `notes/foo.json` and the directory as `notes/foo/`. JSON files and directories can coexist at the filesystem level.
 
 ## Chunking Pipeline
 
@@ -103,6 +123,8 @@ Each chunk is sent to Claude Haiku with:
 
 The response becomes the `summary` field. Batched in groups of 10-20 chunks for throughput.
 
+**Enrichment failure handling:** if a batch fails (API error, rate limit, timeout), the affected chunks are saved without summaries (effectively Standard tier). The chunk file's `tier` field is set to `"standard"` to reflect what was actually applied. Failed chunks are logged and retried on the next `lu index` run (they'll be detected as "Deep tier configured but chunk is Standard tier").
+
 ## CLI: `lu index`
 
 ```
@@ -120,6 +142,8 @@ lu index --status           # show index health
 - **Progress output** — Pi spinner with counter: `[31415] Indexing... 142/7749 files`
 - **Cost confirmation** — Deep tier on large vaults (>100 files) shows estimated cost and prompts: `Deep indexing ~7749 files. Estimated cost: ~$18. Continue? [y/n]`
 - **Resumable** — interrupted runs pick up where they left off (already-indexed files have hash recorded).
+- **Streaming writes** — files are processed and written one at a time, not accumulated in memory. Safe for Pi's limited RAM.
+- **Lock file** — writes `<vault>/.ludolph/index/.lock` while indexing. If the bot's file watcher detects the lock, it queues changes instead of writing. If `lu index` detects the lock, it exits with an error: "Index is locked by another process."
 - **Exit codes** — 0 success, 1 partial failure (logs which files failed).
 
 ## Setup Integration
@@ -149,7 +173,7 @@ How should Lu learn your vault?
 tier = "standard"
 ```
 
-Index path is derived from the existing data directory (`~/.ludolph/index/`), not a separate config value.
+Index path is always `<vault>/.ludolph/index/`, derived from the vault path in config. Not a separate config value.
 
 ## File Watcher
 
@@ -183,10 +207,16 @@ After each batch, manifest file count and last-indexed timestamp are updated.
 Two new Claude tools supplement the existing `read_file`, `search`, and `list_directory`:
 
 **`search_index(query: str, max_results: int)`**
-Searches chunk content and summaries (when available). Returns top N matching chunks with heading paths, source files, and summaries. For Deep tier, also matches against summaries — a search for "how grief functions in narrative" matches chunks whose summary mentions "loss as a narrative device" even if the raw text doesn't contain the word "grief."
+Searches chunk content and summaries (when available). Returns top N matching chunks with heading paths, source files, and summaries.
+
+Search algorithm: regex-based matching (same engine as the existing `search` tool) against both chunk `content` and `summary` fields. Chunks are ranked by: (1) summary match scores higher than content-only match, (2) shorter chunks with matches score higher (higher signal density), (3) position 0 chunks (file intro) get a small boost. Returns chunks sorted by score with source file, heading path, and summary (if available).
+
+For Deep tier, searching against summaries is the key advantage — a search for "how grief functions in narrative" matches chunks whose summary mentions "loss as a narrative device" even if the raw text doesn't contain the word "grief."
+
+**Tier-specific behavior:** Quick tier has no chunks — `search_index` returns an empty result with a message: "Index is at Quick tier (file map only). Run `lu index --tier standard` for chunk search." Claude falls back to the existing `search` tool.
 
 **`vault_map()`**
-Returns the manifest: vault structure, folder hierarchy with file counts, last-indexed time, tier. Gives Claude a bird's-eye view before diving into specific files.
+Returns the manifest contents: vault path, tier, file/chunk counts, last-indexed time, and the `folders` breakdown with per-folder file and chunk counts. Gives Claude a bird's-eye view before diving into specific files.
 
 ### Query Flow
 
@@ -218,6 +248,11 @@ Incremental updates (file watcher) are negligible cost — a few chunks per file
 | `pulldown-cmark` | Markdown heading parsing | Standard Rust markdown parser |
 
 No new heavy dependencies. No vector database. No embedding model.
+
+### Deployment Notes
+
+- **inotify watch limit on Pi:** the `notify` crate uses inotify on Linux. The default per-user watch limit (8192) may be insufficient for large vaults with many subdirectories. If exceeded, `notify` falls back to polling mode automatically. For optimal performance on Pi, users may need to increase `fs.inotify.max_user_watches` via sysctl.
+- **Index loading:** at bot startup, the manifest is loaded into memory for fast `vault_map()` responses. Chunk files are read on-demand during `search_index` calls (not pre-loaded), relying on OS file cache for performance.
 
 ## Testing Strategy
 
