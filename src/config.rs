@@ -33,6 +33,9 @@ pub struct Config {
     /// Scheduler configuration for automated tasks
     #[serde(default)]
     pub scheduler: SchedulerConfig,
+    /// Index configuration for vault file indexing
+    #[serde(default)]
+    pub index: IndexConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -235,6 +238,38 @@ impl Default for SchedulerConfig {
     }
 }
 
+/// Index tier controls how deeply files are processed during indexing.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum IndexTier {
+    Quick,
+    Standard,
+    Deep,
+}
+
+impl Default for IndexTier {
+    fn default() -> Self {
+        Self::Standard
+    }
+}
+
+impl std::fmt::Display for IndexTier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Quick => write!(f, "quick"),
+            Self::Standard => write!(f, "standard"),
+            Self::Deep => write!(f, "deep"),
+        }
+    }
+}
+
+/// Index configuration for vault file indexing.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IndexConfig {
+    #[serde(default)]
+    pub tier: IndexTier,
+}
+
 fn default_model() -> String {
     "claude-sonnet-4-20250514".to_string()
 }
@@ -318,6 +353,7 @@ impl Config {
             memory: MemoryConfig::default(),
             focus: FocusConfig::default(),
             scheduler: SchedulerConfig::default(),
+            index: IndexConfig::default(),
         }
     }
 }

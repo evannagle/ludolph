@@ -5,6 +5,7 @@ mod cli;
 mod config;
 mod event_handler;
 mod focus;
+mod index;
 mod llm;
 mod mcp_client;
 mod memory;

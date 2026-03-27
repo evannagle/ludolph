@@ -44,6 +44,10 @@ open = "5"
 urlencoding = "2"
 cron = "0.12"
 uuid = { version = "1", features = ["v4"] }
+pulldown-cmark = "0.12"
+notify-debouncer-mini = "0.5"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+serde_yaml = "0.9"
 
 [dev-dependencies]
 cargo-husky = { version = "1", default-features = false, features = ["prepush-hook", "run-cargo-check", "run-cargo-clippy", "run-cargo-fmt", "run-cargo-test"] }
