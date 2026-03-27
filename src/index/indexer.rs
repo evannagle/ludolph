@@ -93,9 +93,6 @@ impl Indexer {
     ///
     /// * `rebuild` — when `true`, the existing chunks directory is deleted before
     ///   indexing, forcing every file to be re-processed.
-    ///
-    /// Kept `async` so Task 9 enrichment calls can be added without changing callers.
-    #[allow(clippy::unused_async)]
     pub async fn run(&self, rebuild: bool) -> Result<IndexStats> {
         let _lock = Manifest::acquire_lock(&self.vault_path)?;
 
@@ -114,17 +111,13 @@ impl Indexer {
         }
 
         // Standard / Deep: walk and chunk.
-        self.run_standard_or_deep(&index_dir, &chunks_dir)
+        self.run_standard_or_deep(&index_dir, &chunks_dir).await
     }
 
     /// Re-index only the specified paths (for use by the file watcher).
     ///
     /// Deleted files have their chunk files removed; changed/new files are
     /// re-chunked. The manifest is updated after processing.
-    ///
-    /// The function signature is `async` so that Task 9 can add enrichment
-    /// API calls inside this loop without breaking callers.
-    #[allow(clippy::unused_async)]
     pub async fn run_incremental(&self, changed_paths: &[PathBuf]) -> Result<usize> {
         let _lock = Manifest::acquire_lock(&self.vault_path)?;
 
@@ -149,6 +142,26 @@ impl Indexer {
 
             if !is_markdown(path) {
                 continue;
+            }
+
+            if self.tier == IndexTier::Deep {
+                if let Ok(config) = crate::config::Config::load() {
+                    let mut chunk_file = self.build_chunk_file(path)?;
+                    let enriched = crate::index::enricher::enrich_batch(
+                        &mut chunk_file.chunks,
+                        &config.claude.api_key,
+                    )
+                    .await
+                    .unwrap_or(0);
+
+                    if enriched < chunk_file.chunks.len() {
+                        chunk_file.tier = "standard".to_string();
+                    }
+
+                    chunks_written += chunk_file.chunks.len();
+                    write_chunk_file(&chunk_file, &chunks_dir)?;
+                    continue;
+                }
             }
 
             let n = self.index_file(path, &chunks_dir)?;
@@ -185,7 +198,7 @@ impl Indexer {
     }
 
     /// Standard / Deep tier: incremental walk + chunk files.
-    fn run_standard_or_deep(
+    async fn run_standard_or_deep(
         &self,
         index_dir: &Path,
         chunks_dir: &Path,
@@ -197,6 +210,15 @@ impl Indexer {
         let existing_hashes = load_existing_hashes(chunks_dir);
 
         let mut stats = IndexStats::default();
+
+        // Collect Deep-tier API key once (avoid loading config per file).
+        let deep_api_key: Option<String> = if self.tier == IndexTier::Deep {
+            crate::config::Config::load()
+                .ok()
+                .map(|c| c.claude.api_key)
+        } else {
+            None
+        };
 
         for entry in WalkDir::new(&self.vault_path)
             .follow_links(false)
@@ -225,9 +247,27 @@ impl Indexer {
                 continue;
             }
 
-            let n = self.index_file(path, chunks_dir)?;
-            stats.files_indexed += 1;
-            stats.chunks_created += n;
+            if let Some(api_key) = &deep_api_key {
+                let mut chunk_file = self.build_chunk_file(path)?;
+                let enriched = crate::index::enricher::enrich_batch(
+                    &mut chunk_file.chunks,
+                    api_key,
+                )
+                .await
+                .unwrap_or(0);
+
+                if enriched < chunk_file.chunks.len() {
+                    chunk_file.tier = "standard".to_string();
+                }
+
+                stats.files_indexed += 1;
+                stats.chunks_created += chunk_file.chunks.len();
+                write_chunk_file(&chunk_file, chunks_dir)?;
+            } else {
+                let n = self.index_file(path, chunks_dir)?;
+                stats.files_indexed += 1;
+                stats.chunks_created += n;
+            }
         }
 
         // Remove chunk files for vault files that no longer exist.
@@ -243,10 +283,8 @@ impl Indexer {
     // Private — per-file processing
     // -----------------------------------------------------------------------
 
-    /// Chunk a single markdown file and write its chunk JSON file.
-    ///
-    /// Returns the number of chunks written.
-    fn index_file(&self, path: &Path, chunks_dir: &Path) -> Result<usize> {
+    /// Build a `ChunkFile` for a single markdown file (without writing to disk).
+    fn build_chunk_file(&self, path: &Path) -> Result<ChunkFile> {
         let relative = path
             .strip_prefix(&self.vault_path)
             .context("Path not under vault")?;
@@ -278,28 +316,23 @@ impl Indexer {
             chunks.truncate(MAX_CHUNKS_PER_FILE);
         }
 
-        let chunk_count = chunks.len();
-
-        let chunk_file = ChunkFile {
+        Ok(ChunkFile {
             source: relative.to_string_lossy().to_string(),
             source_hash: hash,
             indexed_at: Utc::now().to_rfc3339(),
             tier: self.tier.to_string(),
             frontmatter,
             chunks,
-        };
+        })
+    }
 
-        let out_path = chunk_file_path(chunks_dir, relative);
-        if let Some(parent) = out_path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create dir {}", parent.display()))?;
-        }
-
-        let json = serde_json::to_string_pretty(&chunk_file)
-            .context("Failed to serialise chunk file")?;
-        std::fs::write(&out_path, json)
-            .with_context(|| format!("Failed to write chunk file {}", out_path.display()))?;
-
+    /// Chunk a single markdown file and write its chunk JSON file.
+    ///
+    /// Returns the number of chunks written.
+    fn index_file(&self, path: &Path, chunks_dir: &Path) -> Result<usize> {
+        let chunk_file = self.build_chunk_file(path)?;
+        let chunk_count = chunk_file.chunks.len();
+        write_chunk_file(&chunk_file, chunks_dir)?;
         Ok(chunk_count)
     }
 
@@ -367,6 +400,23 @@ impl Indexer {
 // ---------------------------------------------------------------------------
 // Free-standing helpers (not `self` methods — pure functions)
 // ---------------------------------------------------------------------------
+
+/// Write a `ChunkFile` to disk under `chunks_dir`, creating parent directories as needed.
+fn write_chunk_file(chunk_file: &ChunkFile, chunks_dir: &Path) -> Result<()> {
+    let relative = Path::new(&chunk_file.source);
+    let out_path = chunk_file_path(chunks_dir, relative);
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create dir {}", parent.display()))?;
+    }
+
+    let json =
+        serde_json::to_string_pretty(chunk_file).context("Failed to serialise chunk file")?;
+    std::fs::write(&out_path, json)
+        .with_context(|| format!("Failed to write chunk file {}", out_path.display()))?;
+
+    Ok(())
+}
 
 /// Compute an xxh3 hex hash of `content`.
 fn hash_content(content: &str) -> String {
