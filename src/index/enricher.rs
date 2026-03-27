@@ -140,7 +140,11 @@ async fn call_haiku(content: &str, api_key: &str) -> Option<String> {
     }
 
     let api_response: ApiResponse = response.json().await.ok()?;
-    api_response.content.into_iter().next().map(|block| block.text)
+    api_response
+        .content
+        .into_iter()
+        .next()
+        .map(|block| block.text)
 }
 
 // ---------------------------------------------------------------------------

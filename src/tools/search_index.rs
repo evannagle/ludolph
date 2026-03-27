@@ -84,7 +84,11 @@ pub fn execute(input: &Value, vault_path: &Path) -> String {
         }
     }
 
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results.truncate(max_results);
 
     if results.is_empty() {
@@ -214,8 +218,14 @@ mod tests {
         let input = json!({ "query": "rust" });
         let result = execute(&input, vault.path());
 
-        assert!(result.contains("notes/hello.md"), "Should include source file");
-        assert!(result.contains("Rust programming"), "Should include content preview");
+        assert!(
+            result.contains("notes/hello.md"),
+            "Should include source file"
+        );
+        assert!(
+            result.contains("Rust programming"),
+            "Should include content preview"
+        );
     }
 
     #[test]
@@ -243,7 +253,11 @@ mod tests {
         fs::create_dir_all(&chunks_dir).unwrap();
 
         // Chunk A: query only in content
-        let cf_a = make_chunk_file("notes/a.md", "Rust is a systems programming language.", None);
+        let cf_a = make_chunk_file(
+            "notes/a.md",
+            "Rust is a systems programming language.",
+            None,
+        );
         write_chunk_file(&chunks_dir, "notes/a.json", &cf_a);
 
         // Chunk B: query in summary (should rank higher)

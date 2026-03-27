@@ -101,7 +101,11 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             cli::update().await?;
             Ok(ExitCode::SUCCESS)
         }
-        Some(Command::Index { tier, rebuild, status }) => {
+        Some(Command::Index {
+            tier,
+            rebuild,
+            status,
+        }) => {
             cli::index_cmd(tier, rebuild, status).await?;
             Ok(ExitCode::SUCCESS)
         }

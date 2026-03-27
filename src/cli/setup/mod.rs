@@ -208,9 +208,7 @@ async fn setup_vault_index(cfg: &Config) -> Result<()> {
         .into_iter()
         .filter_entry(|e| !e.file_name().to_string_lossy().starts_with('.'))
         .filter_map(Result::ok)
-        .filter(|e| {
-            e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "md")
-        })
+        .filter(|e| e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "md"))
         .count();
 
     #[allow(clippy::cast_precision_loss)]
@@ -220,8 +218,16 @@ async fn setup_vault_index(cfg: &Config) -> Result<()> {
         let output_tokens = chunks_est * 50.0;
         input_tokens.mul_add(0.25, output_tokens * 1.25) / 1_000_000.0
     };
-    let est_time_standard = if file_count < 1000 { "~30 seconds" } else { "~2 minutes" };
-    let est_time_deep = if file_count < 1000 { "~30 minutes" } else { "~3 hours" };
+    let est_time_standard = if file_count < 1000 {
+        "~30 seconds"
+    } else {
+        "~2 minutes"
+    };
+    let est_time_deep = if file_count < 1000 {
+        "~30 minutes"
+    } else {
+        "~3 hours"
+    };
 
     println!();
     println!("  Vault found: {file_count} files");

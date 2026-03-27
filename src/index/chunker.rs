@@ -115,9 +115,9 @@ fn format_yaml_value(v: &serde_yaml::Value) -> String {
             .join(", "),
         serde_yaml::Value::Bool(b) => b.to_string(),
         serde_yaml::Value::Number(n) => n.to_string(),
-        serde_yaml::Value::Null
-        | serde_yaml::Value::Mapping(_)
-        | serde_yaml::Value::Tagged(_) => String::new(),
+        serde_yaml::Value::Null | serde_yaml::Value::Mapping(_) | serde_yaml::Value::Tagged(_) => {
+            String::new()
+        }
     }
 }
 
@@ -192,9 +192,7 @@ fn split_on_headings(body: &str) -> Vec<Section> {
             }
             Event::SoftBreak | Event::HardBreak => current_content.push('\n'),
             Event::Start(Tag::Paragraph) => {
-                if !current_content.is_empty()
-                    && !current_content.ends_with('\n')
-                {
+                if !current_content.is_empty() && !current_content.ends_with('\n') {
                     current_content.push('\n');
                 }
             }
@@ -413,8 +411,7 @@ mod tests {
 
     #[test]
     fn frontmatter_not_in_chunks() {
-        let input =
-            "---\ntitle: Hidden\nauthor: Alice\n---\n# Section\nThis is the real content.";
+        let input = "---\ntitle: Hidden\nauthor: Alice\n---\n# Section\nThis is the real content.";
         let chunks = chunk_markdown(input, "note");
 
         for chunk in &chunks {
@@ -454,7 +451,11 @@ mod tests {
         let input = format!("# Alpha\n{body_a}\n\n## Beta\n{body_b}\n\n### Gamma\n{body_c}");
         let chunks = chunk_markdown(&input, "doc");
 
-        assert_eq!(chunks.len(), 3, "three headings should produce three chunks");
+        assert_eq!(
+            chunks.len(),
+            3,
+            "three headings should produce three chunks"
+        );
 
         assert!(
             chunks[0].heading_path.contains(&"Alpha".to_owned()),
@@ -474,7 +475,7 @@ mod tests {
     fn heading_path_tracks_hierarchy() {
         // Each section needs enough content to survive the MIN_CHUNK_SIZE merge guard.
         let intro = "word ".repeat(50); // ~250 chars
-        let body = "text ".repeat(50);  // ~250 chars
+        let body = "text ".repeat(50); // ~250 chars
         let input = format!("# Top\n{intro}\n\n## Sub\n{body}");
         let chunks = chunk_markdown(&input, "doc");
 
@@ -536,10 +537,20 @@ mod tests {
         // Single paragraph larger than MAX_CHUNK_SIZE
         let big = "x".repeat(2500);
         let pieces = hard_split_with_overlap(&big);
-        assert!(pieces.len() >= 3, "should produce multiple hard-split pieces");
+        assert!(
+            pieces.len() >= 3,
+            "should produce multiple hard-split pieces"
+        );
         // Verify overlap: end of piece N should appear at start of piece N+1
         for window in pieces.windows(2) {
-            let prev_tail: String = window[0].chars().rev().take(OVERLAP_SIZE).collect::<String>().chars().rev().collect();
+            let prev_tail: String = window[0]
+                .chars()
+                .rev()
+                .take(OVERLAP_SIZE)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
             assert!(
                 window[1].starts_with(&prev_tail),
                 "overlap must be preserved between consecutive hard-split chunks"
@@ -562,7 +573,10 @@ mod tests {
         // The tiny section should be merged into the following one,
         // so we expect fewer chunks than raw headings.
         assert!(
-            chunks.len() < 2 || chunks.iter().all(|c| c.char_count >= MIN_CHUNK_SIZE || chunks.len() == 1),
+            chunks.len() < 2
+                || chunks
+                    .iter()
+                    .all(|c| c.char_count >= MIN_CHUNK_SIZE || chunks.len() == 1),
             "small sections should be merged; got {} chunks with sizes {:?}",
             chunks.len(),
             chunks.iter().map(|c| c.char_count).collect::<Vec<_>>()
@@ -579,7 +593,11 @@ mod tests {
         let chunks = chunk_markdown(input, "wiki");
 
         assert!(!chunks.is_empty(), "should produce at least one chunk");
-        let combined: String = chunks.iter().map(|c| c.content.as_str()).collect::<Vec<_>>().join(" ");
+        let combined: String = chunks
+            .iter()
+            .map(|c| c.content.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(
             combined.contains("[[My Note]]"),
             "[[My Note]] wikilink must survive chunking; got: {combined}"

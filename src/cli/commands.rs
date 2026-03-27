@@ -679,11 +679,7 @@ fn estimate_deep_cost(file_count: usize) -> f64 {
 
 /// Build or rebuild the vault index.
 #[allow(clippy::too_many_lines)]
-pub async fn index_cmd(
-    tier_override: Option<String>,
-    rebuild: bool,
-    status: bool,
-) -> Result<()> {
+pub async fn index_cmd(tier_override: Option<String>, rebuild: bool, status: bool) -> Result<()> {
     println!();
 
     // Load config and get vault path.

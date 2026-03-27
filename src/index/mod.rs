@@ -6,6 +6,6 @@ pub mod indexer;
 pub mod manifest;
 pub mod watcher;
 
-pub use chunker::{chunk_markdown, parse_frontmatter, Chunk, ParsedDocument};
+pub use chunker::{Chunk, ParsedDocument, chunk_markdown, parse_frontmatter};
 pub use indexer::Indexer;
 pub use manifest::Manifest;

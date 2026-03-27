@@ -123,8 +123,7 @@ impl Indexer {
 
         let index_dir = Manifest::index_dir(&self.vault_path);
         let chunks_dir = Manifest::chunks_dir(&self.vault_path);
-        std::fs::create_dir_all(&chunks_dir)
-            .context("Failed to create chunks directory")?;
+        std::fs::create_dir_all(&chunks_dir).context("Failed to create chunks directory")?;
 
         let mut chunks_written = 0usize;
 
@@ -203,8 +202,7 @@ impl Indexer {
         index_dir: &Path,
         chunks_dir: &Path,
     ) -> Result<IndexStats> {
-        std::fs::create_dir_all(chunks_dir)
-            .context("Failed to create chunks directory")?;
+        std::fs::create_dir_all(chunks_dir).context("Failed to create chunks directory")?;
 
         // Load hashes from existing chunk files so we can skip unchanged files.
         let existing_hashes = load_existing_hashes(chunks_dir);
@@ -213,9 +211,7 @@ impl Indexer {
 
         // Collect Deep-tier API key once (avoid loading config per file).
         let deep_api_key: Option<String> = if self.tier == IndexTier::Deep {
-            crate::config::Config::load()
-                .ok()
-                .map(|c| c.claude.api_key)
+            crate::config::Config::load().ok().map(|c| c.claude.api_key)
         } else {
             None
         };
@@ -249,12 +245,10 @@ impl Indexer {
 
             if let Some(api_key) = &deep_api_key {
                 let mut chunk_file = self.build_chunk_file(path)?;
-                let enriched = crate::index::enricher::enrich_batch(
-                    &mut chunk_file.chunks,
-                    api_key,
-                )
-                .await
-                .unwrap_or(0);
+                let enriched =
+                    crate::index::enricher::enrich_batch(&mut chunk_file.chunks, api_key)
+                        .await
+                        .unwrap_or(0);
 
                 if enriched < chunk_file.chunks.len() {
                     chunk_file.tier = "standard".to_string();
@@ -512,8 +506,7 @@ fn cleanup_removed_files(vault_path: &Path, chunks_dir: &Path) -> Result<usize> 
         .into_iter()
         .filter_map(Result::ok)
         .filter(|e| {
-            e.path().is_file()
-                && e.path().extension().and_then(|x| x.to_str()) == Some("json")
+            e.path().is_file() && e.path().extension().and_then(|x| x.to_str()) == Some("json")
         })
         .map(walkdir::DirEntry::into_path)
         .collect();
@@ -538,9 +531,7 @@ fn cleanup_removed_files(vault_path: &Path, chunks_dir: &Path) -> Result<usize> 
 }
 
 /// Walk the chunks directory and aggregate file / chunk counts per folder.
-fn collect_disk_stats(
-    chunks_dir: &Path,
-) -> Result<(usize, usize, HashMap<String, FolderStats>)> {
+fn collect_disk_stats(chunks_dir: &Path) -> Result<(usize, usize, HashMap<String, FolderStats>)> {
     let mut file_count = 0usize;
     let mut chunk_count = 0usize;
     let mut folders: HashMap<String, FolderStats> = HashMap::new();
@@ -561,9 +552,8 @@ fn collect_disk_stats(
 
         let json = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read chunk file {}", path.display()))?;
-        let cf: ChunkFile =
-            serde_json::from_str(&json)
-                .with_context(|| format!("Failed to parse chunk file {}", path.display()))?;
+        let cf: ChunkFile = serde_json::from_str(&json)
+            .with_context(|| format!("Failed to parse chunk file {}", path.display()))?;
 
         let n_chunks = cf.chunks.len();
         chunk_count += n_chunks;
@@ -698,7 +688,10 @@ mod tests {
             .unwrap();
 
         let chunks_dir = Manifest::chunks_dir(vault.path());
-        assert!(chunks_dir.exists(), "Chunks dir should exist after first run");
+        assert!(
+            chunks_dir.exists(),
+            "Chunks dir should exist after first run"
+        );
 
         // Add a second file, then index.
         write_file(vault.path(), "notes/other.md", "# Other\n\nOther content.");
@@ -735,10 +728,7 @@ mod tests {
         write_file(vault.path(), "notes/hello.md", "# Hello\n\nContent.");
         write_file(vault.path(), "notes/world.md", "# World\n\nMore content.");
 
-        let stats = indexer(&vault, IndexTier::Quick)
-            .run(false)
-            .await
-            .unwrap();
+        let stats = indexer(&vault, IndexTier::Quick).run(false).await.unwrap();
 
         let chunks_dir = Manifest::chunks_dir(vault.path());
         assert!(

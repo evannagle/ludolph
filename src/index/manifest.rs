@@ -103,9 +103,8 @@ impl Manifest {
 
         // Ensure the parent directory exists.
         if let Some(parent) = lock_path.parent() {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!("Failed to create lock dir {}", parent.display())
-            })?;
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create lock dir {}", parent.display()))?;
         }
 
         if lock_path.exists() {
@@ -159,7 +158,10 @@ mod tests {
         let _guard = Manifest::acquire_lock(vault_path).unwrap();
         let second = Manifest::acquire_lock(vault_path);
 
-        assert!(second.is_err(), "Second acquire should fail while lock held");
+        assert!(
+            second.is_err(),
+            "Second acquire should fail while lock held"
+        );
     }
 
     #[test]
@@ -177,7 +179,10 @@ mod tests {
 
         // Should be able to acquire again.
         let second = Manifest::acquire_lock(vault_path);
-        assert!(second.is_ok(), "Should acquire lock after previous guard drops");
+        assert!(
+            second.is_ok(),
+            "Should acquire lock after previous guard drops"
+        );
     }
 
     #[test]
