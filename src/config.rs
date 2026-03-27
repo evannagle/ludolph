@@ -36,6 +36,47 @@ pub struct Config {
     /// Index configuration for vault file indexing
     #[serde(default)]
     pub index: IndexConfig,
+    /// User's timezone (e.g., `Pacific/Honolulu`, `America/New_York`)
+    #[serde(default = "default_timezone")]
+    pub timezone: String,
+}
+
+fn default_timezone() -> String {
+    detect_timezone()
+}
+
+/// Detect the system timezone from environment or system config.
+pub fn detect_timezone() -> String {
+    // Check TZ environment variable first
+    if let Ok(tz) = std::env::var("TZ") {
+        if !tz.is_empty() {
+            return tz;
+        }
+    }
+
+    // macOS: read from /etc/localtime symlink
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(link) = std::fs::read_link("/etc/localtime") {
+            let path = link.to_string_lossy();
+            if let Some(tz) = path.strip_prefix("/var/db/timezone/zoneinfo/") {
+                return tz.to_string();
+            }
+        }
+    }
+
+    // Linux: read /etc/timezone
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(tz) = std::fs::read_to_string("/etc/timezone") {
+            let tz = tz.trim();
+            if !tz.is_empty() {
+                return tz.to_string();
+            }
+        }
+    }
+
+    "UTC".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -354,6 +395,7 @@ impl Config {
             focus: FocusConfig::default(),
             scheduler: SchedulerConfig::default(),
             index: IndexConfig::default(),
+            timezone: detect_timezone(),
         }
     }
 }

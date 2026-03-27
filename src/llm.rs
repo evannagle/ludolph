@@ -42,6 +42,7 @@ pub struct Llm {
     memory: Option<Arc<Memory>>,
     focus: Option<Arc<Focus>>,
     scheduler: Option<Arc<Scheduler>>,
+    timezone: String,
 }
 
 impl Clone for Llm {
@@ -52,6 +53,7 @@ impl Clone for Llm {
             tool_backend: self.tool_backend.clone(),
             memory: self.memory.clone(),
             focus: self.focus.clone(),
+            timezone: self.timezone.clone(),
             scheduler: self.scheduler.clone(),
         }
     }
@@ -121,6 +123,7 @@ impl Llm {
             memory,
             focus,
             scheduler,
+            timezone: config.timezone.clone(),
         })
     }
 
@@ -248,8 +251,10 @@ impl Llm {
         // Use a minimal system prompt to avoid recursion through build_system_prompt
         let system = format!(
             "You are Ludolph, a helpful assistant with access to the user's Obsidian vault at {}. \
+             The user's timezone is {}. \
              Execute the following scheduled task. Be concise in your response.",
-            self.vault_description()
+            self.vault_description(),
+            self.timezone
         );
 
         let messages = vec![
@@ -312,6 +317,9 @@ impl Llm {
         format!(
             "You are Ludolph, a helpful assistant with access to the user's Obsidian vault at {}. \
              You can read files and search the vault to answer questions about their notes.\n\n\
+             TIMEZONE: The user's timezone is {}. When they mention times, interpret as this \
+             timezone. When creating schedules, convert to UTC for cron expressions but confirm \
+             the local time equivalent.\n\n\
              FORMATTING: Your responses go to Telegram. Keep them clean and readable:\n\
              - Plain text only. No markdown syntax (no **, no `, no #).\n\
              - Short paragraphs. Break up walls of text.\n\
@@ -320,6 +328,7 @@ impl Llm {
              - Be concise. Get to the point.\n\
              - If you have multiple questions, ask one at a time.{}{}{}{}",
             self.vault_description(),
+            self.timezone,
             memory_context,
             focus_context,
             schedule_context,
