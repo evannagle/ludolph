@@ -1,7 +1,5 @@
 //! Network-related diagnostic checks.
 
-use std::process::Command;
-
 use super::{CheckContext, CheckResult};
 use crate::ssh;
 
@@ -50,6 +48,7 @@ pub fn pi_reachable(ctx: &CheckContext) -> CheckResult {
 /// Get Mac's IP address, preferring Tailscale, then LAN interfaces.
 #[cfg(target_os = "macos")]
 fn get_mac_ip() -> Option<String> {
+    use std::process::Command;
     // Try Tailscale first
     if let Ok(output) = Command::new("tailscale").args(["ip", "-4"]).output() {
         if output.status.success() {
@@ -93,11 +92,12 @@ pub fn pi_mcp_connectivity(ctx: &CheckContext) -> CheckResult {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = ctx;
-        return CheckResult::skip("Pi MCP connectivity check only runs on macOS");
+        CheckResult::skip("Pi MCP connectivity check only runs on macOS")
     }
 
     #[cfg(target_os = "macos")]
     {
+        use std::process::Command;
         let Some(config) = &ctx.config else {
             return CheckResult::skip("Config not loaded");
         };
