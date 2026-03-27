@@ -20,6 +20,7 @@ from . import (
     directories,
     editing,
     files,
+    index,
     memory,
     meta,
     metadata,
@@ -39,6 +40,7 @@ _CORE_TOOLS = (
     + search.TOOLS
     + metadata.TOOLS
     + editing.TOOLS
+    + index.TOOLS
     + periodic.TOOLS
     + batch.TOOLS
     + tags.TOOLS
@@ -61,6 +63,7 @@ _CORE_HANDLERS = {
     **search.HANDLERS,
     **metadata.HANDLERS,
     **editing.HANDLERS,
+    **index.HANDLERS,
     **periodic.HANDLERS,
     **batch.HANDLERS,
     **tags.HANDLERS,
