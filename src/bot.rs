@@ -423,6 +423,7 @@ async fn process_user_conversation(
     }
 }
 
+#[allow(clippy::cognitive_complexity)]
 pub async fn run() -> Result<()> {
     let config = Config::load()?;
 
@@ -599,6 +600,20 @@ pub async fn run() -> Result<()> {
             mcp_config.clone(),
             config.scheduler.check_interval_secs,
         );
+    }
+
+    // Spawn file watcher for vault index
+    if let Some(ref vault_config) = config.vault {
+        let vault_path = shellexpand::tilde(&vault_config.path.to_string_lossy()).to_string();
+        let vault_path = std::path::PathBuf::from(vault_path);
+        if vault_path.exists() {
+            let tier = config.index.tier;
+            if let Err(e) = crate::index::watcher::spawn_watcher(vault_path, tier).await {
+                tracing::warn!("Failed to start vault file watcher: {}", e);
+            } else {
+                tracing::info!("Vault file watcher started");
+            }
+        }
     }
 
     // Track users currently in setup mode
