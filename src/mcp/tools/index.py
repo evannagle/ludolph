@@ -2,11 +2,26 @@
 
 import json
 import re
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from security import get_vault_path
 
 TOOLS = [
+    {
+        "name": "current_time",
+        "description": (
+            "Get the current date and time in UTC and the user's local timezone. "
+            "Use this when you need to know what time it is, calculate relative times "
+            "(e.g., '5 minutes from now'), or set up schedules."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
     {
         "name": "search_index",
         "description": (
@@ -185,7 +200,50 @@ def _vault_map(args: dict) -> dict:
     return {"content": "\n".join(lines), "error": None}
 
 
+def _current_time(args: dict) -> dict:
+    """Return current time in UTC and detected local timezone."""
+    utc_now = datetime.now(timezone.utc)
+
+    # Try to detect local timezone from system
+    local_tz_name = "UTC"
+    try:
+        import subprocess
+        # macOS
+        link = Path("/etc/localtime").resolve()
+        path_str = str(link)
+        if "/zoneinfo/" in path_str:
+            local_tz_name = path_str.split("/zoneinfo/", 1)[1]
+    except Exception:
+        pass
+
+    if local_tz_name == "UTC":
+        try:
+            # Linux
+            tz_file = Path("/etc/timezone")
+            if tz_file.exists():
+                local_tz_name = tz_file.read_text().strip()
+        except Exception:
+            pass
+
+    try:
+        local_tz = ZoneInfo(local_tz_name)
+        local_now = utc_now.astimezone(local_tz)
+    except Exception:
+        local_now = utc_now
+        local_tz_name = "UTC"
+
+    lines = [
+        f"UTC: {utc_now.strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Local ({local_tz_name}): {local_now.strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Day: {local_now.strftime('%A')}",
+        f"UTC offset: {local_now.strftime('%z')}",
+    ]
+
+    return {"content": "\n".join(lines), "error": None}
+
+
 HANDLERS = {
+    "current_time": _current_time,
     "search_index": _search_index,
     "vault_map": _vault_map,
 }
