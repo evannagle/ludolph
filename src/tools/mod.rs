@@ -5,6 +5,8 @@ mod list_dir;
 mod read_file;
 pub mod schedule;
 mod search;
+mod search_index;
+mod vault_map;
 
 use serde_json::Value;
 use std::fmt::Write as _;
@@ -21,6 +23,8 @@ pub fn get_tool_definitions() -> Vec<Tool> {
         read_file::definition(),
         list_dir::definition(),
         search::definition(),
+        search_index::definition(),
+        vault_map::definition(),
         append_file::definition(),
         create_file::definition(),
         complete_setup::definition(),
@@ -51,6 +55,8 @@ pub async fn execute_tool_local(name: &str, input: &Value, vault_path: &std::pat
         "read_file" => read_file::execute(input, vault_path),
         "list_dir" => list_dir::execute(input, vault_path),
         "search" => search::execute(input, vault_path),
+        "search_index" => search_index::execute(input, vault_path),
+        "vault_map" => vault_map::execute(input, vault_path),
         "append_file" => append_file::execute(input, vault_path),
         "create_file" => create_file::execute(input, vault_path),
         "complete_setup" => complete_setup::execute(input, vault_path),
