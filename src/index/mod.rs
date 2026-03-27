@@ -7,3 +7,4 @@ pub mod manifest;
 pub mod watcher;
 
 pub use chunker::{chunk_markdown, parse_frontmatter, Chunk, ParsedDocument};
+pub use manifest::Manifest;
