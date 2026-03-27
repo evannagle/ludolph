@@ -1,7 +1,7 @@
 //! CLI commands.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::Result;
@@ -9,7 +9,9 @@ use console::style;
 use walkdir::WalkDir;
 
 use super::checks::{self, CheckResult};
-use crate::config::{self, Config};
+use crate::config::{self, Config, IndexTier};
+use crate::index::indexer::Indexer;
+use crate::index::manifest::Manifest;
 use crate::ssh;
 use crate::ui::{self, Spinner, StatusLine, prompt};
 
@@ -623,6 +625,185 @@ fn uninstall_pi_internal() -> Result<()> {
 
     spinner.finish();
     StatusLine::ok(format!("Pi uninstalled ({})", pi.host)).print();
+    Ok(())
+}
+
+// =============================================================================
+// Index Command
+// =============================================================================
+
+/// Count markdown files in a vault path, excluding hidden directories.
+fn count_vault_files(vault_path: &Path) -> usize {
+    WalkDir::new(vault_path)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            if e.depth() == 0 {
+                return true;
+            }
+            let name = e.file_name().to_string_lossy();
+            !name.starts_with('.')
+        })
+        .filter_map(Result::ok)
+        .filter(|e| {
+            e.path().is_file()
+                && e.path()
+                    .extension()
+                    .and_then(|x| x.to_str())
+                    .is_some_and(|x| x.eq_ignore_ascii_case("md"))
+        })
+        .count()
+}
+
+/// Estimate the cost of a Deep tier indexing run.
+///
+/// Assumes ~3 chunks/file avg, ~250 input tokens/chunk.
+/// Haiku pricing: $0.25/M input, $1.25/M output.
+#[allow(clippy::cast_precision_loss)]
+fn estimate_deep_cost(file_count: usize) -> f64 {
+    const AVG_CHUNKS_PER_FILE: usize = 3;
+    const INPUT_TOKENS_PER_CHUNK: usize = 250;
+    const OUTPUT_TOKENS_PER_CHUNK: usize = 50;
+    const INPUT_PRICE_PER_MILLION: f64 = 0.25;
+    const OUTPUT_PRICE_PER_MILLION: f64 = 1.25;
+
+    let total_chunks = file_count * AVG_CHUNKS_PER_FILE;
+    let total_input = (total_chunks * INPUT_TOKENS_PER_CHUNK) as f64;
+    let total_output = (total_chunks * OUTPUT_TOKENS_PER_CHUNK) as f64;
+
+    (total_input / 1_000_000.0).mul_add(
+        INPUT_PRICE_PER_MILLION,
+        (total_output / 1_000_000.0) * OUTPUT_PRICE_PER_MILLION,
+    )
+}
+
+/// Build or rebuild the vault index.
+#[allow(clippy::too_many_lines)]
+pub async fn index_cmd(
+    tier_override: Option<String>,
+    rebuild: bool,
+    status: bool,
+) -> Result<()> {
+    println!();
+
+    // Load config and get vault path.
+    let Ok(config) = Config::load() else {
+        ui::status::print_error("No config found", Some("Run `lu setup` first."));
+        return Ok(());
+    };
+
+    let Some(vault_config) = config.vault.as_ref() else {
+        ui::status::print_error(
+            "No vault configured",
+            Some("Run `lu setup` to configure your vault path."),
+        );
+        return Ok(());
+    };
+
+    // Expand tilde in vault path.
+    let vault_path_str = vault_config.path.to_string_lossy();
+    let expanded = shellexpand::tilde(vault_path_str.as_ref());
+    let vault_path = PathBuf::from(expanded.as_ref());
+
+    if !vault_path.exists() {
+        ui::status::print_error(
+            &format!("Vault path not found: {}", vault_path.display()),
+            Some("Check your config.toml vault.path setting."),
+        );
+        return Ok(());
+    }
+
+    // --status: show manifest info and exit.
+    if status {
+        let index_dir = Manifest::index_dir(&vault_path);
+        if let Ok(manifest) = Manifest::load(&index_dir) {
+            StatusLine::ok(format!("Tier:         {}", manifest.tier)).print();
+            StatusLine::ok(format!("Files:        {}", manifest.file_count)).print();
+            StatusLine::ok(format!("Chunks:       {}", manifest.chunk_count)).print();
+            StatusLine::ok(format!("Last indexed: {}", manifest.last_indexed)).print();
+            if !manifest.folders.is_empty() {
+                println!();
+                println!("  Folders:");
+                let mut folder_list: Vec<_> = manifest.folders.iter().collect();
+                folder_list.sort_by_key(|(k, _)| k.as_str());
+                for (folder, folder_stats) in folder_list {
+                    println!(
+                        "    {:30} {} files, {} chunks",
+                        folder, folder_stats.file_count, folder_stats.chunk_count
+                    );
+                }
+            }
+        } else {
+            StatusLine::skip("No index found").print();
+            ui::status::hint("Run `lu index` to build the index.");
+        }
+        println!();
+        return Ok(());
+    }
+
+    // Parse tier from override or fall back to config default.
+    let tier = match tier_override.as_deref() {
+        Some("quick") => IndexTier::Quick,
+        Some("standard") => IndexTier::Standard,
+        Some("deep") => IndexTier::Deep,
+        Some(other) => {
+            ui::status::print_error(
+                &format!("Unknown tier: '{other}'"),
+                Some("Valid tiers: quick, standard, deep"),
+            );
+            return Ok(());
+        }
+        None => config.index.tier,
+    };
+
+    // For Deep tier on >100 files, show cost estimate and confirm.
+    if tier == IndexTier::Deep {
+        let file_count = count_vault_files(&vault_path);
+        if file_count > 100 {
+            let cost = estimate_deep_cost(file_count);
+            println!(
+                "  {} Deep tier on {} files — estimated cost: ${:.4}",
+                style("Note:").yellow(),
+                file_count,
+                cost
+            );
+            println!();
+            if !prompt::confirm("Continue?")? {
+                println!();
+                StatusLine::skip("Index cancelled").print();
+                println!();
+                return Ok(());
+            }
+            println!();
+        }
+    }
+
+    let action = if rebuild { "Rebuilding" } else { "Indexing" };
+    let spinner = Spinner::new(&format!("{action} vault ({tier})..."));
+
+    match Indexer::new(vault_path, tier).run(rebuild).await {
+        Ok(run_stats) => {
+            spinner.finish();
+            StatusLine::ok(format!(
+                "Indexed {} files, {} chunks ({} skipped)",
+                run_stats.files_indexed, run_stats.chunks_created, run_stats.files_skipped
+            ))
+            .print();
+            if run_stats.files_removed > 0 {
+                StatusLine::ok(format!(
+                    "Removed {} stale chunk files",
+                    run_stats.files_removed
+                ))
+                .print();
+            }
+        }
+        Err(e) => {
+            spinner.finish_error();
+            anyhow::bail!("Indexing failed: {e}");
+        }
+    }
+
+    println!();
     Ok(())
 }
 

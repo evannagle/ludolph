@@ -42,6 +42,7 @@ async fn main() -> ExitCode {
     }
 }
 
+#[allow(clippy::cognitive_complexity)]
 async fn run(cli: Cli) -> Result<ExitCode> {
     match cli.command {
         Some(Command::Check) => Ok(cli::check()),
@@ -98,6 +99,10 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         }
         Some(Command::Update) => {
             cli::update().await?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(Command::Index { tier, rebuild, status }) => {
+            cli::index_cmd(tier, rebuild, status).await?;
             Ok(ExitCode::SUCCESS)
         }
         None => {

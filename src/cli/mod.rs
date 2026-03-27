@@ -8,7 +8,8 @@ mod setup;
 use clap::{Parser, Subcommand};
 
 pub use commands::{
-    check, config_cmd, doctor, mcp_restart, mcp_update, mcp_version, pi, uninstall, update,
+    check, config_cmd, doctor, index_cmd, mcp_restart, mcp_update, mcp_version, pi, uninstall,
+    update,
 };
 pub use plugin::{
     plugin_check, plugin_create, plugin_disable, plugin_enable, plugin_install, plugin_list,
@@ -77,6 +78,20 @@ pub enum Command {
     },
     /// Update Lu and MCP to latest version
     Update,
+    /// Build or rebuild the vault index
+    Index {
+        /// Index tier: quick, standard, or deep
+        #[arg(long)]
+        tier: Option<String>,
+
+        /// Full rebuild, ignoring existing index
+        #[arg(long)]
+        rebuild: bool,
+
+        /// Show index health status
+        #[arg(long)]
+        status: bool,
+    },
 }
 
 #[derive(Subcommand)]
