@@ -6,7 +6,7 @@
 
 **Architecture:** Markdown files are chunked (header-aware splitting), optionally enriched with Claude summaries, and stored as JSON in `<vault>/.ludolph/index/`. A file watcher in the bot process keeps the index fresh. Two new Claude tools (`search_index`, `vault_map`) let Lu query the index during conversations.
 
-**Tech Stack:** Rust 2024, pulldown-cmark (markdown parsing), notify (file watching), xxhash (file hashing), serde_json (chunk storage). Claude Haiku for Deep tier enrichment via existing reqwest/API client.
+**Tech Stack:** Rust 2024, pulldown-cmark (markdown parsing), notify (file watching), xxhash (file hashing), serde_json (chunk storage), serde_yaml (frontmatter parsing). Claude Haiku for Deep tier enrichment via existing reqwest/API client.
 
 **Spec:** `docs/superpowers/specs/2026-03-26-vault-index-design.md`
 
@@ -37,7 +37,7 @@
 | `src/cli/setup/mod.rs` | Add index tier selection step after vault path configuration. |
 | `src/tools/mod.rs` | Register `search_index` and `vault_map` tools. |
 | `src/bot.rs` | Spawn file watcher on startup. |
-| `Cargo.toml` | Add `pulldown-cmark`, `notify-debouncer-mini`, `xxhash-rust` dependencies. |
+| `Cargo.toml` | Add `pulldown-cmark`, `notify-debouncer-mini`, `xxhash-rust`, `serde_yaml` dependencies. |
 
 ---
 
@@ -55,13 +55,14 @@ Add under `[dependencies]`:
 pulldown-cmark = "0.12"
 notify-debouncer-mini = "0.5"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+serde_yaml = "0.9"
 ```
 
 - [ ] **Step 2: Define IndexConfig in config.rs**
 
 Add after the existing `SchedulerConfig` struct:
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum IndexTier {
     Quick,
@@ -190,7 +191,6 @@ Expected: FAIL — function not defined.
 - [ ] **Step 3: Implement frontmatter parsing**
 
 ```rust
-use serde_json::Value;
 use std::collections::HashMap;
 
 pub struct ParsedDocument {
@@ -212,16 +212,14 @@ pub fn parse_frontmatter(content: &str) -> ParsedDocument {
         let yaml_block = &after_first[..end];
         let body = after_first[end + 4..].trim_start().to_string();
 
-        let mut metadata = HashMap::new();
-        for line in yaml_block.lines() {
-            if let Some((key, value)) = line.split_once(':') {
-                let key = key.trim().to_string();
-                let value = value.trim().to_string();
-                if !key.is_empty() {
-                    metadata.insert(key, value);
-                }
-            }
-        }
+        // Use serde_yaml for robust frontmatter parsing
+        let metadata = match serde_yaml::from_str::<HashMap<String, serde_yaml::Value>>(yaml_block) {
+            Ok(map) => map
+                .into_iter()
+                .map(|(k, v)| (k, format_yaml_value(&v)))
+                .collect(),
+            Err(_) => HashMap::new(),
+        };
 
         ParsedDocument { metadata, body }
     } else {
@@ -229,6 +227,17 @@ pub fn parse_frontmatter(content: &str) -> ParsedDocument {
             metadata: HashMap::new(),
             body: content.to_string(),
         }
+    }
+}
+
+fn format_yaml_value(v: &serde_yaml::Value) -> String {
+    match v {
+        serde_yaml::Value::String(s) => s.clone(),
+        serde_yaml::Value::Sequence(seq) => {
+            let items: Vec<String> = seq.iter().map(format_yaml_value).collect();
+            items.join(", ")
+        }
+        other => format!("{other:?}"),
     }
 }
 ```
@@ -716,6 +725,8 @@ impl From<Chunk> for StoredChunk {
     }
 }
 
+const MAX_CHUNKS_PER_FILE: usize = 200;
+
 pub struct IndexStats {
     pub files_indexed: usize,
     pub files_skipped: usize,
@@ -822,7 +833,13 @@ impl Indexer {
                 .unwrap_or_default();
 
             let parsed = crate::index::chunker::parse_frontmatter(&content);
-            let chunks = chunk_markdown(&content, &file_stem);
+            let mut chunks = chunk_markdown(&content, &file_stem);
+
+            // Large file cap: max 200 chunks per file
+            if chunks.len() > MAX_CHUNKS_PER_FILE {
+                tracing::warn!("File {} exceeds chunk limit, capping at {}", relative, MAX_CHUNKS_PER_FILE);
+                chunks.truncate(MAX_CHUNKS_PER_FILE);
+            }
 
             let chunk_file = ChunkFile {
                 source: relative.clone(),
@@ -855,7 +872,7 @@ impl Indexer {
 
         // Update manifest
         manifest.file_count = stats.files_indexed + stats.files_skipped;
-        manifest.chunk_count = stats.chunks_created; // TODO: include existing chunks from skipped files
+        manifest.chunk_count = self.count_total_chunks(&chunks_dir);
         manifest.tier = self.tier.clone();
         manifest.last_indexed = chrono::Utc::now().to_rfc3339();
         manifest.folders = folder_stats;
@@ -927,6 +944,84 @@ impl Indexer {
             }
         }
         hashes
+    }
+
+    /// Re-index only specific changed files (used by file watcher).
+    pub async fn run_incremental(&self, changed_paths: &[PathBuf]) -> Result<usize> {
+        let chunks_dir = Manifest::chunks_dir(&self.vault_path);
+        let _lock = Manifest::acquire_lock(&self.vault_path)?;
+        let mut count = 0;
+
+        for path in changed_paths {
+            if !path.is_file() {
+                // File was deleted — remove its chunk file
+                if let Ok(relative) = path.strip_prefix(&self.vault_path) {
+                    let chunk_path = self.chunk_file_path(&chunks_dir, &relative.to_string_lossy());
+                    if chunk_path.exists() {
+                        std::fs::remove_file(&chunk_path)?;
+                        count += 1;
+                    }
+                }
+                continue;
+            }
+
+            let Ok(relative) = path.strip_prefix(&self.vault_path) else { continue };
+            let relative_str = relative.to_string_lossy().to_string();
+            let Ok(content) = std::fs::read_to_string(path) else { continue };
+
+            let file_stem = path.file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            let parsed = crate::index::chunker::parse_frontmatter(&content);
+            let mut chunks = chunk_markdown(&content, &file_stem);
+
+            // Large file cap: max 200 chunks per file
+            if chunks.len() > MAX_CHUNKS_PER_FILE {
+                tracing::warn!("File {} exceeds chunk limit, capping at {}", relative_str, MAX_CHUNKS_PER_FILE);
+                chunks.truncate(MAX_CHUNKS_PER_FILE);
+            }
+
+            let chunk_file = ChunkFile {
+                source: relative_str,
+                source_hash: self.hash_content(&content),
+                indexed_at: chrono::Utc::now().to_rfc3339(),
+                tier: self.tier.to_string(),
+                frontmatter: parsed.metadata,
+                chunks: chunks.into_iter().map(StoredChunk::from).collect(),
+            };
+
+            let chunk_path = self.chunk_file_path(&chunks_dir, &chunk_file.source);
+            if let Some(parent) = chunk_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&chunk_path, serde_json::to_string_pretty(&chunk_file)?)?;
+            count += 1;
+        }
+
+        // Update manifest
+        let index_dir = Manifest::index_dir(&self.vault_path);
+        if let Ok(mut manifest) = Manifest::load(&index_dir) {
+            manifest.chunk_count = self.count_total_chunks(&chunks_dir);
+            manifest.last_indexed = chrono::Utc::now().to_rfc3339();
+            manifest.save(&index_dir)?;
+        }
+
+        Ok(count)
+    }
+
+    fn count_total_chunks(&self, chunks_dir: &Path) -> usize {
+        if !chunks_dir.exists() {
+            return 0;
+        }
+        WalkDir::new(chunks_dir)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "json"))
+            .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+            .filter_map(|c| serde_json::from_str::<ChunkFile>(&c).ok())
+            .map(|f| f.chunks.len())
+            .sum()
     }
 
     fn cleanup_removed_files(&self, chunks_dir: &Path) -> Result<usize> {
@@ -1032,11 +1127,10 @@ pub async fn index_cmd(
     status: bool,
 ) -> Result<()> {
     let config = Config::load()?;
-    let vault_path = config.vault.as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Vault not configured. Run `lu setup` first."))?
-        .path.clone();
+    let vault_config = config.vault.as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Vault not configured. Run `lu setup` first."))?;
 
-    let vault_path = shellexpand::tilde(&vault_path).to_string();
+    let vault_path = shellexpand::tilde(&vault_config.path).to_string();
     let vault_path = std::path::Path::new(&vault_path);
 
     if !vault_path.exists() {
@@ -1118,6 +1212,10 @@ fn show_index_status(index_dir: &Path, vault_path: &Path) -> Result<()> {
 fn count_vault_files(vault_path: &Path) -> usize {
     walkdir::WalkDir::new(vault_path)
         .into_iter()
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            !name.starts_with('.')
+        })
         .filter_map(Result::ok)
         .filter(|e| e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "md"))
         .count()
@@ -1366,8 +1464,9 @@ pub fn execute(input: &Value, vault_path: &Path) -> String {
         if let Some(ref summary) = item.chunk.summary {
             output.push_str(&format!("Summary: {summary}\n"));
         }
-        let preview = if item.chunk.content.len() > 300 {
-            format!("{}...", &item.chunk.content[..300])
+        let preview = if item.chunk.content.chars().count() > 300 {
+            let truncated: String = item.chunk.content.chars().take(300).collect();
+            format!("{truncated}...")
         } else {
             item.chunk.content.clone()
         };
@@ -1532,7 +1631,7 @@ println!("    2. Standard — chunked index (free, {est_time_standard})");
 println!("    3. Deep     — chunked + AI summaries (~${est_cost:.0}, {est_time_deep})");
 println!();
 
-let tier_choice = ui::prompt::prompt_with_default("Choose [1/2/3]", "2")?;
+let tier_choice = ui::prompt::prompt_with_default("Choose [1/2/3]", "2", None)?;
 let tier = match tier_choice.trim() {
     "1" => IndexTier::Quick,
     "3" => IndexTier::Deep,
@@ -1703,14 +1802,12 @@ pub async fn spawn_watcher(
 
             tracing::debug!("File watcher: {} files changed, re-indexing", changed_paths.len());
 
-            let indexer = Indexer::new(&vault, tier.clone());
-            match indexer.run(false).await {
-                Ok(stats) => {
-                    if stats.files_indexed > 0 || stats.files_removed > 0 {
-                        tracing::info!(
-                            "Watcher re-indexed: {} files updated, {} removed",
-                            stats.files_indexed, stats.files_removed
-                        );
+            // Re-index only the changed files, not the entire vault
+            let indexer = Indexer::new(&vault, tier);
+            match indexer.run_incremental(&changed_paths).await {
+                Ok(count) => {
+                    if count > 0 {
+                        tracing::info!("Watcher re-indexed {} files", count);
                     }
                 }
                 Err(e) => {
@@ -1828,47 +1925,67 @@ struct ContentBlock {
     text: String,
 }
 
+/// Enrich chunks in concurrent batches of BATCH_SIZE.
+/// Returns count of successfully enriched chunks.
 pub async fn enrich_batch(
     chunks: &mut [StoredChunk],
     api_key: &str,
 ) -> Result<usize> {
+    const BATCH_SIZE: usize = 10;
     let client = reqwest::Client::new();
     let mut enriched = 0;
 
-    for chunk in chunks.iter_mut() {
-        let prompt = build_enrichment_prompt(&chunk.content);
+    for batch in chunks.chunks_mut(BATCH_SIZE) {
+        let futures: Vec<_> = batch
+            .iter()
+            .map(|chunk| {
+                let client = client.clone();
+                let api_key = api_key.to_string();
+                let prompt = build_enrichment_prompt(&chunk.content);
+                let chunk_id = chunk.id.clone();
 
-        let request = ApiRequest {
-            model: "claude-haiku-4-5-20251001".to_string(),
-            max_tokens: 100,
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: prompt,
-            }],
-        };
+                async move {
+                    let request = ApiRequest {
+                        model: "claude-haiku-4-5-20251001".to_string(),
+                        max_tokens: 100,
+                        messages: vec![Message {
+                            role: "user".to_string(),
+                            content: prompt,
+                        }],
+                    };
 
-        match client
-            .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .json(&request)
-            .send()
-            .await
-        {
-            Ok(response) => {
-                if let Ok(api_response) = response.json::<ApiResponse>().await {
-                    if let Some(block) = api_response.content.first() {
-                        chunk.summary = Some(block.text.clone());
-                        enriched += 1;
+                    match client
+                        .post("https://api.anthropic.com/v1/messages")
+                        .header("x-api-key", &api_key)
+                        .header("anthropic-version", "2023-06-01")
+                        .header("content-type", "application/json")
+                        .json(&request)
+                        .send()
+                        .await
+                    {
+                        Ok(response) => {
+                            if let Ok(api_response) = response.json::<ApiResponse>().await {
+                                api_response.content.first().map(|b| b.text.clone())
+                            } else {
+                                tracing::warn!("Enrichment failed for chunk {chunk_id}: bad response");
+                                None
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("Enrichment failed for chunk {chunk_id}: {e}");
+                            None
+                        }
                     }
-                } else {
-                    tracing::warn!("Enrichment failed for chunk {}: bad response", chunk.id);
                 }
-            }
-            Err(e) => {
-                tracing::warn!("Enrichment failed for chunk {}: {}", chunk.id, e);
-                // Chunk saved without summary (effectively Standard tier)
+            })
+            .collect();
+
+        let results = futures::future::join_all(futures).await;
+
+        for (chunk, result) in batch.iter_mut().zip(results) {
+            if let Some(summary) = result {
+                chunk.summary = Some(summary);
+                enriched += 1;
             }
         }
     }
