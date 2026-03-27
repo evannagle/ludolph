@@ -63,12 +63,38 @@ Install and restart service:
 ssh pi "chmod +x ~/.ludolph/bin/lu.new && mv ~/.ludolph/bin/lu.new ~/.ludolph/bin/lu && systemctl --user restart ludolph.service"
 ```
 
-Wait and verify:
+### Step 2b: Pi Smoke Tests
+
+Run these checks after install. If ANY fails, stop and report the failure.
+
+**Version check:**
 ```bash
 sleep 3
 PI_VERSION=$(ssh pi "~/.ludolph/bin/lu --version 2>/dev/null || echo 'FAILED'")
 echo "Pi version: ${PI_VERSION}"
 ```
+If `FAILED` or version doesn't contain the expected release number, abort: "Pi binary failed to run. Check `ssh pi '~/.ludolph/bin/lu --version'`"
+
+**Service check:**
+```bash
+PI_SERVICE=$(ssh pi "systemctl --user is-active ludolph.service 2>/dev/null || echo 'FAILED'")
+echo "Pi service: ${PI_SERVICE}"
+```
+If not `active`, abort: "Pi service not running. Check `ssh pi 'journalctl --user -u ludolph.service -n 50'`"
+
+**Doctor check:**
+```bash
+ssh pi "~/.ludolph/bin/lu doctor 2>&1"
+```
+Run `lu doctor` on Pi. If exit code is non-zero or output contains `[•!!]`, report which checks failed but continue (doctor failures may be pre-existing).
+
+**Index command check (new feature gate):**
+```bash
+ssh pi "~/.ludolph/bin/lu index --status 2>&1"
+```
+Verify the command runs without error. This confirms the new index module and its dependencies (pulldown-cmark, notify, xxhash, serde_yaml) are working on ARM. If it fails, abort: "lu index command failed on Pi — new dependencies may have ARM build issues."
+
+All Pi smoke tests passed? Print: "Pi smoke tests passed (version, service, doctor, index)"
 
 ### Step 3: Download and Install MCP on Mac
 
@@ -95,6 +121,32 @@ Verify MCP version file:
 MCP_VERSION=$(cat ${MCP_DIR}/VERSION 2>/dev/null || echo "UNKNOWN")
 echo "MCP version: ${MCP_VERSION}"
 ```
+
+### Step 3b: Mac MCP Smoke Tests
+
+**Version match:**
+Compare `${MCP_VERSION}` with expected release version (strip leading `v`). If mismatch, warn: "MCP VERSION file doesn't match release."
+
+**Health endpoint:**
+```bash
+MCP_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8202/health 2>/dev/null || echo "000")
+echo "MCP health: ${MCP_HEALTH}"
+```
+If not `200`, try restarting:
+```bash
+launchctl kickstart -k gui/$(id -u)/dev.ludolph.mcp
+sleep 3
+MCP_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8202/health 2>/dev/null || echo "000")
+```
+If still not `200`, warn: "MCP server not responding. Check `cat ~/.ludolph/mcp/server.log`"
+
+**Launchd service:**
+```bash
+launchctl list dev.ludolph.mcp 2>/dev/null
+```
+If exit code non-zero, warn: "MCP launchd service not loaded."
+
+All Mac smoke tests passed? Print: "Mac MCP smoke tests passed (version, health, service)"
 
 ### Step 4: Cleanup
 
