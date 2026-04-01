@@ -125,6 +125,22 @@ pub struct McpRegistryEntry {
     pub enabled: bool,
 }
 
+/// An observation about the user (fact, preference, or context).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Observation {
+    pub id: String,
+    pub title: Option<String>,
+    pub text: String,
+    pub category: String,
+    pub created_at: String,
+}
+
+/// Response from the /observations/recent endpoint.
+#[derive(Deserialize)]
+struct ObservationsResponse {
+    observations: Vec<Observation>,
+}
+
 /// Why the MCP connection failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DisconnectReason {
@@ -443,6 +459,33 @@ impl McpClient {
                 • Ensure Mac is on same network\n\
                 • Enable Wake-on-LAN in Mac System Settings"
             );
+        }
+    }
+
+    /// Get recent observations for a user from the MCP server.
+    ///
+    /// Used to inject known facts/preferences into the system prompt.
+    /// Returns empty vec on any error (observations are optional context).
+    pub async fn get_observations(&self, user_id: i64, limit: usize) -> Vec<Observation> {
+        let url = format!(
+            "{}/observations/recent?user_id={user_id}&limit={limit}",
+            self.base_url
+        );
+
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.auth_token))
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await;
+
+        match response {
+            Ok(r) if r.status().is_success() => r
+                .json::<ObservationsResponse>()
+                .await
+                .map_or_else(|_| Vec::new(), |resp| resp.observations),
+            _ => Vec::new(),
         }
     }
 

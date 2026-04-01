@@ -804,6 +804,267 @@ pub async fn index_cmd(tier_override: Option<String>, rebuild: bool, status: boo
 }
 
 // =============================================================================
+// Knowledge Command
+// =============================================================================
+
+/// Show what Lu knows — index, embeddings, observations, learned content.
+pub async fn knowledge_cmd() -> Result<()> {
+    println!();
+
+    let Ok(config) = Config::load() else {
+        ui::status::print_error("No config found", Some("Run `lu setup` first."));
+        return Ok(());
+    };
+
+    // 1. Vault index status
+    if let Some(vault_config) = config.vault.as_ref() {
+        let vault_path_str = vault_config.path.to_string_lossy();
+        let expanded = shellexpand::tilde(vault_path_str.as_ref());
+        let vault_path = PathBuf::from(expanded.as_ref());
+
+        let index_dir = Manifest::index_dir(&vault_path);
+        if let Ok(manifest) = Manifest::load(&index_dir) {
+            StatusLine::ok(format!(
+                "Vault index: {} files, {} chunks ({})",
+                manifest.file_count, manifest.chunk_count, manifest.tier
+            ))
+            .print();
+        } else {
+            StatusLine::skip("Vault index: not built").print();
+            ui::status::hint("Run `lu index` to build the vault index.");
+        }
+    } else {
+        StatusLine::skip("Vault: not configured").print();
+    }
+
+    // 2. Embeddings and learned content (via MCP)
+    if let Some(mcp_config) = config.mcp.as_ref() {
+        let client = crate::mcp_client::McpClient::from_config(mcp_config);
+
+        // Learned content status
+        let result = client
+            .call_tool("learned_status", &serde_json::json!({}))
+            .await;
+        match result {
+            Ok(status) => {
+                for line in status.lines() {
+                    StatusLine::ok(line.to_string()).print();
+                }
+            }
+            Err(_) => {
+                StatusLine::skip("Learned content: MCP unreachable").print();
+            }
+        }
+
+        // Observations count
+        let obs = client.get_observations(0, 100).await;
+        if obs.is_empty() {
+            StatusLine::skip("Observations: none saved").print();
+        } else {
+            let prefs = obs.iter().filter(|o| o.category == "preference").count();
+            let facts = obs.iter().filter(|o| o.category == "fact").count();
+            let ctx = obs.iter().filter(|o| o.category == "context").count();
+            StatusLine::ok(format!(
+                "Observations: {} total ({} preferences, {} facts, {} context)",
+                obs.len(),
+                prefs,
+                facts,
+                ctx
+            ))
+            .print();
+        }
+    } else {
+        StatusLine::skip("MCP: not configured").print();
+    }
+
+    println!();
+    Ok(())
+}
+
+// =============================================================================
+// Publish Command
+// =============================================================================
+
+/// Publish vault profile to the community registry.
+pub async fn publish_cmd(
+    name: Option<String>,
+    owner: Option<String>,
+    description: Option<String>,
+) -> Result<()> {
+    println!();
+
+    let config = Config::load().map_err(|_| {
+        anyhow::anyhow!("No config found. Run `lu setup` first.")
+    })?;
+
+    let mcp_config = config
+        .mcp
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("MCP not configured. Run `lu setup` first."))?;
+
+    let client = crate::mcp_client::McpClient::from_config(mcp_config);
+
+    // Prompt for required fields if not provided
+    let vault_name = name.unwrap_or_else(|| {
+        ui::prompt::prompt_with_default("Vault name", "", None).unwrap_or_default()
+    });
+    let vault_owner = owner.unwrap_or_else(|| {
+        ui::prompt::prompt_with_default("GitHub username", "", None).unwrap_or_default()
+    });
+    let vault_desc = description.unwrap_or_else(|| {
+        ui::prompt::prompt_with_default("Description", "", None).unwrap_or_default()
+    });
+
+    if vault_name.is_empty() || vault_owner.is_empty() {
+        ui::status::print_error("Name and owner are required", None);
+        return Ok(());
+    }
+
+    let spinner = Spinner::new("Generating vault profile...");
+    let result = client
+        .call_tool(
+            "vault_publish",
+            &serde_json::json!({
+                "name": vault_name,
+                "owner": vault_owner,
+                "description": vault_desc,
+            }),
+        )
+        .await?;
+    spinner.finish();
+
+    println!("{result}");
+    println!();
+    Ok(())
+}
+
+// =============================================================================
+// Learn Command
+// =============================================================================
+
+/// Learn from files, URLs, or folders.
+pub async fn learn_cmd(source: &str, forget: bool, status: bool) -> Result<()> {
+    println!();
+
+    let config = Config::load().map_err(|_| {
+        anyhow::anyhow!("No config found. Run `lu setup` first.")
+    })?;
+
+    let mcp_config = config
+        .mcp
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("MCP not configured. Run `lu setup` first."))?;
+
+    let client = crate::mcp_client::McpClient::from_config(mcp_config);
+
+    if status {
+        let spinner = Spinner::new("Checking knowledge base...");
+        let result = client
+            .call_tool("learned_status", &serde_json::json!({}))
+            .await?;
+        spinner.finish();
+        println!("  {result}");
+        println!();
+        return Ok(());
+    }
+
+    if forget {
+        let spinner = Spinner::new(&format!("Forgetting '{source}'..."));
+        let result = client
+            .call_tool("forget", &serde_json::json!({ "source": source }))
+            .await?;
+        spinner.finish();
+        println!("  {result}");
+        println!();
+        return Ok(());
+    }
+
+    // Determine source type and call appropriate tool
+    let is_url = source.starts_with("http://") || source.starts_with("https://");
+    let is_github = source.starts_with("github:") || source.starts_with("https://github.com/");
+    let path = PathBuf::from(shellexpand::tilde(source).as_ref());
+    let is_dir = !is_url && !is_github && path.is_dir();
+
+    let (tool_name, args) = if is_github {
+        ("learn_github", serde_json::json!({ "repo": source }))
+    } else if is_url {
+        ("learn_url", serde_json::json!({ "url": source }))
+    } else if is_dir {
+        ("learn_folder", serde_json::json!({ "path": path.to_string_lossy() }))
+    } else {
+        ("learn_file", serde_json::json!({ "path": path.to_string_lossy() }))
+    };
+
+    let label = if is_github {
+        "Learning from GitHub repo"
+    } else if is_url {
+        "Learning from URL"
+    } else if is_dir {
+        "Learning from folder"
+    } else {
+        "Learning from file"
+    };
+    let spinner = Spinner::new(&format!("{label}..."));
+    let result = client.call_tool(tool_name, &args).await?;
+    spinner.finish();
+
+    println!("  {result}");
+    println!();
+    Ok(())
+}
+
+// =============================================================================
+// Teach Command
+// =============================================================================
+
+/// Teach a topic using Lu's knowledge base.
+pub async fn teach_cmd(topic: &str, audience: &str, export: bool, tier: u8) -> Result<()> {
+    println!();
+
+    let config = Config::load().map_err(|_| {
+        anyhow::anyhow!("No config found. Run `lu setup` first.")
+    })?;
+
+    let mcp_config = config
+        .mcp
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("MCP not configured. Run `lu setup` first."))?;
+
+    let client = crate::mcp_client::McpClient::from_config(mcp_config);
+
+    if export {
+        let spinner = Spinner::new(&format!("Exporting '{topic}' as .ludo (tier {tier})..."));
+        let result = client
+            .call_tool(
+                "teach_export",
+                &serde_json::json!({
+                    "topic": topic,
+                    "tier": tier,
+                }),
+            )
+            .await?;
+        spinner.finish();
+        println!("{result}");
+    } else {
+        let spinner = Spinner::new(&format!("Teaching '{topic}' for {audience}..."));
+        let result = client
+            .call_tool(
+                "teach",
+                &serde_json::json!({
+                    "topic": topic,
+                    "audience": audience,
+                }),
+            )
+            .await?;
+        spinner.finish();
+        println!("{result}");
+    }
+
+    println!();
+    Ok(())
+}
+
+// =============================================================================
 // Update Command
 // =============================================================================
 

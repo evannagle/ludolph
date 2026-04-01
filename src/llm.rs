@@ -3,6 +3,7 @@
 //! Replaces direct Anthropic API calls with MCP-proxied requests,
 //! enabling multi-provider support via `LiteLLM` on the server.
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -248,11 +249,13 @@ impl Llm {
             ToolBackend::Mcp { client } => client.get_tool_definitions().await?,
         };
 
-        // Use a minimal system prompt to avoid recursion through build_system_prompt
+        // Minimal system prompt to avoid recursion, with delivery context
         let system = format!(
             "You are Ludolph, a helpful assistant with access to the user's Obsidian vault at {}. \
              The user's timezone is {}. \
-             Execute the following scheduled task. Be concise in your response.",
+             You are executing a scheduled task. Your response will be sent directly to the \
+             user via Telegram — just write the message content. Do NOT use telegram_send or \
+             any messaging tools. Be concise.",
             self.vault_description(),
             self.timezone
         );
@@ -294,7 +297,7 @@ impl Llm {
         Ok(tools)
     }
 
-    /// Build system prompt with memory, focus, schedule, and vault context.
+    /// Build system prompt with memory, focus, schedule, observations, and vault context.
     async fn build_system_prompt(&self, user_id: Option<i64>) -> String {
         let memory_context = if self.memory.is_some() {
             "\n\nYou have access to conversation history with this user. \
@@ -306,6 +309,7 @@ impl Llm {
 
         let focus_context = self.get_focus_context(user_id);
         let schedule_context = self.get_schedule_context(user_id);
+        let observations_context = self.get_observations_context(user_id).await;
 
         let lu_context = self
             .load_lu_context()
@@ -326,14 +330,56 @@ impl Llm {
              - Simple lists when helpful. Use bullet points sparingly.\n\
              - No emojis unless the user uses them first.\n\
              - Be concise. Get to the point.\n\
-             - If you have multiple questions, ask one at a time.{}{}{}{}",
+             - If you have multiple questions, ask one at a time.\n\n\
+             OBSERVATIONS: You have a persistent memory for facts about this user.\n\
+             - When the user reveals preferences, biographical facts, or project context, \
+             proactively call save_observation to remember it.\n\
+             - When you need to recall something, check the loaded observations first, \
+             then use search_observations if needed.\n\
+             - Categories: preference (likes/defaults), fact (biographical), context (projects/goals).\n\
+             - Keep observations atomic — one fact per observation.\n\
+             - Update observations when facts change (delete old, save new).{}{}{}{}{}",
             self.vault_description(),
             self.timezone,
+            observations_context,
             memory_context,
             focus_context,
             schedule_context,
             lu_context
         )
+    }
+
+    /// Get observations context for system prompt.
+    #[allow(clippy::unused_async)]
+    async fn get_observations_context(&self, user_id: Option<i64>) -> String {
+        let Some(uid) = user_id else {
+            return String::new();
+        };
+
+        let observations = match &self.tool_backend {
+            ToolBackend::Mcp { client } => client.get_observations(uid, 20).await,
+            ToolBackend::Local { .. } => Vec::new(),
+        };
+
+        if observations.is_empty() {
+            return String::new();
+        }
+
+        let mut output = String::from("\n\n## Known Facts & Preferences\n\n");
+        for obs in &observations {
+            let tag = match obs.category.as_str() {
+                "preference" => "[pref]",
+                "fact" => "[fact]",
+                "context" => "[ctx]",
+                _ => "[note]",
+            };
+            if let Some(title) = &obs.title {
+                let _ = writeln!(output, "- {tag} {title}: {}", obs.text);
+            } else {
+                let _ = writeln!(output, "- {tag} {}", obs.text);
+            }
+        }
+        output
     }
 
     /// Get focus context for system prompt.
@@ -512,6 +558,32 @@ impl Llm {
             self.store_message(user_id, "assistant", &content);
             return Ok(content);
         }
+    }
+
+    /// Chat in the context of a scheduled task execution.
+    ///
+    /// Uses the full system prompt and tool loop, but augments the prompt
+    /// so the LLM knows its response will be delivered to the user
+    /// automatically via Telegram — it should not try to send messages itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the MCP server is unreachable or returns an error.
+    pub async fn chat_scheduled(
+        &self,
+        schedule_name: &str,
+        prompt: &str,
+        user_id: Option<i64>,
+    ) -> Result<String> {
+        let augmented_prompt = format!(
+            "SCHEDULED TASK: {schedule_name}\n\n\
+             IMPORTANT: This is a scheduled task execution. Your text response will be \
+             sent directly to the user via Telegram automatically. Do NOT use telegram_send \
+             or any messaging tools — just write your response as plain text and it will \
+             be delivered.\n\n\
+             Task: {prompt}"
+        );
+        self.chat(&augmented_prompt, user_id).await
     }
 
     /// Prepare messages for a chat request.

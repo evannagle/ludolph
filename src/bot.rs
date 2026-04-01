@@ -1427,8 +1427,10 @@ fn spawn_scheduler_task(
                     let _ = bot.send_message(ChatId(user_id), &msg).await;
                 }
 
-                // Execute the schedule's prompt via LLM
-                let result = llm.chat(&schedule.prompt, Some(user_id)).await;
+                // Execute the schedule's prompt via LLM (with delivery context)
+                let result = llm
+                    .chat_scheduled(&schedule_name, &schedule.prompt, Some(user_id))
+                    .await;
 
                 // Record run completion and send notification
                 match result {

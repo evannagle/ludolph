@@ -241,6 +241,7 @@ class McpDefinition:
     description: str
     type: str  # "builtin" or "external"
     package: Optional[str] = None
+    runtime: str = "npx"  # "npx" or "uvx"
     env_vars: list[str] = field(default_factory=list)
     test_tool: Optional[str] = None
     enabled: bool = True
@@ -276,6 +277,7 @@ class Registry:
                 description=config.get("description", ""),
                 type=config.get("type", "external"),
                 package=config.get("package"),
+                runtime=config.get("runtime", "npx"),
                 env_vars=config.get("env_vars", []),
                 test_tool=config.get("test_tool"),
                 enabled=config.get("enabled", True),

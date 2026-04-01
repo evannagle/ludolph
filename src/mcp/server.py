@@ -170,7 +170,9 @@ async def _call_external_tool(
     # Get or spawn the MCP process
     manager = get_process_manager()
     try:
-        mcp_proc = await manager.get_or_spawn(mcp_name, defn.package, env if env else None)
+        mcp_proc = await manager.get_or_spawn(
+            mcp_name, defn.package, env if env else None, runtime=defn.runtime
+        )
         result = await manager.call_tool(mcp_proc, tool_name, arguments)
 
         # MCP returns {content: [...], isError: bool}
@@ -324,6 +326,18 @@ def status():
         "tools": tools_summary,
         "version": VERSION,
     })
+
+
+@app.route("/observations/recent")
+@require_auth
+def observations_recent():
+    """Get recent observations for system prompt injection."""
+    from tools.observations import get_recent_observations
+
+    user_id = int(request.args.get("user_id", 0))
+    limit = int(request.args.get("limit", 20))
+    results = get_recent_observations(user_id, limit)
+    return jsonify({"observations": results})
 
 
 @app.route("/tools")

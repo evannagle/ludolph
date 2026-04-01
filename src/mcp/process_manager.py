@@ -45,6 +45,7 @@ class ProcessManager:
         name: str,
         package: str,
         env: dict[str, str] | None = None,
+        runtime: str | None = None,
     ) -> McpProcess:
         """
         Get running MCP process or spawn new one.
@@ -53,6 +54,7 @@ class ProcessManager:
             name: Friendly name for the MCP (used as key)
             package: Package name (npm or uvx)
             env: Optional environment variables for the subprocess
+            runtime: "npx" or "uvx". If None, inferred from package name.
 
         Returns:
             McpProcess instance (running and initialized)
@@ -67,7 +69,7 @@ class ProcessManager:
                 del self._processes[name]
 
             # Spawn new process
-            process = await self._spawn_mcp(package, env)
+            process = await self._spawn_mcp(package, env, runtime)
             mcp_proc = McpProcess(name=name, process=process)
             self._processes[name] = mcp_proc
 
@@ -80,14 +82,17 @@ class ProcessManager:
         self,
         package: str,
         env: dict[str, str] | None = None,
+        runtime: str | None = None,
     ) -> asyncio.subprocess.Process:
         """Spawn an MCP server subprocess."""
-        # Determine command based on package format
-        if package.startswith("@") or "/" in package:
-            # npm package (scoped or namespaced)
+        # Use explicit runtime if provided, otherwise infer from package name
+        if runtime == "npx":
+            cmd = ["npx", "-y", package]
+        elif runtime == "uvx":
+            cmd = ["uvx", package]
+        elif package.startswith("@") or "/" in package:
             cmd = ["npx", "-y", package]
         else:
-            # uvx (Python) package
             cmd = ["uvx", package]
 
         # Merge environment

@@ -116,6 +116,51 @@ class TestProcessManager(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_spawn_uses_explicit_npx_runtime(self):
+        """Explicit runtime='npx' should use npx even for unscoped packages."""
+
+        async def run_test():
+            with patch.object(
+                asyncio, "create_subprocess_exec", new_callable=AsyncMock
+            ) as mock_exec:
+                mock_exec.return_value = MagicMock(
+                    returncode=None,
+                    stdin=AsyncMock(),
+                    stdout=AsyncMock(),
+                )
+
+                # Without runtime, this would use uvx (no @ prefix)
+                await self.manager._spawn_mcp("mcp-server-linear", None, runtime="npx")
+
+                call_args = mock_exec.call_args
+                self.assertEqual(call_args[0][0], "npx")
+                self.assertEqual(call_args[0][1], "-y")
+                self.assertIn("mcp-server-linear", call_args[0])
+
+        asyncio.run(run_test())
+
+    def test_spawn_uses_explicit_uvx_runtime(self):
+        """Explicit runtime='uvx' should use uvx even for scoped packages."""
+
+        async def run_test():
+            with patch.object(
+                asyncio, "create_subprocess_exec", new_callable=AsyncMock
+            ) as mock_exec:
+                mock_exec.return_value = MagicMock(
+                    returncode=None,
+                    stdin=AsyncMock(),
+                    stdout=AsyncMock(),
+                )
+
+                # Without runtime, this would use npx (@ prefix)
+                await self.manager._spawn_mcp("@some/python-pkg", None, runtime="uvx")
+
+                call_args = mock_exec.call_args
+                self.assertEqual(call_args[0][0], "uvx")
+                self.assertIn("@some/python-pkg", call_args[0])
+
+        asyncio.run(run_test())
+
     def test_call_method_sends_jsonrpc(self):
         """call_method should send proper JSON-RPC request."""
 

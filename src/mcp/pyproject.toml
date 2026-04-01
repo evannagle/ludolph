@@ -29,6 +29,9 @@ semantic = [
     "sentence-transformers>=2.2",
     "numpy>=1.20",
 ]
+pdf = [
+    "pymupdf>=1.23",
+]
 
 [tool.black]
 line-length = 100

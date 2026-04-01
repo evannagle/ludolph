@@ -1,66 +1,61 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ludolph</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #0d1117;
-      color: #c9d1d9;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 2rem;
-    }
-    .container { max-width: 600px; text-align: center; }
-    h1 { font-size: 3rem; margin-bottom: 0.5rem; color: #f0f6fc; }
-    .tagline { font-size: 1.25rem; color: #8b949e; margin-bottom: 2rem; }
-    .description { line-height: 1.6; margin-bottom: 2rem; }
-    pre {
-      background: #161b22;
-      border: 1px solid #30363d;
-      border-radius: 6px;
-      padding: 1rem;
-      overflow-x: auto;
-      text-align: left;
-      margin-bottom: 2rem;
-    }
-    code { color: #79c0ff; }
-    .links { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
-    a {
-      color: #58a6ff;
-      text-decoration: none;
-      padding: 0.5rem 1rem;
-      border: 1px solid #30363d;
-      border-radius: 6px;
-      transition: border-color 0.2s;
-    }
-    a:hover { border-color: #58a6ff; }
-    footer { margin-top: 3rem; color: #484f58; font-size: 0.875rem; }
-  </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ludolph - A real brain for your second brain</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="container">
-    <h1>Ludolph</h1>
-    <p class="tagline">A real brain for your second brain.</p>
-    <p class="description">
-      Talk to your Obsidian vault from anywhere, anytime.
-      A sandboxed Telegram bot that gives Claude read-only access to your notes.
-    </p>
-    <pre><code>curl -sSL https://ludolph.dev/install | bash</code></pre>
-    <div class="links">
-      <a href="https://github.com/evannagle/ludolph">GitHub</a>
-      <a href="https://github.com/evannagle/ludolph#readme">Documentation</a>
+  <nav>
+    <div class="container">
+      <a href="index.html" class="logo">ludolph</a>
+      <div class="links">
+        <a href="vaults.html">Vaults</a>
+        <a href="plugins.html">Plugins</a>
+        <a href="jetpacks.html">Jetpacks</a>
+        <a href="https://github.com/evannagle/ludolph">GitHub</a>
+      </div>
     </div>
-    <footer>
-      Named after <a href="https://en.wikipedia.org/wiki/Ludolph_van_Ceulen">Ludolph van Ceulen</a>,
-      who spent 25 years calculating pi to 35 decimal places.
-    </footer>
+  </nav>
+  <div class="container">
+    <div class="hero">
+      <h1>ludolph</h1>
+      <p>A real brain for your second brain. Talk to your Obsidian vault from anywhere, anytime.</p>
+      <a href="https://github.com/evannagle/ludolph#readme" class="cta">Get Started</a>
+    </div>
+    <section>
+      <h2>Community</h2>
+      <div id="home-stats"></div>
+    </section>
+    <section>
+      <h2>Featured Vaults</h2>
+      <p class="subtitle">What people's vaults know about.</p>
+      <div id="featured-vaults">
+        <div class="empty">No vaults published yet. Be the first &mdash; run <code>lu publish</code>.</div>
+      </div>
+    </section>
+    <section>
+      <h2>What is this?</h2>
+      <p style="max-width: 640px; color: var(--text-secondary);">
+        Ludolph is a self-hosted Telegram bot that lets you chat with Claude about your Obsidian vault.
+        A thin client runs on a Raspberry Pi, connecting to your Mac's MCP server to access your notes.
+        Your files never leave your machine.
+      </p>
+      <br>
+      <p style="max-width: 640px; color: var(--text-secondary);">
+        This site shows what vaults know, not what they contain. Vault owners publish profiles
+        describing their topics and expertise. You can request to learn from them &mdash; with their
+        approval &mdash; at the privacy tier they choose.
+      </p>
+    </section>
   </div>
+  <footer>
+    <div class="container">
+      <a href="https://github.com/evannagle/ludolph">ludolph</a> &middot; a real brain for your second brain
+    </div>
+  </footer>
+  <script src="app.js"></script>
+  <script>initHome();</script>
 </body>
 </html>

@@ -8,8 +8,8 @@ mod setup;
 use clap::{Parser, Subcommand};
 
 pub use commands::{
-    check, config_cmd, doctor, index_cmd, mcp_restart, mcp_update, mcp_version, pi, uninstall,
-    update,
+    check, config_cmd, doctor, index_cmd, knowledge_cmd, learn_cmd, mcp_restart, mcp_update,
+    mcp_version, pi, publish_cmd, teach_cmd, uninstall, update,
 };
 pub use plugin::{
     plugin_check, plugin_create, plugin_disable, plugin_enable, plugin_install, plugin_list,
@@ -91,6 +91,52 @@ pub enum Command {
         /// Show index health status
         #[arg(long)]
         status: bool,
+    },
+    /// Learn from files, URLs, or folders
+    Learn {
+        /// Source to learn from (file path, URL, or folder)
+        source: String,
+
+        /// Forget previously learned content instead of learning
+        #[arg(long)]
+        forget: bool,
+
+        /// Show what Lu has learned
+        #[arg(long)]
+        status: bool,
+    },
+    /// Show what Lu knows (index, embeddings, observations, learned content)
+    Knowledge,
+    /// Publish vault profile to the community registry
+    Publish {
+        /// Vault display name
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Your GitHub username
+        #[arg(long)]
+        owner: Option<String>,
+
+        /// Description of what your vault knows
+        #[arg(long)]
+        description: Option<String>,
+    },
+    /// Teach a topic using Lu's knowledge base
+    Teach {
+        /// Topic to explain
+        topic: String,
+
+        /// Target audience: people, coders, robots, or custom description
+        #[arg(long, short = 'f', default_value = "people")]
+        audience: String,
+
+        /// Export as .ludo package instead of generating explanation
+        #[arg(long)]
+        export: bool,
+
+        /// Privacy tier for export (1=metadata, 2=structure, 3=full text)
+        #[arg(long, default_value = "2")]
+        tier: u8,
     },
 }
 

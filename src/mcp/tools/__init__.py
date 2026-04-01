@@ -21,14 +21,18 @@ from . import (
     editing,
     files,
     index,
+    learn,
     memory,
     meta,
     metadata,
+    observations,
     periodic,
+    publish,
     search,
     semantic,
     tags,
     tasks,
+    teach,
     telegram,
     text,
 )
@@ -49,9 +53,13 @@ _CORE_TOOLS = (
     + text.TOOLS
     + backlinks.TOOLS
     + analytics.TOOLS
+    + learn.TOOLS
     + memory.TOOLS
+    + observations.TOOLS
+    + publish.TOOLS
     + meta.TOOLS
     + semantic.TOOLS
+    + teach.TOOLS
     + telegram.TOOLS
     + conversation.TOOLS
 )
@@ -72,9 +80,13 @@ _CORE_HANDLERS = {
     **text.HANDLERS,
     **backlinks.HANDLERS,
     **analytics.HANDLERS,
+    **learn.HANDLERS,
     **memory.HANDLERS,
+    **observations.HANDLERS,
+    **publish.HANDLERS,
     **meta.HANDLERS,
     **semantic.HANDLERS,
+    **teach.HANDLERS,
     **telegram.HANDLERS,
     **conversation.HANDLERS,
 }

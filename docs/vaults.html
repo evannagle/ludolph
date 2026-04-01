@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vaults - Ludolph</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav>
+    <div class="container">
+      <a href="index.html" class="logo">ludolph</a>
+      <div class="links">
+        <a href="vaults.html" class="active">Vaults</a>
+        <a href="plugins.html">Plugins</a>
+        <a href="jetpacks.html">Jetpacks</a>
+        <a href="https://github.com/evannagle/ludolph">GitHub</a>
+      </div>
+    </div>
+  </nav>
+  <div class="container wide">
+    <section style="border: none; padding-top: 32px;">
+      <h2>Vaults</h2>
+      <p class="subtitle">Browse published vaults and what they know about.</p>
+      <input type="text" class="search-bar" id="vault-search" placeholder="Filter by topic, name, or keyword...">
+      <div class="card-grid" id="vault-grid">
+        <div class="empty">Loading...</div>
+      </div>
+    </section>
+  </div>
+  <footer>
+    <div class="container">
+      <a href="https://github.com/evannagle/ludolph">ludolph</a> &middot; a real brain for your second brain
+    </div>
+  </footer>
+  <script src="app.js"></script>
+  <script>initVaults();</script>
+</body>
+</html>

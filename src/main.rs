@@ -42,7 +42,7 @@ async fn main() -> ExitCode {
     }
 }
 
-#[allow(clippy::cognitive_complexity)]
+#[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
 async fn run(cli: Cli) -> Result<ExitCode> {
     match cli.command {
         Some(Command::Check) => Ok(cli::check()),
@@ -107,6 +107,35 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             status,
         }) => {
             cli::index_cmd(tier, rebuild, status).await?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(Command::Knowledge) => {
+            cli::knowledge_cmd().await?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(Command::Publish {
+            name,
+            owner,
+            description,
+        }) => {
+            cli::publish_cmd(name, owner, description).await?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(Command::Learn {
+            source,
+            forget,
+            status,
+        }) => {
+            cli::learn_cmd(&source, forget, status).await?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(Command::Teach {
+            topic,
+            audience,
+            export,
+            tier,
+        }) => {
+            cli::teach_cmd(&topic, &audience, export, tier).await?;
             Ok(ExitCode::SUCCESS)
         }
         None => {

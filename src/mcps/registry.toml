@@ -5,6 +5,14 @@
 #   /mcp add mcp-server-anything
 # Unknown packages are auto-discovered by running them.
 #
+# Quality threshold for registry entries:
+#   - Published on npm or PyPI with a working npx/uvx command
+#   - Has a GitHub repo with meaningful commit history
+#   - Actively maintained (commits within last 6 months)
+#   - Clean tool interface (does one thing well)
+#   - Official/reference servers preferred when available
+#   - Every package verified against its registry before inclusion
+#
 # Types:
 #   - builtin: Core functionality, always available
 #   - external: User-installable via npx/uvx packages
@@ -15,6 +23,7 @@
 #   - type: "builtin" or "external"
 #   - enabled: Whether this MCP is active (builtins default true)
 #   - package: npx/uvx package name (external only)
+#   - runtime: "npx" or "uvx" — how to run the package
 #   - env_vars: Known required environment variables (helps with setup prompts)
 #   - test_tool: Tool name to verify MCP is working
 
@@ -42,23 +51,26 @@ enabled = true
 name = "slack"
 description = "Read and send Slack messages"
 type = "external"
-package = "mcp-server-slack"
+package = "@modelcontextprotocol/server-slack"
+runtime = "npx"
 env_vars = ["SLACK_BOT_TOKEN", "SLACK_TEAM_ID"]
 test_tool = "slack_list_channels"
 
-[mcps.calendar]
-name = "calendar"
-description = "Google Calendar integration"
+[mcps.google-workspace]
+name = "google-workspace"
+description = "Gmail and Google Calendar integration"
 type = "external"
-package = "mcp-server-google-calendar"
-env_vars = ["GOOGLE_CALENDAR_CREDENTIALS"]
-test_tool = "list_calendars"
+package = "mcp-google-workspace"
+runtime = "uvx"
+env_vars = ["GOOGLE_WORKSPACE_CREDENTIALS"]
+test_tool = "search_gmail_messages"
 
 [mcps.github]
 name = "github"
 description = "GitHub issues and PRs"
 type = "external"
-package = "mcp-server-github"
+package = "@modelcontextprotocol/server-github"
+runtime = "npx"
 env_vars = ["GITHUB_TOKEN"]
 test_tool = "list_repos"
 
@@ -67,6 +79,7 @@ name = "linear"
 description = "Linear issue tracking"
 type = "external"
 package = "mcp-server-linear"
+runtime = "npx"
 env_vars = ["LINEAR_API_KEY"]
 test_tool = "list_issues"
 
@@ -75,13 +88,33 @@ name = "notion"
 description = "Notion workspace integration"
 type = "external"
 package = "mcp-server-notion"
+runtime = "uvx"
 env_vars = ["NOTION_TOKEN"]
 test_tool = "search_pages"
 
-[mcps.todoist]
-name = "todoist"
-description = "Todoist task management"
+[mcps.rss]
+name = "rss"
+description = "RSS/Atom feed reader and article extraction"
 type = "external"
-package = "mcp-server-todoist"
-env_vars = ["TODOIST_API_TOKEN"]
-test_tool = "list_projects"
+package = "rss-reader-mcp"
+runtime = "npx"
+env_vars = []
+test_tool = "fetch_feed_entries"
+
+[mcps.fetch]
+name = "fetch"
+description = "Web content fetching and conversion to markdown"
+type = "external"
+package = "mcp-server-fetch"
+runtime = "uvx"
+env_vars = []
+test_tool = "fetch"
+
+[mcps.brave-search]
+name = "brave-search"
+description = "Web search via Brave Search API"
+type = "external"
+package = "@modelcontextprotocol/server-brave-search"
+runtime = "npx"
+env_vars = ["BRAVE_API_KEY"]
+test_tool = "brave_web_search"

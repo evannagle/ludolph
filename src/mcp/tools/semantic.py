@@ -150,7 +150,11 @@ TOOLS = [
 
 
 def _semantic_search(args: dict) -> dict[str, Any]:
-    """Search vault using semantic similarity with optional temporal decay."""
+    """Search vault using semantic similarity with optional temporal decay.
+
+    Uses the persistent embedding store if available, falling back to
+    the legacy JSON index.
+    """
     query = args.get("query", "")
     limit = args.get("limit", 5)
     recency_weight = args.get("recency_weight", 0.0)
@@ -161,6 +165,32 @@ def _semantic_search(args: dict) -> dict[str, Any]:
     if not query:
         return {"content": "", "error": "Query is required"}
 
+    # Try the new embedding store first
+    try:
+        from tools.embeddings import get_store
+
+        store = get_store()
+        stats = store.stats()
+        if stats["chunks"] > 0:
+            results = store.search(query, limit=limit, recency_weight=recency_weight)
+            if results:
+                lines = [f"Found {len(results)} result(s):\n"]
+                for r in results:
+                    ns_tag = f" [{r['namespace']}]" if r["namespace"] != "vault" else ""
+                    heading = " > ".join(r["heading_path"]) if r["heading_path"] else ""
+                    score_info = f"score: {r['score']}"
+                    if recency_weight > 0:
+                        score_info += f" (semantic: {r['similarity']})"
+                    lines.append(f"- {r['source']}{ns_tag} ({score_info})")
+                    if heading:
+                        lines.append(f"  Section: {heading}")
+                    lines.append(f"  {r['content']}\n")
+                return {"content": "\n".join(lines), "error": None}
+            return {"content": "No results found", "error": None}
+    except Exception:
+        pass  # Fall through to legacy index
+
+    # Legacy JSON index fallback
     if not _check_numpy():
         return {
             "content": "",
@@ -198,10 +228,8 @@ def _semantic_search(args: dict) -> dict[str, Any]:
     results = []
     for entry in index["documents"]:
         embedding = np.array(entry["embedding"])
-        # Cosine similarity (embeddings are normalized by default)
         semantic_sim = float(np.dot(query_embedding, embedding))
 
-        # Apply temporal decay if recency_weight > 0 and modified_at exists
         if recency_weight > 0 and "modified_at" in entry:
             temp_score = temporal_score(entry["modified_at"])
             final_score = combined_score(semantic_sim, temp_score, recency_weight)
@@ -226,7 +254,6 @@ def _semantic_search(args: dict) -> dict[str, Any]:
     results.sort(key=lambda x: x["score"], reverse=True)
     top_results = results[:limit]
 
-    # Format output
     if not top_results:
         return {"content": "No results found", "error": None}
 
@@ -322,13 +349,34 @@ def _get_related_notes(args: dict) -> dict[str, Any]:
 def _rebuild_semantic_index(args: dict) -> dict[str, Any]:
     """Rebuild the semantic index for the vault.
 
-    Index entries include:
-    - path: relative path to file
-    - title: extracted title or filename
-    - excerpt: first few lines of content
-    - embedding: vector embedding for semantic search
-    - modified_at: file modification time for temporal decay
+    Prefers the chunk-based embedding store (incremental, persistent).
+    Falls back to the legacy JSON approach if chunk files don't exist.
     """
+    vault_path = get_vault_path()
+
+    # Try chunk-based sync first (from Rust indexer output)
+    chunks_dir = vault_path / ".ludolph" / "index" / "chunks"
+    if chunks_dir.exists() and any(chunks_dir.rglob("*.json")):
+        try:
+            from tools.embeddings import get_store
+
+            store = get_store()
+            result = store.sync_from_chunks(chunks_dir, namespace="vault")
+
+            if "error" in result:
+                return {"content": "", "error": result["error"]}
+
+            stats = store.stats(namespace="vault")
+            msg = (
+                f"Synced vault embeddings: {result['added']} updated, "
+                f"{result['skipped']} unchanged, {result['removed']} removed.\n"
+                f"Total: {stats['chunks']} chunks from {stats['sources']} files."
+            )
+            return {"content": msg, "error": None}
+        except Exception as e:
+            logger.warning("Chunk-based sync failed, falling back to legacy: %s", e)
+
+    # Legacy: full rebuild from raw files
     model = _get_model()
     if model is None:
         return {
@@ -336,12 +384,10 @@ def _rebuild_semantic_index(args: dict) -> dict[str, Any]:
             "error": "Semantic search not available. Install sentence-transformers: pip install sentence-transformers",
         }
 
-    vault_path = get_vault_path()
     documents = []
     skipped = 0
 
     for md_file in vault_path.rglob("*.md"):
-        # Skip hidden files and directories
         if any(part.startswith(".") for part in md_file.parts):
             continue
 
@@ -352,26 +398,22 @@ def _rebuild_semantic_index(args: dict) -> dict[str, Any]:
             skipped += 1
             continue
 
-        # Skip empty files
         if not content.strip():
             skipped += 1
             continue
 
-        # Get file modification time for temporal decay
         try:
             mtime = md_file.stat().st_mtime
             modified_at = datetime.fromtimestamp(mtime).isoformat()
         except OSError:
             modified_at = datetime.now().isoformat()
 
-        # Extract title (first heading or filename)
         title = md_file.stem
         for line in content.split("\n"):
             if line.startswith("# "):
                 title = line[2:].strip()
                 break
 
-        # Get excerpt (first non-empty, non-heading lines)
         excerpt_lines = []
         for line in content.split("\n"):
             line = line.strip()
@@ -381,8 +423,6 @@ def _rebuild_semantic_index(args: dict) -> dict[str, Any]:
                     break
         excerpt = " ".join(excerpt_lines)[:500]
 
-        # Compute embedding (limit content for performance)
-        # Use first 2000 chars to balance quality and speed
         embedding = model.encode(content[:2000])
 
         documents.append(
@@ -395,10 +435,8 @@ def _rebuild_semantic_index(args: dict) -> dict[str, Any]:
             }
         )
 
-    # Ensure index directory exists
     INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    # Write index
     with open(INDEX_PATH, "w") as f:
         json.dump({"documents": documents}, f)
 
