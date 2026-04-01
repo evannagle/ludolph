@@ -893,9 +893,8 @@ pub async fn publish_cmd(
 ) -> Result<()> {
     println!();
 
-    let config = Config::load().map_err(|_| {
-        anyhow::anyhow!("No config found. Run `lu setup` first.")
-    })?;
+    let config =
+        Config::load().map_err(|_| anyhow::anyhow!("No config found. Run `lu setup` first."))?;
 
     let mcp_config = config
         .mcp
@@ -946,9 +945,8 @@ pub async fn publish_cmd(
 pub async fn learn_cmd(source: &str, forget: bool, status: bool) -> Result<()> {
     println!();
 
-    let config = Config::load().map_err(|_| {
-        anyhow::anyhow!("No config found. Run `lu setup` first.")
-    })?;
+    let config =
+        Config::load().map_err(|_| anyhow::anyhow!("No config found. Run `lu setup` first."))?;
 
     let mcp_config = config
         .mcp
@@ -990,9 +988,15 @@ pub async fn learn_cmd(source: &str, forget: bool, status: bool) -> Result<()> {
     } else if is_url {
         ("learn_url", serde_json::json!({ "url": source }))
     } else if is_dir {
-        ("learn_folder", serde_json::json!({ "path": path.to_string_lossy() }))
+        (
+            "learn_folder",
+            serde_json::json!({ "path": path.to_string_lossy() }),
+        )
     } else {
-        ("learn_file", serde_json::json!({ "path": path.to_string_lossy() }))
+        (
+            "learn_file",
+            serde_json::json!({ "path": path.to_string_lossy() }),
+        )
     };
 
     let label = if is_github {
@@ -1021,9 +1025,8 @@ pub async fn learn_cmd(source: &str, forget: bool, status: bool) -> Result<()> {
 pub async fn teach_cmd(topic: &str, audience: &str, export: bool, tier: u8) -> Result<()> {
     println!();
 
-    let config = Config::load().map_err(|_| {
-        anyhow::anyhow!("No config found. Run `lu setup` first.")
-    })?;
+    let config =
+        Config::load().map_err(|_| anyhow::anyhow!("No config found. Run `lu setup` first."))?;
 
     let mcp_config = config
         .mcp
