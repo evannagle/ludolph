@@ -365,6 +365,7 @@ pub async fn doctor(fix: bool) -> ExitCode {
 
     let mut has_failures = false;
     let mut has_mcp_failure = false;
+    let mut has_wifi_failure = false;
     let mut diagnosis: Option<(&str, &str)> = None;
 
     for (name, result) in &results {
@@ -380,12 +381,15 @@ pub async fn doctor(fix: bool) -> ExitCode {
                 has_failures = true;
                 StatusLine::error(message).print();
 
-                // Track if MCP-related checks fail
+                // Track which categories of checks fail
                 if matches!(
                     *name,
                     "mcp_config_consistent" | "mac_mcp_port_available" | "mac_mcp_running"
                 ) {
                     has_mcp_failure = true;
+                }
+                if *name == "pi_wifi_power_save" {
+                    has_wifi_failure = true;
                 }
 
                 // Print fix hint indented (only if not in fix mode)
@@ -406,7 +410,25 @@ pub async fn doctor(fix: bool) -> ExitCode {
         }
     }
 
-    // Attempt fixes if requested
+    // Attempt Pi Wi-Fi fix if requested
+    if fix && has_wifi_failure {
+        println!();
+        println!("{}", style("Fixing Pi Wi-Fi power save...").bold());
+
+        let ctx = tokio::task::spawn_blocking(|| {
+            let (ctx, _) = checks::run_all_checks();
+            ctx
+        })
+        .await
+        .expect("spawn_blocking failed");
+
+        match checks::fix_pi_wifi_power_save(&ctx) {
+            Some(msg) => StatusLine::ok(msg).print(),
+            None => StatusLine::error("Could not disable Wi-Fi power save on Pi").print(),
+        }
+    }
+
+    // Attempt MCP fixes if requested
     if fix && has_mcp_failure {
         println!();
         println!("{}", style("Attempting fixes...").bold());

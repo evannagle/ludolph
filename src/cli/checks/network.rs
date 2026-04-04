@@ -186,6 +186,108 @@ pub fn pi_mcp_connectivity(ctx: &CheckContext) -> CheckResult {
     }
 }
 
+/// Check if Pi's Wi-Fi power save is disabled.
+///
+/// Wi-Fi power save causes the adapter to sleep, dropping the network
+/// connection intermittently. This makes Tailscale lose its DERP relay
+/// and Lu becomes unreachable.
+pub fn pi_wifi_power_save(ctx: &CheckContext) -> CheckResult {
+    use std::process::Command;
+
+    let Some(config) = &ctx.config else {
+        return CheckResult::skip("Config not loaded");
+    };
+
+    let Some(pi) = &config.pi else {
+        return CheckResult::skip("No Pi configured");
+    };
+
+    // Check power_save status via SSH
+    let output = Command::new("ssh")
+        .args([
+            "-n",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=5",
+            &format!("{}@{}", pi.user, pi.host),
+            // Try /usr/sbin/iw first (Debian), then iw in PATH
+            "/usr/sbin/iw wlan0 get power_save 2>/dev/null || iw wlan0 get power_save 2>/dev/null || echo 'NO_IW'",
+        ])
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let trimmed = stdout.trim();
+
+            if trimmed == "NO_IW" {
+                return CheckResult::skip("Cannot check Wi-Fi power save (iw not installed on Pi)");
+            }
+
+            if trimmed.contains("off") {
+                CheckResult::pass("Pi Wi-Fi power save disabled")
+            } else {
+                CheckResult::fail(
+                    "Pi Wi-Fi power save is ON (causes intermittent dropouts)",
+                    "Fix: Run `lu doctor --fix` or manually:\n\
+                     ssh pi 'sudo /usr/sbin/iw wlan0 set power_save off'\n\
+                     To make permanent, create /etc/NetworkManager/conf.d/wifi-powersave.conf\n\
+                     with: [connection]\\nwifi.powersave = 2",
+                    "pi-wifi-power-save",
+                )
+            }
+        }
+        _ => CheckResult::skip("Could not check Pi Wi-Fi power save"),
+    }
+}
+
+/// Disable Wi-Fi power save on the Pi (both immediately and permanently).
+pub fn fix_pi_wifi_power_save(ctx: &CheckContext) -> Option<String> {
+    use std::process::Command;
+
+    let config = ctx.config.as_ref()?;
+    let pi = config.pi.as_ref()?;
+
+    let ssh_target = format!("{}@{}", pi.user, pi.host);
+
+    // Disable immediately
+    let _ = Command::new("ssh")
+        .args([
+            "-n",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=5",
+            &ssh_target,
+            "sudo /usr/sbin/iw wlan0 set power_save off 2>/dev/null",
+        ])
+        .output();
+
+    // Make permanent via NetworkManager config
+    let result = Command::new("ssh")
+        .args([
+            "-n",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=5",
+            &ssh_target,
+            "sudo mkdir -p /etc/NetworkManager/conf.d && \
+             echo -e '[connection]\\nwifi.powersave = 2' | \
+             sudo tee /etc/NetworkManager/conf.d/wifi-powersave.conf > /dev/null && \
+             echo 'OK'",
+        ])
+        .output();
+
+    match result {
+        Ok(o) if String::from_utf8_lossy(&o.stdout).contains("OK") => {
+            Some("Disabled Pi Wi-Fi power save (immediate + permanent)".to_string())
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

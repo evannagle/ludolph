@@ -14,7 +14,7 @@ use std::fmt;
 use crate::config::Config;
 
 pub use config::{config_exists, config_valid, vault_accessible};
-pub use network::{pi_mcp_connectivity, pi_reachable};
+pub use network::{fix_pi_wifi_power_save, pi_mcp_connectivity, pi_reachable, pi_wifi_power_save};
 pub use services::{
     fix_mcp_config, mac_mcp_port_available, mac_mcp_running, mcp_config_consistent,
     pi_service_running,
@@ -209,6 +209,12 @@ pub fn all_checks() -> Vec<Check> {
             label: "Pi reachable via SSH",
             depends_on: &["config_valid"],
             run: pi_reachable,
+        },
+        Check {
+            name: "pi_wifi_power_save",
+            label: "Pi Wi-Fi power save disabled",
+            depends_on: &["pi_reachable"],
+            run: pi_wifi_power_save,
         },
         Check {
             name: "pi_service_running",

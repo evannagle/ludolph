@@ -370,6 +370,26 @@ fn install_systemd_service(pi: &PiConfig) -> Result<()> {
     spinner.finish();
     StatusLine::ok("Service started").print();
 
+    // Disable Wi-Fi power save (prevents intermittent dropouts)
+    let spinner = Spinner::new("Disabling Wi-Fi power save...");
+    let wifi_result = ssh_run(
+        pi,
+        "sudo /usr/sbin/iw wlan0 set power_save off 2>/dev/null; \
+         sudo mkdir -p /etc/NetworkManager/conf.d && \
+         echo -e '[connection]\\nwifi.powersave = 2' | \
+         sudo tee /etc/NetworkManager/conf.d/wifi-powersave.conf > /dev/null 2>&1 && \
+         echo 'OK' || echo 'SKIP'",
+    );
+    spinner.finish();
+    match wifi_result {
+        Ok(s) if s.trim().contains("OK") => {
+            StatusLine::ok("Wi-Fi power save disabled").print();
+        }
+        _ => {
+            StatusLine::skip("Wi-Fi power save (not applicable or no permissions)").print();
+        }
+    }
+
     // Verify service is running
     std::thread::sleep(std::time::Duration::from_secs(2));
     let status = ssh_run(
