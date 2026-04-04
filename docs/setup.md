@@ -1,14 +1,18 @@
 # Setup
 
-This guide walks you through configuring Ludolph for the first time.
+Setup is the boring part. Let's make it quick.
 
-## Quick Start
+The wizard asks for three things (Telegram token, Claude API key, vault path), tests your Pi connection, and you're done. Five minutes if everything goes right, fifteen if your Pi is being difficult.
 
 ```bash
-cargo install ludolph && lu setup
+curl -sSL https://ludolph.dev/install | bash
 ```
 
-The wizard guides you through entering credentials and testing your Pi connection.
+Or if you built from source:
+
+```bash
+lu setup
+```
 
 ## Getting Your Credentials
 
@@ -155,60 +159,34 @@ Setup complete ✓
   lu status     Check service status
 ```
 
+## After Setup
+
+Once Lu is running, you might want to:
+
+- **Build the vault index** — `lu index` gives Lu semantic search over your notes
+- **Set up jetpacks** — Automated workflows like morning briefs. See [Jetpacks](jetpacks.md)
+- **Install plugins** — Email, Slack, calendar integrations. See `lu plugin search`
+- **Teach Lu about yourself** — Just talk to Lu in Telegram. Mention your preferences, your projects, your timezone. Lu saves observations and remembers them across conversations
+
 ## Reconfiguring
 
 Update specific parts without redoing everything:
 
 ```bash
-# Update API credentials only
-lu setup credentials
-
-# Update Pi connection only
-lu setup pi
-
-# Edit config directly
-lu config
+lu setup credentials   # API keys and tokens
+lu setup pi            # Pi connection
+lu setup mcp           # MCP server on Mac
+lu config              # Edit config directly
 ```
 
-## Troubleshooting
+## Something broke?
 
-### Invalid Token
+See [Troubleshooting](troubleshooting.md) for the full decision tree. Quick fixes:
 
-```
-[•!!] Validating token...
-Token validation failed: Invalid Telegram bot token
-```
-
-**Fix:** Double-check you copied the entire token from BotFather, including the number before the colon.
-
-### Invalid API Key
-
-```
-[•!!] Validating API key...
-API key validation failed: Invalid API key
+```bash
+lu doctor              # Diagnose everything at once
+lu doctor --fix        # Auto-fix what it can
+lu mcp restart         # Restart the MCP server
 ```
 
-**Fix:**
-- Verify the key starts with `sk-ant-`
-- Check it hasn't been revoked in the Anthropic console
-- Create a new key if needed
-
-### Vault Not Found
-
-```
-Error: Path does not exist
-```
-
-**Fix:**
-- Use absolute path or `~` for home
-- Verify the folder exists: `ls ~/Documents/Vault`
-- Check for typos
-
-### SSH Connection Failed
-
-```
-[•!!] Connecting to pi@pi.local...
-SSH failed: Connection refused
-```
-
-**Fix:** See [Pi Setup Guide](pi-setup.md) for SSH configuration.
+If multiple things are broken, `lu uninstall --all && lu setup` starts fresh without touching your vault, SSH keys, or Tailscale.

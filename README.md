@@ -50,6 +50,9 @@ Your vault stays on your Mac. The Pi is just a thin client that forwards request
 - **Revision history** — Every change Claude makes is a file edit, tracked in source control. Full diffs on everything it touches or you touch. Don't like some change? Revert it, or ask Ludolph to help you revert it
 - **Knows Obsidian** — Dataview syntax, Tasks plugin formatting, Templater patterns, YAML frontmatter, wikilinks, callouts. Ludolph doesn't dump text into files — it writes markdown your plugins already understand
 - **Learns your vault** — On first run, Ludolph scans your folder structure, frontmatter schema, tag taxonomy, and templates. When it creates a note, it creates it the way _you_ create notes
+- **Learns everything else** — `lu learn` ingests files, folders, URLs, PDFs, and GitHub repos into a persistent knowledge base. Lu searches all of it alongside your vault. See [Learning and Teaching](docs/learn.md)
+- **Teaches what it knows** — `lu teach "topic" --for coders` generates explanations tailored to an audience. Export as `.ludo` packages with privacy tiers for sharing
+- **Remembers you** — Lu saves observations about your preferences and context across conversations. Tell Lu something once and it sticks. No config files, just conversation
 - **Fast** — Pi client written in Rust. Starts instantly, idles at ~2MB of RAM
 - **Always on** — Runs on a Raspberry Pi, answers via Telegram from anywhere
 - **Wake-on-LAN** — If your Mac is asleep, the Pi wakes it automatically
@@ -57,6 +60,7 @@ Your vault stays on your Mac. The Pi is just a thin client that forwards request
 - **Your API key** — You control costs, models, and data
 - **Configurable** — Sensible defaults out of the box, but everything's tunable if you want it to be
 - **Extensible MCP server** — The Mac runs a Python MCP server you can customize with your own tools. See [MCP Server Documentation](src/mcp/README.md)
+- **Community** — Publish your vault profile to [ludolph.dev](https://ludolph.dev) to show what your vault knows (not what it contains). Request to learn from others. Knowledge neighborhoods, not social media
 
 ## Security
 
@@ -157,7 +161,19 @@ Edit a note on your Mac, ask Ludolph about it from your phone. No sync delays �
 lu               # Start the bot
 lu setup         # Run setup wizard
 lu config        # Open config in editor
-lu pi            # Check Pi connectivity
+lu check         # Health check
+lu doctor        # Full diagnostic
+
+lu index         # Build vault search index
+lu knowledge     # Show what Lu knows
+
+lu learn <src>   # Learn from file, URL, folder, or GitHub repo
+lu teach <topic> # Teach a topic (--for coders, --export)
+lu publish       # Publish vault profile to ludolph.dev
+
+lu plugin list   # List installed plugins
+lu plugin search # Find community plugins
+lu update        # Update Lu and MCP
 ```
 
 ## Configuration
@@ -210,8 +226,10 @@ You don't need to configure anything — the installer sets it up automatically.
 |----------|-------|
 | File operations | `read_file`, `write_file`, `append_file`, `delete_file`, `move_file` |
 | Directories | `list_directory`, `create_directory` |
-| Search | `search`, `search_advanced` |
-| Metadata | `file_info` |
+| Search | `search`, `search_advanced`, `search_index`, `semantic_search` |
+| Knowledge | `learn_file`, `learn_url`, `learn_github`, `teach`, `teach_export` |
+| Memory | `save_observation`, `search_observations`, `save_conversation` |
+| Metadata | `file_info`, `vault_map` |
 
 For the full API reference and instructions for adding your own tools, see [src/mcp/README.md](src/mcp/README.md).
 

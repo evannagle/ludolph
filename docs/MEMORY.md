@@ -1,6 +1,35 @@
 # Ludolph Memory System
 
-Lu uses a two-tier memory architecture to maintain conversation context while respecting resource constraints on the Raspberry Pi.
+Lu remembers things in three ways: short-term conversation context (what you just said), long-term conversation logs (what you said last week), and observations (what Lu has learned about you as a person). The first two are mechanical — messages in, messages stored. Observations are the interesting part.
+
+## Observations
+
+Observations are facts Lu saves about you across conversations. They're the closest thing Lu has to actually knowing who you are.
+
+Tell Lu something once:
+- "I prefer morning briefs without newsletters"
+- "Elvis is my son, he's 4"
+- "I'm working on a book about a philosopher named Karl"
+
+Lu saves it as an observation with a category:
+
+| Category | What it stores | Example |
+|----------|---------------|---------|
+| preference | How you like things done | "Prefers terse responses, no summaries" |
+| fact | Biographical details | "Has a son named Elvis, age 4" |
+| context | Active projects and goals | "Book project: Karl, satirical nonfiction" |
+
+Observations are loaded into Lu's system prompt on every conversation. You don't need to repeat yourself. If something changes, just tell Lu — "Actually, Elvis is 5 now" — and the observation updates.
+
+To see what Lu knows: ask "What do you know about me?" in Telegram.
+
+Observations are stored in SQLite at `~/.ludolph/observations.db` on the Mac. They're separate from the conversation log and the vault — they're Lu's working model of you, not a record of what was said.
+
+For the difference between observations and the knowledge base (files, URLs, repos), see [Learning and Teaching](learn.md).
+
+## Conversation Memory
+
+The conversation system is more mechanical. Here's how it works.
 
 ## Architecture Overview
 

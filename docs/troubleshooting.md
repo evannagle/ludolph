@@ -1,16 +1,15 @@
 # Troubleshooting
 
-Use `lu doctor` to diagnose issues. This guide provides step-by-step fixes for common problems.
-
-## Quick Diagnostic
+Things break. Lu involves a Pi, a Mac, a network, an API, and a Telegram bot — that's five things that can go wrong independently. Start here:
 
 ```bash
 lu doctor
 ```
 
-This runs all checks and shows which component is failing.
+This checks everything and tells you which piece is unhappy. If `lu doctor` itself fails, you probably have a config problem (jump to [Configuration Issues](#configuration-issues)).
 
----
+For issues with the learn/teach pipeline, see [Learning and Teaching](learn.md).
+
 
 ## Configuration Issues
 
@@ -369,16 +368,45 @@ lu setup deploy
 
 ---
 
+## Lu Says Something Wrong
+
+### "Telegram isn't configured"
+
+If Lu says this in a scheduled message delivered via Telegram — yes, the irony. This was a bug in v0.12.x where scheduled tasks didn't know they were being delivered through Telegram. Fixed in v0.13.0. Update with `lu update`.
+
+### Lu ignores your preferences
+
+Lu stores preferences as observations. Check what it knows:
+
+Ask Lu in Telegram: "What do you know about me?"
+
+If observations are empty or wrong, tell Lu directly: "Remember that I prefer X." If observations aren't saving at all, check the MCP server logs for SQLite errors.
+
+### Lu can't find something in your vault
+
+The vault index might be stale or missing:
+
+```bash
+lu index --status          # Check if index exists
+lu index                   # Rebuild if needed
+lu knowledge               # See what Lu knows overall
+```
+
+If you recently added files, the file watcher should pick them up within 5 seconds. If it doesn't, `lu index --rebuild` forces a clean rebuild.
+
+### Lu hallucinates file paths
+
+Lu sometimes invents paths that don't exist. This is a model behavior, not a Lu bug. The sandbox prevents any damage — Lu can't write to files that don't exist without creating them first, and `lu doctor` will catch path issues.
+
+If it keeps happening, try building a deeper index: `lu index --tier deep` generates AI summaries per chunk, giving Lu better context for where things actually are.
+
 ## Clean Install
 
 If multiple things are broken, start fresh:
 
 ```bash
-# Uninstall everything
 lu uninstall --all
-
-# Re-run setup
 lu setup
 ```
 
-This preserves your vault, SSH keys, and Tailscale configuration.
+This preserves your vault, SSH keys, and Tailscale configuration. Your observations and learned content at `~/.ludolph/` are also preserved unless you manually delete them.

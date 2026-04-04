@@ -175,6 +175,7 @@ A jetpack is just a combination of:
 2. **A prompt** (what to do)
 3. **MCPs** (where to get data)
 4. **Observations** (how to tune it over time)
+5. **Knowledge** (what Lu has learned, optional)
 
 The pattern is always the same:
 - Tell Lu what you want, in plain language
@@ -184,3 +185,28 @@ The pattern is always the same:
 - Lu saves your preferences as observations and adjusts
 
 No config files. No YAML. Just conversation.
+
+### Supercharging with Learn
+
+If your jetpack needs domain knowledge — say your morning brief should reference internal docs, or your meeting prep should know about the project codebase — teach Lu first:
+
+```
+Lu, learn github:company/big-project
+Lu, learn https://internal-docs.company.com/handbook
+```
+
+Now when your jetpack runs, Lu searches that learned content alongside your vault. The research assistant and codebase learning jetpacks above work this way.
+
+### How observations work
+
+When you tell Lu "skip newsletters," Lu saves an observation:
+
+```
+[pref] Morning brief: skip newsletters in email summary
+```
+
+Next time the morning brief runs, that observation is in Lu's system prompt. Lu applies it without you having to say it again. Observations accumulate — each correction makes the jetpack better.
+
+To see what Lu remembers: "What observations do you have about me?"
+
+For the full picture on how Lu's memory works, see [Memory System](MEMORY.md). For the learn/teach pipeline, see [Learning and Teaching](learn.md).

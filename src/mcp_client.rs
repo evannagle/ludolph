@@ -184,7 +184,7 @@ impl McpClient {
     #[must_use]
     pub fn from_config(config: &McpConfig) -> Self {
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(10))
             .build()
             .expect("Failed to create HTTP client");
 
