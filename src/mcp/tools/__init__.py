@@ -26,6 +26,7 @@ from . import (
     memory,
     meta,
     metadata,
+    obligations,
     observations,
     periodic,
     publish,
@@ -58,6 +59,7 @@ _CORE_TOOLS = (
     + analytics.TOOLS
     + learn.TOOLS
     + memory.TOOLS
+    + obligations.TOOLS
     + observations.TOOLS
     + publish.TOOLS
     + schedules.TOOLS
@@ -87,6 +89,7 @@ _CORE_HANDLERS = {
     **analytics.HANDLERS,
     **learn.HANDLERS,
     **memory.HANDLERS,
+    **obligations.HANDLERS,
     **observations.HANDLERS,
     **publish.HANDLERS,
     **schedules.HANDLERS,
