@@ -28,6 +28,7 @@ from . import (
     observations,
     periodic,
     publish,
+    schedules,
     search,
     semantic,
     tags,
@@ -57,6 +58,7 @@ _CORE_TOOLS = (
     + memory.TOOLS
     + observations.TOOLS
     + publish.TOOLS
+    + schedules.TOOLS
     + meta.TOOLS
     + semantic.TOOLS
     + teach.TOOLS
@@ -84,6 +86,7 @@ _CORE_HANDLERS = {
     **memory.HANDLERS,
     **observations.HANDLERS,
     **publish.HANDLERS,
+    **schedules.HANDLERS,
     **meta.HANDLERS,
     **semantic.HANDLERS,
     **teach.HANDLERS,
