@@ -7,9 +7,31 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from security import get_vault_path
+from tools.metadata import parse_frontmatter
 
 # Cap vault walks so freshness checks never become expensive on huge vaults.
 _MAX_FRESHNESS_SCAN = 20000
+
+# Thresholds for bucketing tasks in live_context (days).
+_ACTIVE_RECENT_DAYS = 2
+_STALLED_IDLE_DAYS = 7
+_BLOCKED_ESCALATE_DAYS = 3
+
+# Tasks folder (relative to vault path).
+_TASKS_DIRNAME = "tasks"
+_DONE_DIRNAME = "done"
+
+# Priorities considered urgent.
+_URGENT_PRIORITIES = {"Urgent", "High"}
+
+# Cap on tasks scanned for live_context so vault_map stays cheap.
+_MAX_TASKS_SCAN = 500
+
+# Pattern to pull [[YYYY-MM-DD]] wiki-links out of an entries value.
+_ENTRY_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+
+# Recover task id from filename stem like "Client - Title (id)" when frontmatter lacks it.
+_FILENAME_ID_RE = re.compile(r"\(([a-z0-9][a-z0-9-]*)\)\s*$", re.IGNORECASE)
 
 TOOLS = [
     {
@@ -57,7 +79,11 @@ TOOLS = [
             "before diving into specific files. Response includes index freshness — "
             "when the index was last rebuilt and how many vault files have been "
             "modified since — so you can tell the user how trustworthy search "
-            "results are."
+            "results are. Also includes a live_context section that buckets active "
+            "tasks (active today, stalled, blocked, urgent) based on frontmatter "
+            "status/priority and file mtime. Cite live_context when the user asks "
+            "'what should I focus on?' or 'what's stalled?' — it is the cheapest "
+            "way to see which projects are alive versus drifting."
         ),
         "input_schema": {
             "type": "object",
@@ -291,6 +317,202 @@ def _search_index(args: dict) -> dict:
     return {"content": "\n".join(lines), "error": None}
 
 
+def _latest_entry_date(entries) -> datetime | None:
+    """Pull the latest YYYY-MM-DD from an entries frontmatter value.
+
+    The entries field is typically a list of wiki-links like "[[2026-04-04]]".
+    Returns a UTC-aware datetime at midnight, or None if no date found.
+    """
+    if entries is None:
+        return None
+    if isinstance(entries, str):
+        candidates = [entries]
+    elif isinstance(entries, list):
+        candidates = [str(item) for item in entries]
+    else:
+        return None
+
+    latest: datetime | None = None
+    for item in candidates:
+        for match in _ENTRY_DATE_RE.finditer(item):
+            try:
+                dt = datetime.strptime(match.group(1), "%Y-%m-%d").replace(tzinfo=UTC)
+            except ValueError:
+                continue
+            if latest is None or dt > latest:
+                latest = dt
+    return latest
+
+
+def _days_ago(dt: datetime | None, now: datetime) -> int | None:
+    """Return whole days between dt and now, or None if dt is missing."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    delta = now - dt
+    seconds = int(delta.total_seconds())
+    if seconds < 0:
+        return 0
+    return seconds // 86400
+
+
+def _scan_tasks() -> list[dict]:
+    """Read task frontmatter from vault/tasks/*.md (skipping done/).
+
+    Each entry has: id, title, client, status, priority, path, mtime (epoch),
+    entries_latest (datetime or None).
+    Capped at _MAX_TASKS_SCAN to keep the call cheap.
+    """
+    vault = get_vault_path()
+    tasks_dir = vault / _TASKS_DIRNAME
+    if not tasks_dir.is_dir():
+        return []
+
+    results: list[dict] = []
+    for path in sorted(tasks_dir.iterdir()):
+        if len(results) >= _MAX_TASKS_SCAN:
+            break
+        if path.is_dir():
+            continue
+        if path.name.startswith("."):
+            continue
+        if path.suffix.lower() != ".md":
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        frontmatter, _ = parse_frontmatter(content)
+        if not frontmatter:
+            continue
+        task_id = frontmatter.get("id")
+        if not task_id:
+            stem_match = _FILENAME_ID_RE.search(path.stem)
+            task_id = stem_match.group(1) if stem_match else path.stem
+        results.append(
+            {
+                "id": task_id,
+                "title": frontmatter.get("title") or path.stem,
+                "client": frontmatter.get("client"),
+                "status": frontmatter.get("status"),
+                "priority": frontmatter.get("priority"),
+                "path": str(path.relative_to(vault)),
+                "mtime": mtime,
+                "entries_latest": _latest_entry_date(frontmatter.get("entries")),
+            }
+        )
+    return results
+
+
+def _bucket_tasks(tasks: list[dict], now: datetime | None = None) -> dict:
+    """Sort tasks into buckets by activity/status/priority.
+
+    Buckets:
+      active_today: touched within _ACTIVE_RECENT_DAYS (not Done)
+      stalled: status=Started, mtime older than _STALLED_IDLE_DAYS
+      blocked: status=Blocked (flags days-blocked for escalation)
+      urgent: priority in Urgent/High, not Done
+    A task may appear in multiple buckets. Each bucket entry is scannable:
+    a dict with id, title, client, status, priority, days_idle.
+    """
+    if now is None:
+        now = datetime.now(UTC)
+    now_ts = now.timestamp()
+
+    def days_idle(task: dict) -> int:
+        return max(0, int((now_ts - task["mtime"]) // 86400))
+
+    def render(task: dict) -> dict:
+        # Strip trailing " (id)" from title since we print id separately.
+        title = task["title"] or ""
+        task_id = task["id"] or ""
+        suffix = f" ({task_id})"
+        if task_id and title.endswith(suffix):
+            title = title[: -len(suffix)]
+        return {
+            "id": task_id,
+            "title": title,
+            "client": task["client"],
+            "status": task["status"],
+            "priority": task["priority"],
+            "days_idle": days_idle(task),
+        }
+
+    active: list[dict] = []
+    stalled: list[dict] = []
+    blocked: list[dict] = []
+    urgent: list[dict] = []
+
+    for task in tasks:
+        status = task.get("status")
+        if status == "Done":
+            continue
+        idle = days_idle(task)
+
+        if idle <= _ACTIVE_RECENT_DAYS:
+            active.append(render(task))
+        if status == "Started" and idle >= _STALLED_IDLE_DAYS:
+            stalled.append(render(task))
+        if status == "Blocked":
+            blocked.append(render(task))
+        if task.get("priority") in _URGENT_PRIORITIES:
+            urgent.append(render(task))
+
+    # Sort each bucket: most recent activity first for active; most stale first
+    # for stalled/blocked; urgent by recency.
+    active.sort(key=lambda t: t["days_idle"])
+    stalled.sort(key=lambda t: t["days_idle"], reverse=True)
+    blocked.sort(key=lambda t: t["days_idle"], reverse=True)
+    urgent.sort(key=lambda t: t["days_idle"])
+
+    return {
+        "active_today": active,
+        "stalled": stalled,
+        "blocked": blocked,
+        "urgent": urgent,
+    }
+
+
+def _format_live_context(buckets: dict) -> list[str]:
+    """Render bucketed tasks as lines for vault_map output."""
+    lines: list[str] = []
+    total = sum(len(buckets[k]) for k in buckets)
+    if total == 0:
+        return lines
+
+    lines.append("")
+    lines.append("Live context (task buckets):")
+
+    def render_bucket(label: str, items: list[dict], idle_suffix: str) -> None:
+        if not items:
+            return
+        lines.append(f"  {label} ({len(items)}):")
+        for item in items:
+            client = item.get("client") or "-"
+            status = item.get("status") or "-"
+            priority = item.get("priority") or "-"
+            tags = f"[{client}, {status}, {priority}]"
+            lines.append(
+                f"    - {item['id']}: {item['title']} {tags} {item['days_idle']}{idle_suffix}"
+            )
+
+    render_bucket(
+        f"Active (touched ≤{_ACTIVE_RECENT_DAYS}d)",
+        buckets["active_today"],
+        "d idle",
+    )
+    render_bucket(
+        f"Stalled (Started, ≥{_STALLED_IDLE_DAYS}d idle)",
+        buckets["stalled"],
+        "d idle",
+    )
+    render_bucket("Blocked", buckets["blocked"], "d idle")
+    render_bucket("Urgent (High/Urgent priority)", buckets["urgent"], "d idle")
+    return lines
+
+
 def _vault_map(args: dict) -> dict:
     """Return vault index overview."""
     index_dir = _get_index_dir()
@@ -351,6 +573,14 @@ def _vault_map(args: dict) -> dict:
             lines.append(
                 f"  {folder}: {stats.get('file_count', 0)} files, {stats.get('chunk_count', 0)} chunks"
             )
+
+    try:
+        tasks = _scan_tasks()
+        buckets = _bucket_tasks(tasks)
+        lines.extend(_format_live_context(buckets))
+    except OSError:
+        # Scanning tasks is best-effort — vault_map must still return if it fails.
+        pass
 
     return {"content": "\n".join(lines), "error": None}
 
