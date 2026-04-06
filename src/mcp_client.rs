@@ -489,6 +489,50 @@ impl McpClient {
         }
     }
 
+    /// Push a schedule run record to the MCP server.
+    ///
+    /// Fire-and-forget: failures are logged but don't affect the local scheduler.
+    /// This syncs Pi schedule execution data to the Mac where Lu can see it.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_schedule_run(
+        &self,
+        schedule_id: &str,
+        schedule_name: &str,
+        user_id: i64,
+        status: &str,
+        started_at: &str,
+        completed_at: Option<&str>,
+        result_summary: Option<&str>,
+        error_message: Option<&str>,
+    ) {
+        let url = format!("{}/schedule_runs/record", self.base_url);
+
+        let body = serde_json::json!({
+            "schedule_id": schedule_id,
+            "schedule_name": schedule_name,
+            "user_id": user_id,
+            "status": status,
+            "started_at": started_at,
+            "completed_at": completed_at,
+            "result_summary": result_summary,
+            "error_message": error_message,
+        });
+
+        let result = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.auth_token))
+            .header("Content-Type", "application/json")
+            .timeout(Duration::from_secs(10))
+            .json(&body)
+            .send()
+            .await;
+
+        if let Err(e) = result {
+            tracing::warn!("Failed to push schedule run to MCP: {e}");
+        }
+    }
+
     /// Get tool definitions from the MCP server.
     ///
     /// Uses smart recovery: if request fails, checks if server is actually

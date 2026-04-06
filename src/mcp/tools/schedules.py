@@ -73,10 +73,72 @@ TOOLS = [
 ]
 
 
+_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS schedules (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    cron_expression TEXT NOT NULL,
+    timezone TEXT DEFAULT 'local',
+    next_run TEXT,
+    status TEXT DEFAULT 'active',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_run TEXT,
+    last_result TEXT,
+    notify_before INTEGER DEFAULT 0,
+    notify_after INTEGER DEFAULT 1,
+    tags TEXT,
+    priority INTEGER DEFAULT 0,
+    run_count INTEGER DEFAULT 0,
+    max_runs INTEGER DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_schedules_user ON schedules(user_id);
+CREATE INDEX IF NOT EXISTS idx_schedules_status ON schedules(status);
+CREATE INDEX IF NOT EXISTS idx_schedules_next_run ON schedules(next_run);
+
+CREATE TABLE IF NOT EXISTS schedule_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    schedule_id TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    status TEXT NOT NULL,
+    result_summary TEXT,
+    error_message TEXT,
+    FOREIGN KEY (schedule_id) REFERENCES schedules(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_runs_schedule ON schedule_runs(schedule_id);
+CREATE INDEX IF NOT EXISTS idx_runs_user ON schedule_runs(user_id);
+"""
+
+
+def _ensure_schema() -> None:
+    """Create the scheduler schema if the DB doesn't exist or is empty.
+
+    This lets the MCP tool work without requiring the Rust scheduler to have
+    run first. The Pi's scheduler pushes runs via /schedule_runs/record.
+    """
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+    try:
+        conn.executescript(_SCHEMA_SQL)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _connect() -> sqlite3.Connection | None:
     """Open a read-only connection to the scheduler DB, or None if missing."""
-    if not DB_PATH.exists():
+    # Ensure schema exists (idempotent, handles fresh Mac installs)
+    try:
+        _ensure_schema()
+    except sqlite3.Error:
         return None
+
     # Read-only URI so we never contend with the Rust writer.
     uri = f"file:{DB_PATH}?mode=ro"
     try:
@@ -85,6 +147,43 @@ def _connect() -> sqlite3.Connection | None:
         return conn
     except sqlite3.Error:
         return None
+
+
+def record_run(schedule_id: str, schedule_name: str, user_id: int, status: str,
+               started_at: str, completed_at: str | None = None,
+               result_summary: str | None = None,
+               error_message: str | None = None) -> None:
+    """Record a schedule run (called from the server endpoint that Pi posts to)."""
+    from datetime import datetime, timezone
+
+    _ensure_schema()
+    now = datetime.now(timezone.utc).isoformat()
+    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+    try:
+        # Upsert the schedule so display queries have a name to show
+        conn.execute(
+            """INSERT INTO schedules (id, name, user_id, prompt, cron_expression,
+                                      created_at, updated_at)
+               VALUES (?, ?, ?, '', '', ?, ?)
+               ON CONFLICT(id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at""",
+            (schedule_id, schedule_name, user_id, now, now),
+        )
+        conn.execute(
+            """INSERT INTO schedule_runs (schedule_id, user_id, started_at,
+                                          completed_at, status, result_summary, error_message)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (schedule_id, user_id, started_at, completed_at, status,
+             result_summary, error_message),
+        )
+        # Update schedule with last run info
+        conn.execute(
+            "UPDATE schedules SET run_count = COALESCE(run_count, 0) + 1, "
+            "last_run = ?, last_result = ?, updated_at = ? WHERE id = ?",
+            (completed_at or started_at, status, now, schedule_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _parse_iso(ts: str | None) -> datetime | None:

@@ -340,6 +340,38 @@ def observations_recent():
     return jsonify({"observations": results})
 
 
+@app.route("/schedule_runs/record", methods=["POST"])
+@require_auth
+def schedule_runs_record():
+    """Record a schedule run pushed from the Pi scheduler.
+
+    Expected body:
+        schedule_id (str), schedule_name (str), user_id (int), status (str),
+        started_at (ISO str), completed_at (ISO str, optional),
+        result_summary (str, optional), error_message (str, optional)
+    """
+    from tools.schedules import record_run
+
+    data = request.json or {}
+    try:
+        record_run(
+            schedule_id=data["schedule_id"],
+            schedule_name=data.get("schedule_name", data["schedule_id"]),
+            user_id=int(data["user_id"]),
+            status=data["status"],
+            started_at=data["started_at"],
+            completed_at=data.get("completed_at"),
+            result_summary=data.get("result_summary"),
+            error_message=data.get("error_message"),
+        )
+        return jsonify({"ok": True})
+    except (KeyError, ValueError) as e:
+        return jsonify({"error": f"Invalid payload: {e}"}), 400
+    except Exception as e:
+        logger.exception("Failed to record schedule run")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/tools")
 @require_auth
 def tools():

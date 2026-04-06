@@ -185,6 +185,7 @@ impl Llm {
         };
 
         let schedule_name = &schedule.name;
+        let started_at = chrono::Utc::now().to_rfc3339();
 
         // Record run start
         let run_id = match scheduler.record_run_start(schedule_id, user_id) {
@@ -198,6 +199,7 @@ impl Llm {
         tracing::info!("Executing schedule '{schedule_name}' immediately");
 
         let result = self.execute_schedule_prompt(prompt, user_id).await;
+        let completed_at = chrono::Utc::now().to_rfc3339();
 
         // Record run completion
         match &result {
@@ -218,6 +220,22 @@ impl Llm {
                     tracing::error!("Failed to record run completion: {e}");
                 }
 
+                // Sync to MCP so Lu can see this run
+                if let ToolBackend::Mcp { client } = &self.tool_backend {
+                    client
+                        .record_schedule_run(
+                            schedule_id,
+                            schedule_name,
+                            user_id,
+                            "success",
+                            &started_at,
+                            Some(&completed_at),
+                            Some(&summary),
+                            None,
+                        )
+                        .await;
+                }
+
                 format!("Executed schedule '{schedule_name}' successfully.\n\nResult:\n{response}")
             }
             Err(e) => {
@@ -230,6 +248,22 @@ impl Llm {
                     Some(&error_msg),
                 ) {
                     tracing::error!("Failed to record run error: {record_err}");
+                }
+
+                // Sync to MCP so Lu can see this failure
+                if let ToolBackend::Mcp { client } = &self.tool_backend {
+                    client
+                        .record_schedule_run(
+                            schedule_id,
+                            schedule_name,
+                            user_id,
+                            "error",
+                            &started_at,
+                            Some(&completed_at),
+                            None,
+                            Some(&error_msg),
+                        )
+                        .await;
                 }
 
                 format!("Schedule '{schedule_name}' failed: {error_msg}")

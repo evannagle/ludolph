@@ -1393,6 +1393,8 @@ fn spawn_scheduler_task(
                     user_id
                 );
 
+                let started_at = chrono::Utc::now().to_rfc3339();
+
                 // Record run start
                 let run_id = match scheduler.record_run_start(&schedule_id, user_id) {
                     Ok(id) => id,
@@ -1432,6 +1434,8 @@ fn spawn_scheduler_task(
                     .chat_scheduled(&schedule_name, &schedule.prompt, Some(user_id))
                     .await;
 
+                let completed_at = chrono::Utc::now().to_rfc3339();
+
                 // Record run completion and send notification
                 match result {
                     Ok(response) => {
@@ -1449,6 +1453,23 @@ fn spawn_scheduler_task(
                             None,
                         ) {
                             tracing::error!("Failed to record run completion: {}", e);
+                        }
+
+                        // Sync to MCP so Lu can see this run
+                        if let Some(ref mcp) = mcp_config {
+                            let client = McpClient::from_config(mcp);
+                            client
+                                .record_schedule_run(
+                                    &schedule_id,
+                                    &schedule_name,
+                                    user_id,
+                                    "success",
+                                    &started_at,
+                                    Some(&completed_at),
+                                    Some(&summary),
+                                    None,
+                                )
+                                .await;
                         }
 
                         if schedule.notify_after {
@@ -1473,6 +1494,23 @@ fn spawn_scheduler_task(
                             Some(&error_msg),
                         ) {
                             tracing::error!("Failed to record run error: {record_err}");
+                        }
+
+                        // Sync to MCP so Lu can see this failure
+                        if let Some(ref mcp) = mcp_config {
+                            let client = McpClient::from_config(mcp);
+                            client
+                                .record_schedule_run(
+                                    &schedule_id,
+                                    &schedule_name,
+                                    user_id,
+                                    "error",
+                                    &started_at,
+                                    Some(&completed_at),
+                                    None,
+                                    Some(&error_msg),
+                                )
+                                .await;
                         }
 
                         // Always notify on error
