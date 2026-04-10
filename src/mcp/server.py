@@ -31,6 +31,7 @@ from llm import (
     LlmBudgetError,
     LlmKeyMissingError,
     LlmRateLimitError,
+    LlmTimeoutError,
 )
 from llm import (
     chat as llm_chat,
@@ -500,8 +501,20 @@ def chat():
         return jsonify({"error": "budget_exceeded", "message": str(e)}), 402
     except LlmRateLimitError as e:
         return jsonify({"error": "rate_limit", "message": str(e)}), 429
+    except LlmTimeoutError as e:
+        return jsonify({
+            "error": "timeout",
+            "message": str(e),
+            "partial_content": getattr(e, "partial_content", ""),
+            "scratch_path": getattr(e, "scratch_path", None),
+        }), 504
     except LlmApiError as e:
-        return jsonify({"error": "api_error", "message": str(e)}), 502
+        return jsonify({
+            "error": "api_error",
+            "message": str(e),
+            "partial_content": getattr(e, "partial_content", ""),
+            "scratch_path": getattr(e, "scratch_path", None),
+        }), 502
     except Exception as e:
         logger.exception("Unexpected error in /chat endpoint")
         return jsonify({"error": "internal_error", "message": str(e)}), 500

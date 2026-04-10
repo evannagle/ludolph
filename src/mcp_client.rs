@@ -103,6 +103,13 @@ pub struct ToolCallFunction {
 struct ChatError {
     error: String,
     message: String,
+    /// Any content that was streamed before the failure. Populated by
+    /// the MCP server when it captures partial output from the LLM.
+    #[serde(default)]
+    partial_content: String,
+    /// Path to the scratch file holding the partial content, if any.
+    #[serde(default)]
+    scratch_path: Option<String>,
 }
 
 /// Information about a tool available on the MCP server.
@@ -915,9 +922,11 @@ impl McpClient {
             let error: ChatError = response.json().await.unwrap_or_else(|_| ChatError {
                 error: "unknown".to_string(),
                 message: format!("HTTP {status}"),
+                partial_content: String::new(),
+                scratch_path: None,
             });
 
-            let msg = match error.error.as_str() {
+            let base_msg = match error.error.as_str() {
                 "api_key_missing" => "API key not configured on Mac.\n\
                      Run: lu setup mcp"
                     .to_string(),
@@ -929,10 +938,28 @@ impl McpClient {
                      Add credits at console.anthropic.com"
                     .to_string(),
                 "rate_limit" => "Rate limited. Wait a moment and try again.".to_string(),
-                _ => error.message,
+                "timeout" => "The Claude API connection stalled and timed out.".to_string(),
+                _ => error.message.clone(),
             };
 
-            return Err(anyhow::anyhow!(msg));
+            // If partial content was captured before the failure, include
+            // it in the error so the user sees what was generated. The
+            // scratch file stays on the Mac for full recovery.
+            let full_msg = if error.partial_content.is_empty() {
+                base_msg
+            } else {
+                let scratch_note = error
+                    .scratch_path
+                    .as_ref()
+                    .map(|p| format!("\n\n(Full partial response saved on Mac at {p})"))
+                    .unwrap_or_default();
+                format!(
+                    "{base_msg}\n\n--- Partial response (before connection died) ---\n\n{}{}",
+                    error.partial_content, scratch_note
+                )
+            };
+
+            return Err(anyhow::anyhow!(full_msg));
         }
 
         response
