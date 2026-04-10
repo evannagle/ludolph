@@ -7,7 +7,7 @@ dependencies = [
     "flask>=2.0",
     "litellm>=1.0",
     "mcp>=1.0",
-    "requests>=2.25",
+    "requests>=2.33.0",
     "tomli_w>=1.0",
 ]
 
