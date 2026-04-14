@@ -13,8 +13,8 @@ use anyhow::{Context, Result};
 use console::style;
 use teloxide::prelude::*;
 use teloxide::types::{ChatAction, ChatId, MessageId, ParseMode, ReactionType, ReplyParameters};
-use tokio::sync::oneshot;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio::time::{Duration, interval, timeout};
 
 use crate::api::{AppState, run_server};
@@ -135,7 +135,9 @@ fn spawn_progress_receiver(
             match timeout(Duration::from_secs(30), rx.recv()).await {
                 Ok(Some(ProgressEvent::ToolStarted { name })) => {
                     let status = format!("{}...", tool_display_name(&name));
-                    let _ = bot.edit_message_text(chat_id, placeholder_id, &status).await;
+                    let _ = bot
+                        .edit_message_text(chat_id, placeholder_id, &status)
+                        .await;
                 }
                 Ok(Some(ProgressEvent::ToolFinished { .. })) => {
                     // Reset debounce by continuing the loop
