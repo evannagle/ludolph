@@ -24,7 +24,7 @@ ludolph-channel = "mcp_server:main"
 dev = [
     "black>=24.0",
     "ruff>=0.1",
-    "pytest>=7.0",
+    "pytest>=9.0.3",
 ]
 semantic = [
     "sentence-transformers>=2.2",
