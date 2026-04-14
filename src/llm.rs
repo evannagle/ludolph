@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use serde_json::{Map, Value};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
@@ -24,6 +25,17 @@ pub struct SetupChatResult {
     pub response: String,
     /// Whether `complete_setup` was called during the conversation.
     pub setup_completed: bool,
+}
+
+/// Progress events sent from the LLM tool loop to the bot layer.
+#[derive(Debug)]
+pub enum ProgressEvent {
+    /// A tool is about to execute.
+    ToolStarted { name: String },
+    /// A tool finished executing.
+    ToolFinished { name: String },
+    /// The LLM conversation is complete.
+    Done,
 }
 
 /// Tool execution backend.
@@ -734,16 +746,15 @@ impl Llm {
     ///
     /// Returns an error if the MCP server is unreachable or returns an error.
     #[allow(clippy::cognitive_complexity)]
-    pub async fn chat_cancellable<F, C>(
+    pub async fn chat_cancellable<C>(
         &self,
         user_message: &str,
         user_id: Option<i64>,
         cancel_token: CancellationToken,
         check_new_messages: C,
-        on_text: F,
+        progress_tx: mpsc::Sender<ProgressEvent>,
     ) -> Result<Option<String>>
     where
-        F: Fn(&str) + Send + Sync,
         C: Fn() -> bool + Send,
     {
         let tools = self.get_tools().await?;
@@ -803,7 +814,28 @@ impl Llm {
                             .unwrap_or_else(|_| Value::Object(Map::default()));
 
                         tracing::debug!("Executing tool: {}", tc.function.name);
+
+                        if progress_tx
+                            .send(ProgressEvent::ToolStarted {
+                                name: tc.function.name.clone(),
+                            })
+                            .await
+                            .is_err()
+                        {
+                            tracing::debug!("Progress receiver dropped, continuing");
+                        }
+
                         let result = self.execute_tool(&tc.function.name, &input, user_id).await;
+
+                        if progress_tx
+                            .send(ProgressEvent::ToolFinished {
+                                name: tc.function.name.clone(),
+                            })
+                            .await
+                            .is_err()
+                        {
+                            tracing::debug!("Progress receiver dropped, continuing");
+                        }
 
                         // Track file access for focus layer
                         self.track_file_access(user_id, &tc.function.name, &input, &result);
@@ -827,8 +859,7 @@ impl Llm {
             let content = response.content.unwrap_or_default();
             tracing::debug!("Chat complete, returning {} chars", content.len());
 
-            // Call the callback with final result
-            on_text(&content);
+            let _ = progress_tx.send(ProgressEvent::Done).await;
 
             self.store_message(user_id, "assistant", &content);
             return Ok(Some(content));
