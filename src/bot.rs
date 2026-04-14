@@ -360,7 +360,15 @@ async fn process_user_conversation(
                 .is_ok_and(|guard| guard.get(&user_id).is_some_and(|c| !c.pending.is_empty()))
         };
 
-        // Step 5: Process with cancellation
+        // Step 5: Create progress channel and spawn receiver
+        let (progress_tx, progress_rx) = mpsc::channel::<ProgressEvent>(8);
+
+        if let Some(msg_id) = placeholder_id {
+            spawn_progress_receiver(bot.clone(), chat_id, msg_id, progress_rx);
+        }
+        // If placeholder_id is None, progress_rx is dropped and sends become no-ops
+
+        // Step 6: Process with cancellation
         #[allow(clippy::cast_possible_wrap)]
         let result = llm
             .chat_cancellable(
@@ -368,20 +376,7 @@ async fn process_user_conversation(
                 Some(user_id as i64),
                 cancel_token.clone(),
                 check_new_messages,
-                |response| {
-                    // Final response callback - update placeholder
-                    if let Some(msg_id) = placeholder_id {
-                        let formatted = to_telegram_html(response);
-                        let bot_clone = bot.clone();
-
-                        tokio::spawn(async move {
-                            let _ = bot_clone
-                                .edit_message_text(chat_id, msg_id, &formatted)
-                                .parse_mode(ParseMode::Html)
-                                .await;
-                        });
-                    }
-                },
+                progress_tx,
             )
             .await;
 

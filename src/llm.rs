@@ -33,7 +33,10 @@ pub enum ProgressEvent {
     /// A tool is about to execute.
     ToolStarted { name: String },
     /// A tool finished executing.
-    ToolFinished { name: String },
+    ToolFinished {
+        #[allow(dead_code)]
+        name: String,
+    },
     /// The LLM conversation is complete.
     Done,
 }
