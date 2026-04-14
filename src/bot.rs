@@ -14,13 +14,14 @@ use console::style;
 use teloxide::prelude::*;
 use teloxide::types::{ChatAction, ChatId, MessageId, ParseMode, ReactionType, ReplyParameters};
 use tokio::sync::oneshot;
-use tokio::time::{Duration, interval};
+use tokio::sync::mpsc;
+use tokio::time::{Duration, interval, timeout};
 
 use crate::api::{AppState, run_server};
 use crate::channel::Channel;
 use crate::config::{Config, McpConfig, config_dir};
 use crate::focus::Focus;
-use crate::llm::Llm;
+use crate::llm::{Llm, ProgressEvent};
 use crate::mcp_client::{DisconnectReason, McpClient};
 use crate::memory::Memory;
 use crate::scheduler::Scheduler;
@@ -102,6 +103,56 @@ fn consolidate_messages(messages: &[String]) -> String {
             prompt
         }
     }
+}
+
+/// Map tool names to human-friendly progress text.
+fn tool_display_name(name: &str) -> &str {
+    match name {
+        "search" | "search_index" => "Searching vault",
+        "read_file" => "Reading file",
+        "list_dir" => "Browsing vault",
+        "vault_map" => "Mapping vault",
+        "save_observation" => "Noting that",
+        "search_observations" => "Checking memory",
+        "create_file" | "append_file" => "Writing to vault",
+        _ => "Working",
+    }
+}
+
+/// Spawn a task that receives progress events and edits the Telegram placeholder.
+///
+/// Edits the placeholder message on `ToolStarted` events with a human-friendly
+/// status. If no events arrive for 30 seconds, edits to "Still working..."
+/// Exits when the channel closes or `Done` is received.
+fn spawn_progress_receiver(
+    bot: Bot,
+    chat_id: ChatId,
+    placeholder_id: MessageId,
+    mut rx: mpsc::Receiver<ProgressEvent>,
+) {
+    tokio::spawn(async move {
+        loop {
+            match timeout(Duration::from_secs(30), rx.recv()).await {
+                Ok(Some(ProgressEvent::ToolStarted { name })) => {
+                    let status = format!("{}...", tool_display_name(&name));
+                    let _ = bot.edit_message_text(chat_id, placeholder_id, &status).await;
+                }
+                Ok(Some(ProgressEvent::ToolFinished { .. })) => {
+                    // Reset debounce by continuing the loop
+                }
+                Ok(Some(ProgressEvent::Done) | None) => {
+                    // Done or channel closed — exit without editing
+                    break;
+                }
+                Err(_) => {
+                    // 30s timeout — send heartbeat
+                    let _ = bot
+                        .edit_message_text(chat_id, placeholder_id, "Still working...")
+                        .await;
+                }
+            }
+        }
+    });
 }
 
 /// Set a reaction emoji on a message.
@@ -1548,5 +1599,24 @@ mod tests {
     fn test_consolidate_empty_returns_empty() {
         let msgs: Vec<String> = vec![];
         assert_eq!(consolidate_messages(&msgs), "");
+    }
+
+    #[test]
+    fn tool_display_name_maps_known_tools() {
+        assert_eq!(tool_display_name("search"), "Searching vault");
+        assert_eq!(tool_display_name("search_index"), "Searching vault");
+        assert_eq!(tool_display_name("read_file"), "Reading file");
+        assert_eq!(tool_display_name("list_dir"), "Browsing vault");
+        assert_eq!(tool_display_name("vault_map"), "Mapping vault");
+        assert_eq!(tool_display_name("save_observation"), "Noting that");
+        assert_eq!(tool_display_name("search_observations"), "Checking memory");
+        assert_eq!(tool_display_name("create_file"), "Writing to vault");
+        assert_eq!(tool_display_name("append_file"), "Writing to vault");
+    }
+
+    #[test]
+    fn tool_display_name_returns_working_for_unknown() {
+        assert_eq!(tool_display_name("some_new_tool"), "Working");
+        assert_eq!(tool_display_name(""), "Working");
     }
 }
