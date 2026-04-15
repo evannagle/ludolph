@@ -904,8 +904,48 @@ impl McpClient {
         Ok(())
     }
 
+    /// Maximum retry attempts for transient errors.
+    const MAX_RETRIES: u32 = 3;
+
     /// Send a chat request to the MCP server's LLM proxy.
+    ///
+    /// Retries on transient errors (connection failures, timeouts, rate limits)
+    /// with exponential backoff (1s, 2s, 4s).
     pub async fn chat(&self, request: &ChatRequest) -> Result<ChatResponse> {
+        let mut last_err = None;
+
+        for attempt in 0..Self::MAX_RETRIES {
+            match self.chat_once(request).await {
+                Ok(resp) => return Ok(resp),
+                Err(e) => {
+                    let msg = e.to_string();
+                    let is_transient = msg.contains("Connection")
+                        || msg.contains("timeout")
+                        || msg.contains("timed out")
+                        || msg.contains("Rate limited");
+
+                    if !is_transient || attempt + 1 == Self::MAX_RETRIES {
+                        return Err(e);
+                    }
+
+                    let delay = Duration::from_secs(1 << attempt);
+                    tracing::warn!(
+                        "Chat attempt {} failed (retrying in {:?}): {}",
+                        attempt + 1,
+                        delay,
+                        msg
+                    );
+                    tokio::time::sleep(delay).await;
+                    last_err = Some(e);
+                }
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("Chat failed after retries")))
+    }
+
+    /// Single attempt at sending a chat request.
+    async fn chat_once(&self, request: &ChatRequest) -> Result<ChatResponse> {
         let response = self
             .client
             .post(format!("{}/chat", self.base_url))

@@ -462,6 +462,12 @@ async fn process_user_conversation(
             }
             Err(e) => {
                 // Error - report and cleanup
+                let error_str = e.to_string();
+                let is_transient = error_str.contains("Connection")
+                    || error_str.contains("timeout")
+                    || error_str.contains("timed out")
+                    || error_str.contains("Rate limited");
+
                 tracing::error!("Chat error for user {}: {}", user_id, e);
                 if let Some(msg_id) = placeholder_id {
                     let error_msg = format_api_error(&e);
@@ -474,6 +480,12 @@ async fn process_user_conversation(
                         conv.processing = false;
                         conv.cancel_token = None;
                         conv.placeholder_id = None;
+
+                        // On transient errors, keep pending messages so the
+                        // user can retry without re-typing their message.
+                        if !is_transient {
+                            conv.pending.clear();
+                        }
                     }
                 }
                 return;
