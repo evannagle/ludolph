@@ -194,15 +194,15 @@ pub struct MemoryConfig {
 }
 
 const fn default_window_size() -> usize {
-    8
+    32
 }
 
 const fn default_persist_threshold() -> usize {
-    16
+    64
 }
 
 const fn default_max_context_bytes() -> usize {
-    32 * 1024 // 32KB default - conservative for Pi
+    128 * 1024 // 128KB - allows longer creative sessions
 }
 
 impl Default for MemoryConfig {
