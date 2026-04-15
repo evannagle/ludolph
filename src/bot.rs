@@ -26,7 +26,7 @@ use crate::mcp_client::{DisconnectReason, McpClient};
 use crate::memory::Memory;
 use crate::scheduler::Scheduler;
 use crate::setup::{SETUP_SYSTEM_PROMPT, initial_setup_message};
-use crate::telegram::to_telegram_html;
+use crate::telegram::{TELEGRAM_MAX_LEN, split_message, to_telegram_html};
 use crate::ui::StatusLine;
 
 /// Tracks a user's pending messages and current processing state.
@@ -396,13 +396,24 @@ async fn process_user_conversation(
                     continue;
                 }
 
-                // Send final response
+                // Send final response, splitting if too long for Telegram
                 if let Some(msg_id) = placeholder_id {
                     let formatted_final = to_telegram_html(&response);
+                    let chunks = split_message(&formatted_final, TELEGRAM_MAX_LEN);
+
+                    // Edit the placeholder with the first chunk
                     let _ = bot
-                        .edit_message_text(chat_id, msg_id, &formatted_final)
+                        .edit_message_text(chat_id, msg_id, &chunks[0])
                         .parse_mode(ParseMode::Html)
                         .await;
+
+                    // Send remaining chunks as new messages
+                    for chunk in &chunks[1..] {
+                        let _ = bot
+                            .send_message(chat_id, chunk)
+                            .parse_mode(ParseMode::Html)
+                            .await;
+                    }
                 }
 
                 // Clear state and exit

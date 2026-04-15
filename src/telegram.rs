@@ -114,6 +114,63 @@ pub fn to_telegram_html(text: &str) -> String {
     result
 }
 
+/// Maximum safe length for a single Telegram message.
+///
+/// Telegram's hard limit is 4096 characters, but we leave a small margin
+/// for HTML entity expansion.
+pub const TELEGRAM_MAX_LEN: usize = 4000;
+
+/// Split a message into chunks that fit within Telegram's character limit.
+///
+/// Splits at paragraph boundaries (`\n\n`) when possible, falling back to
+/// line boundaries (`\n`), and finally hard-splitting at `max_len`.
+pub fn split_message(text: &str, max_len: usize) -> Vec<String> {
+    if text.len() <= max_len {
+        return vec![text.to_string()];
+    }
+
+    let mut chunks = Vec::new();
+    let mut remaining = text;
+
+    while !remaining.is_empty() {
+        if remaining.len() <= max_len {
+            chunks.push(remaining.to_string());
+            break;
+        }
+
+        let split_at = find_split_point(remaining, max_len);
+        let (chunk, rest) = remaining.split_at(split_at);
+        chunks.push(chunk.trim_end().to_string());
+        remaining = rest.trim_start_matches('\n');
+    }
+
+    chunks
+}
+
+/// Find the best split point within `max_len` characters.
+///
+/// Prefers paragraph breaks, then line breaks, then hard cut.
+fn find_split_point(text: &str, max_len: usize) -> usize {
+    let search_region = &text[..max_len];
+
+    // Try paragraph boundary
+    if let Some(pos) = search_region.rfind("\n\n") {
+        if pos > max_len / 4 {
+            return pos + 1; // include one newline
+        }
+    }
+
+    // Try line boundary
+    if let Some(pos) = search_region.rfind('\n') {
+        if pos > max_len / 4 {
+            return pos + 1;
+        }
+    }
+
+    // Hard split at max_len
+    max_len
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,5 +199,36 @@ mod tests {
     #[test]
     fn test_escapes_html() {
         assert_eq!(to_telegram_html("<script>"), "&lt;script&gt;");
+    }
+
+    #[test]
+    fn split_message_short_text_unchanged() {
+        let chunks = split_message("hello world", 100);
+        assert_eq!(chunks, vec!["hello world"]);
+    }
+
+    #[test]
+    fn split_message_splits_at_paragraph() {
+        let text = format!("{}\n\n{}", "a".repeat(50), "b".repeat(50));
+        let chunks = split_message(&text, 60);
+        assert_eq!(chunks.len(), 2);
+        assert!(chunks[0].starts_with('a'));
+        assert!(chunks[1].starts_with('b'));
+    }
+
+    #[test]
+    fn split_message_splits_at_line() {
+        let text = format!("{}\n{}", "a".repeat(50), "b".repeat(50));
+        let chunks = split_message(&text, 60);
+        assert_eq!(chunks.len(), 2);
+    }
+
+    #[test]
+    fn split_message_hard_splits_no_newlines() {
+        let text = "x".repeat(200);
+        let chunks = split_message(&text, 100);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].len(), 100);
+        assert_eq!(chunks[1].len(), 100);
     }
 }
