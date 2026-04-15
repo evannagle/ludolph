@@ -562,7 +562,8 @@ impl Llm {
         // Detect !project references (e.g. "!diet", "!novel")
         for word in message.split_whitespace() {
             if let Some(name) = word.strip_prefix('!') {
-                let clean = name.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
+                let clean =
+                    name.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
                 if !clean.is_empty() {
                     project_names.push(clean.to_lowercase());
                 }
@@ -590,15 +591,16 @@ impl Llm {
 
                 if !result.contains("Error:") && !result.contains("not found") && !result.is_empty()
                 {
-                    context_parts.push(format!(
-                        "### Project: {name}\nSource: {path}\n\n{result}"
-                    ));
+                    context_parts.push(format!("### Project: {name}\nSource: {path}\n\n{result}"));
                     break;
                 }
             }
 
             // Fallback: try listing the project directory
-            if context_parts.iter().all(|p| !p.contains(&format!("Project: {name}"))) {
+            if context_parts
+                .iter()
+                .all(|p| !p.contains(&format!("Project: {name}")))
+            {
                 let result = self
                     .execute_tool(
                         "list_dir",
