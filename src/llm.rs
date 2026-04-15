@@ -347,7 +347,14 @@ impl Llm {
     }
 
     /// Build system prompt with memory, focus, schedule, observations, and vault context.
-    async fn build_system_prompt(&self, user_id: Option<i64>) -> String {
+    ///
+    /// If `user_message` is provided, project references (e.g. `!diet`) are
+    /// detected and relevant vault content is auto-loaded.
+    async fn build_system_prompt(
+        &self,
+        user_id: Option<i64>,
+        user_message: Option<&str>,
+    ) -> String {
         let memory_context = if self.memory.is_some() {
             "\n\nYou have access to conversation history with this user. \
              Recent messages are included below. For older conversations, \
@@ -366,6 +373,12 @@ impl Llm {
             .map_or_else(String::new, |content| {
                 format!("\n\n## Vault Context (from Lu.md)\n\n{content}")
             });
+
+        let project_context = if let Some(msg) = user_message {
+            self.detect_and_load_project_context(msg).await
+        } else {
+            String::new()
+        };
 
         format!(
             "You are Ludolph, a helpful assistant with access to the user's Obsidian vault at {}. \
@@ -399,14 +412,15 @@ impl Llm {
              then use search_observations if needed.\n\
              - Categories: preference (likes/defaults), fact (biographical), context (projects/goals).\n\
              - Keep observations atomic — one fact per observation.\n\
-             - Update observations when facts change (delete old, save new).{}{}{}{}{}",
+             - Update observations when facts change (delete old, save new).{}{}{}{}{}{}",
             self.vault_description(),
             self.timezone,
             observations_context,
             memory_context,
             focus_context,
             schedule_context,
-            lu_context
+            lu_context,
+            project_context
         )
     }
 
@@ -537,6 +551,82 @@ impl Llm {
         }
     }
 
+    /// Detect project references in a user message and load relevant vault context.
+    ///
+    /// Recognizes `!project_name` patterns and attempts to load an index file
+    /// from `projects/<name>/` in the vault. Returns formatted context or empty
+    /// string if no references found.
+    async fn detect_and_load_project_context(&self, message: &str) -> String {
+        let mut project_names: Vec<String> = Vec::new();
+
+        // Detect !project references (e.g. "!diet", "!novel")
+        for word in message.split_whitespace() {
+            if let Some(name) = word.strip_prefix('!') {
+                let clean = name.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
+                if !clean.is_empty() {
+                    project_names.push(clean.to_lowercase());
+                }
+            }
+        }
+
+        if project_names.is_empty() {
+            return String::new();
+        }
+
+        let mut context_parts = Vec::new();
+
+        for name in &project_names {
+            // Try common project index locations
+            let candidates = [
+                format!("projects/{name}/index.md"),
+                format!("projects/{name}/{name}.md"),
+                format!("projects/{name}/README.md"),
+            ];
+
+            for path in &candidates {
+                let result = self
+                    .execute_tool("read_file", &serde_json::json!({"path": path}), None)
+                    .await;
+
+                if !result.contains("Error:") && !result.contains("not found") && !result.is_empty()
+                {
+                    context_parts.push(format!(
+                        "### Project: {name}\nSource: {path}\n\n{result}"
+                    ));
+                    break;
+                }
+            }
+
+            // Fallback: try listing the project directory
+            if context_parts.iter().all(|p| !p.contains(&format!("Project: {name}"))) {
+                let result = self
+                    .execute_tool(
+                        "list_dir",
+                        &serde_json::json!({"path": format!("projects/{name}")}),
+                        None,
+                    )
+                    .await;
+
+                if !result.contains("Error:") && !result.contains("not found") && !result.is_empty()
+                {
+                    context_parts.push(format!(
+                        "### Project: {name}\nFiles in projects/{name}/:\n{result}"
+                    ));
+                }
+            }
+        }
+
+        if context_parts.is_empty() {
+            return String::new();
+        }
+
+        format!(
+            "\n\n## Auto-loaded Project Context\n\n{}\n\n\
+             Use the files above as source material. Read additional files as needed.",
+            context_parts.join("\n\n")
+        )
+    }
+
     /// Convert tools to JSON format for API.
     fn tools_to_json(tools: &[Tool]) -> Vec<Value> {
         tools
@@ -649,7 +739,7 @@ impl Llm {
 
     /// Prepare messages for a chat request.
     async fn prepare_messages(&self, user_message: &str, user_id: Option<i64>) -> Vec<ChatMessage> {
-        let system = self.build_system_prompt(user_id).await;
+        let system = self.build_system_prompt(user_id, Some(user_message)).await;
         let mut messages = self.load_conversation_history(user_id);
 
         messages.insert(
