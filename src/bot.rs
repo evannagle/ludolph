@@ -1066,9 +1066,24 @@ fn format_api_error(error: &anyhow::Error) -> String {
             .to_string();
     }
 
+    // Check for timeouts with completed tool actions
+    if full_error.contains("Actions already taken before failure") {
+        // Extract the tool summary from the error chain
+        let actions = error
+            .chain()
+            .find(|e| e.to_string().contains("Actions already taken"))
+            .map_or_else(String::new, ToString::to_string);
+        return format!(
+            "The response timed out, but some actions completed:\n\n\
+             {actions}\n\n\
+             Check your vault for changes. You can ask me to continue \
+             where I left off."
+        );
+    }
+
     // Check for general network errors
     if full_error.contains("connection") || full_error.contains("timeout") {
-        return "🌐 Network error. Check your internet connection.".to_string();
+        return "Network error. Check your internet connection.".to_string();
     }
 
     // Default: show the error chain more clearly

@@ -695,13 +695,36 @@ impl Llm {
             tools.len()
         );
 
+        let mut completed_tools: Vec<String> = Vec::new();
+
         loop {
-            let response = self.call_llm(&messages, &tools).await?;
+            let response = match self.call_llm(&messages, &tools).await {
+                Ok(r) => r,
+                Err(e) => {
+                    // If tool calls completed before this LLM call failed,
+                    // include that context in the error so the user knows
+                    // what actions were already taken.
+                    if completed_tools.is_empty() {
+                        return Err(e);
+                    }
+                    let tool_summary = completed_tools.join(", ");
+                    return Err(e.context(format!(
+                        "Actions already taken before failure: {tool_summary}. \
+                         Check your vault for changes."
+                    )));
+                }
+            };
 
             if self
                 .handle_tool_calls(&response, &mut messages, user_id)
                 .await
             {
+                // Track which tools completed in this round
+                if let Some(calls) = &response.tool_calls {
+                    for tc in calls {
+                        completed_tools.push(tc.function.name.clone());
+                    }
+                }
                 continue;
             }
 

@@ -26,7 +26,7 @@ LLM_REQUEST_TIMEOUT = 120
 # Max seconds to wait between streaming chunks before treating the
 # connection as stalled. Anthropic typically emits tokens every few
 # hundred ms; 30s of silence means something is wrong.
-LLM_STREAM_STALL_TIMEOUT = 30
+LLM_STREAM_STALL_TIMEOUT = 60
 
 # Number of automatic retries on transient failures (timeouts, connection errors).
 # Set to 1 so the user doesn't wait through multiple 120s timeouts on a dead line.
