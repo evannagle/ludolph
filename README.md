@@ -1,8 +1,7 @@
 <img src="docs/images/ludolph-name.png" width="300" />
 
-> [!WARNING]
-> Ludolph is grumpy and is currently under active development.
-> Please check back in roughly 3.14 months, give or take a few decimals.
+> [!NOTE]
+> Ludolph is stable and running in production. Self-hosted, always-on, vault stays on your Mac.
 
 <p>
 <strong>A real brain for your second brain.</strong><br>
