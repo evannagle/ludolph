@@ -7,10 +7,16 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::process::Command;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::config::McpConfig;
 use crate::tools::Tool;
+
+/// Default retry configuration for MCP requests.
+const DEFAULT_MAX_RETRIES: u32 = 3;
+/// Base delay between retries (doubles each attempt: 1s, 2s, 4s).
+const RETRY_BASE_DELAY: Duration = Duration::from_secs(1);
 
 /// MCP client for communicating with the Mac's MCP server.
 #[derive(Clone)]
@@ -20,6 +26,9 @@ pub struct McpClient {
     fallback_url: Option<String>,
     auth_token: String,
     mac_address: Option<String>,
+    /// Tracks the last URL that successfully responded.
+    /// Starts as `base_url`; switches to fallback on primary failure.
+    active_url: Arc<RwLock<String>>,
 }
 
 #[derive(Serialize)]
@@ -186,18 +195,36 @@ struct StatusResponse {
     version: String,
 }
 
+/// Whether a request error is transient and worth retrying.
+fn is_transient_error(error: &reqwest::Error) -> bool {
+    error.is_timeout() || error.is_connect() || error.is_request()
+}
+
+/// Whether an error message indicates a transient failure.
+fn is_transient_message(msg: &str) -> bool {
+    let lower = msg.to_lowercase();
+    lower.contains("connection")
+        || lower.contains("timeout")
+        || lower.contains("timed out")
+        || lower.contains("rate limit")
+        || lower.contains("temporarily unavailable")
+        || lower.contains("unreachable")
+}
+
 impl McpClient {
     /// Create a new MCP client from configuration.
     #[must_use]
     pub fn from_config(config: &McpConfig) -> Self {
+        let base_url = config.url.trim_end_matches('/').to_string();
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .build()
             .expect("Failed to create HTTP client");
 
         Self {
+            active_url: Arc::new(RwLock::new(base_url.clone())),
             client,
-            base_url: config.url.trim_end_matches('/').to_string(),
+            base_url,
             fallback_url: config
                 .fallback_url
                 .as_ref()
@@ -213,28 +240,235 @@ impl McpClient {
         self.mac_address.is_some()
     }
 
-    /// Get detailed status information from the MCP server.
-    ///
-    /// Returns status including connection state, latency, and available tools.
-    /// Tries primary URL first, then fallback URL if configured.
-    /// If both are unreachable, returns `McpStatus` with `connected: false`.
-    pub async fn get_status(&self) -> McpStatus {
-        // Try primary URL first
-        let primary_result = self.try_status(&self.base_url, false).await;
-        if let Ok(status) = primary_result {
-            return status;
-        }
-        let mut last_reason = primary_result.unwrap_err();
+    /// Get the currently active URL (last one that worked).
+    fn active_url(&self) -> String {
+        self.active_url
+            .read()
+            .map_or_else(|_| self.base_url.clone(), |u| u.clone())
+    }
 
-        // Try fallback if configured
-        if let Some(fallback) = &self.fallback_url {
-            match self.try_status(fallback, true).await {
-                Ok(status) => return status,
-                Err(reason) => last_reason = reason,
+    /// Record a successful connection to a URL so future requests prefer it.
+    fn set_active_url(&self, url: &str) {
+        if let Ok(mut active) = self.active_url.write() {
+            if *active != url {
+                tracing::info!("MCP: switching active endpoint to {url}");
+                *active = url.to_string();
+            }
+        }
+    }
+
+    /// Get the list of URLs to try, starting with the active one.
+    ///
+    /// Returns `[active, other]` if a fallback is configured and differs
+    /// from the active URL, otherwise just `[active]`.
+    fn urls_to_try(&self) -> Vec<String> {
+        let active = self.active_url();
+        let mut urls = vec![active.clone()];
+
+        // Add the other URL as fallback
+        if let Some(ref fallback) = self.fallback_url {
+            if *fallback != active {
+                urls.push(fallback.clone());
+            }
+        }
+        if self.base_url != active && !urls.contains(&self.base_url) {
+            urls.push(self.base_url.clone());
+        }
+
+        urls
+    }
+
+    /// Make an authenticated GET request with retry and fallback.
+    ///
+    /// Tries the active URL first, then fallback. Each URL gets up to
+    /// `max_retries` attempts with exponential backoff (1s, 2s, 4s).
+    async fn get_with_retry(
+        &self,
+        path: &str,
+        timeout: Duration,
+        max_retries: u32,
+    ) -> Result<reqwest::Response> {
+        let urls = self.urls_to_try();
+        let mut last_error = None;
+
+        for url in &urls {
+            let endpoint = format!("{url}{path}");
+
+            for attempt in 0..max_retries {
+                if attempt > 0 {
+                    let delay = RETRY_BASE_DELAY * (1 << (attempt - 1));
+                    tracing::debug!("Retry {attempt}/{max_retries} for {endpoint} in {delay:?}");
+                    tokio::time::sleep(delay).await;
+                }
+
+                match self
+                    .client
+                    .get(&endpoint)
+                    .header("Authorization", format!("Bearer {}", self.auth_token))
+                    .timeout(timeout)
+                    .send()
+                    .await
+                {
+                    Ok(resp) if resp.status().is_success() => {
+                        self.set_active_url(url);
+                        return Ok(resp);
+                    }
+                    Ok(resp) => {
+                        let status = resp.status();
+                        // Auth failures are not transient — don't retry
+                        if status == reqwest::StatusCode::UNAUTHORIZED
+                            || status == reqwest::StatusCode::FORBIDDEN
+                        {
+                            return Err(anyhow::anyhow!(
+                                "Authentication failed ({status}) at {endpoint}"
+                            ));
+                        }
+                        last_error = Some(anyhow::anyhow!("Server error ({status}) at {endpoint}"));
+                    }
+                    Err(e) if is_transient_error(&e) && attempt + 1 < max_retries => {
+                        tracing::warn!(
+                            "Transient error on {endpoint} (attempt {}): {e}",
+                            attempt + 1
+                        );
+                        last_error = Some(Self::format_connection_error(&e, url, path));
+                    }
+                    Err(e) => {
+                        last_error = Some(Self::format_connection_error(&e, url, path));
+                        break; // Non-transient error, try next URL
+                    }
+                }
             }
         }
 
-        // Both failed - return status with reason from last attempt
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("All endpoints unreachable")))
+    }
+
+    /// Make an authenticated POST request with retry and fallback.
+    ///
+    /// Body is pre-serialized to `Value` so the future is `Send`.
+    async fn post_with_retry(
+        &self,
+        path: &str,
+        body: &Value,
+        timeout: Duration,
+        max_retries: u32,
+    ) -> Result<reqwest::Response> {
+        let urls = self.urls_to_try();
+        let mut last_error = None;
+
+        for url in &urls {
+            let endpoint = format!("{url}{path}");
+
+            for attempt in 0..max_retries {
+                if attempt > 0 {
+                    let delay = RETRY_BASE_DELAY * (1 << (attempt - 1));
+                    tracing::debug!(
+                        "Retry {attempt}/{max_retries} for POST {endpoint} in {delay:?}"
+                    );
+                    tokio::time::sleep(delay).await;
+                }
+
+                match self
+                    .client
+                    .post(&endpoint)
+                    .header("Authorization", format!("Bearer {}", self.auth_token))
+                    .header("Content-Type", "application/json")
+                    .json(body)
+                    .timeout(timeout)
+                    .send()
+                    .await
+                {
+                    Ok(resp) if resp.status().is_success() => {
+                        self.set_active_url(url);
+                        return Ok(resp);
+                    }
+                    Ok(resp) => {
+                        let status = resp.status();
+                        if status == reqwest::StatusCode::UNAUTHORIZED
+                            || status == reqwest::StatusCode::FORBIDDEN
+                        {
+                            return Err(anyhow::anyhow!(
+                                "Authentication failed ({status}) at {endpoint}"
+                            ));
+                        }
+                        // For POST, return non-success responses for caller to handle
+                        // (e.g. 404 for missing tools, 500 with error body)
+                        self.set_active_url(url);
+                        return Ok(resp);
+                    }
+                    Err(e) if is_transient_error(&e) && attempt + 1 < max_retries => {
+                        tracing::warn!(
+                            "Transient error on POST {endpoint} (attempt {}): {e}",
+                            attempt + 1
+                        );
+                        last_error = Some(Self::format_connection_error(
+                            &e,
+                            url,
+                            &format!("POST {path}"),
+                        ));
+                    }
+                    Err(e) => {
+                        last_error = Some(Self::format_connection_error(
+                            &e,
+                            url,
+                            &format!("POST {path}"),
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("All endpoints unreachable")))
+    }
+
+    /// Get detailed status information from the MCP server.
+    ///
+    /// Tries each URL (active first, then fallback) with a single retry
+    /// on transient failures. Returns `McpStatus` with `connected: false`
+    /// if all endpoints are unreachable.
+    pub async fn get_status(&self) -> McpStatus {
+        let urls = self.urls_to_try();
+        let mut last_reason = DisconnectReason::Unreachable;
+
+        for (i, url) in urls.iter().enumerate() {
+            let is_fallback = *url != self.base_url;
+
+            // Try each URL up to 2 times (initial + 1 retry)
+            for attempt in 0..2u32 {
+                if attempt > 0 {
+                    tokio::time::sleep(RETRY_BASE_DELAY).await;
+                }
+
+                match self.try_status(url, is_fallback).await {
+                    Ok(status) => {
+                        self.set_active_url(url);
+                        return status;
+                    }
+                    Err(reason) => {
+                        tracing::debug!(
+                            "Status check failed for {url} (url {}/{}, attempt {}): {reason:?}",
+                            i + 1,
+                            urls.len(),
+                            attempt + 1,
+                        );
+                        // Auth failures are definitive — don't retry
+                        if reason == DisconnectReason::AuthFailed {
+                            return McpStatus {
+                                connected: false,
+                                endpoint: url.clone(),
+                                latency_ms: 0,
+                                tools: Vec::new(),
+                                using_fallback: is_fallback,
+                                disconnect_reason: Some(reason),
+                            };
+                        }
+                        last_reason = reason;
+                    }
+                }
+            }
+        }
+
         McpStatus {
             connected: false,
             endpoint: self.base_url.clone(),
@@ -247,19 +481,24 @@ impl McpClient {
 
     /// Quick health check with 2 second timeout.
     ///
-    /// Returns true if server responds with 200 OK, false otherwise.
-    /// This is faster than `get_status()` and doesn't parse response body.
-    #[allow(dead_code)] // Will be used in smart WoL implementation
+    /// Tries the active URL first, then fallback. Returns true if any
+    /// endpoint responds with 200 OK.
     pub async fn quick_health_check(&self) -> bool {
-        let response = self
-            .client
-            .get(format!("{}/health", self.base_url))
-            .header("Authorization", format!("Bearer {}", self.auth_token))
-            .timeout(Duration::from_secs(2))
-            .send()
-            .await;
+        for url in &self.urls_to_try() {
+            let response = self
+                .client
+                .get(format!("{url}/health"))
+                .header("Authorization", format!("Bearer {}", self.auth_token))
+                .timeout(Duration::from_secs(2))
+                .send()
+                .await;
 
-        matches!(response, Ok(r) if r.status().is_success())
+            if matches!(response, Ok(r) if r.status().is_success()) {
+                self.set_active_url(url);
+                return true;
+            }
+        }
+        false
     }
 
     /// Try to get status from a specific URL.
@@ -378,15 +617,11 @@ impl McpClient {
     /// * `Ok(false)` - MCP not found in registry
     /// * `Err` - Network or server error
     pub async fn enable_mcp(&self, user_id: i64, name: &str) -> Result<bool> {
-        let url = format!("{}/mcp/user/{}/enable/{}", self.base_url, user_id, name);
-
+        let path = format!("/mcp/user/{user_id}/enable/{name}");
+        let empty = serde_json::json!({});
         let response = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.auth_token))
-            .send()
-            .await
-            .map_err(|e| Self::format_connection_error(&e, &self.base_url, "enable MCP"))?;
+            .post_with_retry(&path, &empty, Duration::from_secs(10), DEFAULT_MAX_RETRIES)
+            .await?;
 
         match response.status().as_u16() {
             200 => Ok(true),
@@ -409,15 +644,11 @@ impl McpClient {
     /// * `Ok(false)` - MCP not found in registry
     /// * `Err` - Network or server error
     pub async fn disable_mcp(&self, user_id: i64, name: &str) -> Result<bool> {
-        let url = format!("{}/mcp/user/{}/disable/{}", self.base_url, user_id, name);
-
+        let path = format!("/mcp/user/{user_id}/disable/{name}");
+        let empty = serde_json::json!({});
         let response = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.auth_token))
-            .send()
-            .await
-            .map_err(|e| Self::format_connection_error(&e, &self.base_url, "disable MCP"))?;
+            .post_with_retry(&path, &empty, Duration::from_secs(10), DEFAULT_MAX_RETRIES)
+            .await?;
 
         match response.status().as_u16() {
             200 => Ok(true),
@@ -474,32 +705,25 @@ impl McpClient {
     /// Used to inject known facts/preferences into the system prompt.
     /// Returns empty vec on any error (observations are optional context).
     pub async fn get_observations(&self, user_id: i64, limit: usize) -> Vec<Observation> {
-        let url = format!(
-            "{}/observations/recent?user_id={user_id}&limit={limit}",
-            self.base_url
-        );
+        let path = format!("/observations/recent?user_id={user_id}&limit={limit}");
 
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", self.auth_token))
-            .timeout(Duration::from_secs(5))
-            .send()
-            .await;
-
-        match response {
-            Ok(r) if r.status().is_success() => r
+        // Use retry but only 2 attempts — observations are optional context
+        match self.get_with_retry(&path, Duration::from_secs(5), 2).await {
+            Ok(r) => r
                 .json::<ObservationsResponse>()
                 .await
                 .map_or_else(|_| Vec::new(), |resp| resp.observations),
-            _ => Vec::new(),
+            Err(e) => {
+                tracing::debug!("Failed to fetch observations: {e}");
+                Vec::new()
+            }
         }
     }
 
     /// Push a schedule run record to the MCP server.
     ///
-    /// Fire-and-forget: failures are logged but don't affect the local scheduler.
-    /// This syncs Pi schedule execution data to the Mac where Lu can see it.
+    /// Retries on transient failures. Fire-and-forget: failures are logged
+    /// but don't affect the local scheduler.
     #[allow(clippy::too_many_arguments)]
     pub async fn record_schedule_run(
         &self,
@@ -512,8 +736,6 @@ impl McpClient {
         result_summary: Option<&str>,
         error_message: Option<&str>,
     ) {
-        let url = format!("{}/schedule_runs/record", self.base_url);
-
         let body = serde_json::json!({
             "schedule_id": schedule_id,
             "schedule_name": schedule_name,
@@ -525,91 +747,39 @@ impl McpClient {
             "error_message": error_message,
         });
 
-        let result = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.auth_token))
-            .header("Content-Type", "application/json")
-            .timeout(Duration::from_secs(10))
-            .json(&body)
-            .send()
-            .await;
-
-        if let Err(e) = result {
+        if let Err(e) = self
+            .post_with_retry(
+                "/schedule_runs/record",
+                &body,
+                Duration::from_secs(10),
+                DEFAULT_MAX_RETRIES,
+            )
+            .await
+        {
             tracing::warn!("Failed to push schedule run to MCP: {e}");
         }
     }
 
     /// Get tool definitions from the MCP server.
     ///
-    /// Uses smart recovery: if request fails, checks if server is actually
-    /// unreachable before triggering Wake-on-LAN.
-    #[allow(clippy::cognitive_complexity)]
+    /// Uses retry with fallback, then `WoL` recovery as a last resort.
     pub async fn get_tool_definitions(&self) -> Result<Vec<Tool>> {
-        // First attempt
         match self.try_get_tool_definitions().await {
             Ok(tools) => Ok(tools),
             Err(e) => {
-                tracing::warn!("Failed to get tools: {}", e);
-
-                // Quick health check before assuming server is down
-                if self.quick_health_check().await {
-                    tracing::info!("Health check passed, retrying immediately");
-                    return self.try_get_tool_definitions().await;
-                }
-
-                // Server truly unreachable, try WoL if configured
-                if !self.has_mac_address() {
-                    return Err(e);
-                }
-
-                tracing::info!("Server unreachable, attempting Wake-on-LAN...");
-                if let Err(wol_err) = self.wake_mac() {
-                    tracing::warn!("Wake-on-LAN failed: {}", wol_err);
-                    return Err(e);
-                }
-
-                // Wait for Mac to wake up
-                tracing::info!("Waiting 15s for Mac to wake up...");
-                tokio::time::sleep(Duration::from_secs(15)).await;
-
-                // Retry
-                self.try_get_tool_definitions().await.context(
-                    "Failed to get tools after Wake-on-LAN.\n\n\
-                     The Mac may still be waking up. Try again in a moment.",
-                )
+                self.attempt_wol_recovery("get tools", 15).await?;
+                self.try_get_tool_definitions().await.with_context(|| {
+                    format!("Failed to get tools after Wake-on-LAN.\n\nOriginal error: {e}")
+                })
             }
         }
     }
 
-    /// Try to get tool definitions (single attempt).
+    /// Try to get tool definitions with retry and fallback.
     async fn try_get_tool_definitions(&self) -> Result<Vec<Tool>> {
         let response = self
-            .client
-            .get(format!("{}/tools", self.base_url))
-            .header("Authorization", format!("Bearer {}", self.auth_token))
-            .timeout(Duration::from_secs(10))
-            .send()
-            .await
-            .map_err(|e| {
-                Self::format_connection_error(&e, &self.base_url, "get tool definitions")
-            })?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-
-            return Err(anyhow::anyhow!(
-                "MCP server error ({status})\n\n\
-                Error: {body}\n\n\
-                Try:\n\
-                • Check if the MCP server is running\n\
-                • Verify authentication token in config\n\
-                • Ensure MCP server is at: {}\n\
-                • Check server logs for details",
-                self.base_url
-            ));
-        }
+            .get_with_retry("/tools", Duration::from_secs(10), DEFAULT_MAX_RETRIES)
+            .await?;
 
         let defs: ToolDefinitionsResponse = response.json().await.context(
             "Failed to parse tool definitions from MCP server.\n\n\
@@ -638,68 +808,64 @@ impl McpClient {
 
     /// Call a tool on the MCP server.
     ///
-    /// Uses smart recovery: if request fails, checks if server is actually
-    /// unreachable before triggering Wake-on-LAN.
-    #[allow(clippy::cognitive_complexity)]
+    /// Uses retry with fallback, then `WoL` recovery as a last resort.
     pub async fn call_tool(&self, name: &str, input: &Value) -> Result<String> {
-        // First attempt
         match self.try_call_tool(name, input).await {
             Ok(result) => Ok(result),
             Err(e) => {
-                tracing::warn!("MCP call failed: {}", e);
-
-                // Quick health check before assuming server is down
-                if self.quick_health_check().await {
-                    tracing::info!("Health check passed, retrying immediately");
-                    return self.try_call_tool(name, input).await;
-                }
-
-                // Server truly unreachable, try WoL if configured
-                if !self.has_mac_address() {
-                    return Err(e);
-                }
-
-                tracing::info!("Server unreachable, attempting Wake-on-LAN...");
-                if let Err(wol_err) = self.wake_mac() {
-                    tracing::warn!("Wake-on-LAN failed: {}", wol_err);
-                    return Err(e);
-                }
-
-                // Wait for Mac to wake up
-                tracing::info!("Waiting 10s for Mac to wake up...");
-                tokio::time::sleep(Duration::from_secs(10)).await;
-
-                // Retry with retries
-                self.try_call_tool_with_retry(name, input, 3).await.context(
-                    "Failed to connect after Wake-on-LAN attempt.\n\n\
-                     Try:\n\
-                     • Wait longer for Mac to wake up\n\
-                     • Check Mac power/network status manually\n\
-                     • Verify Wake-on-LAN is enabled in Mac settings",
-                )
+                self.attempt_wol_recovery(&format!("call tool '{name}'"), 10)
+                    .await?;
+                self.try_call_tool(name, input).await.with_context(|| {
+                    format!("Failed to call tool '{name}' after Wake-on-LAN.\n\nOriginal: {e}")
+                })
             }
         }
     }
 
-    async fn try_call_tool(&self, name: &str, input: &Value) -> Result<String> {
-        tracing::debug!("MCP: Calling tool {} at {}", name, self.base_url);
+    /// Attempt `WoL` recovery when all endpoints are unreachable.
+    ///
+    /// Returns `Ok(())` if `WoL` was sent and we waited for the Mac,
+    /// or `Err` if `WoL` is not configured or the health check passes
+    /// (meaning the server is actually reachable and the problem is
+    /// something else).
+    async fn attempt_wol_recovery(&self, action: &str, wait_secs: u64) -> Result<()> {
+        if !self.has_mac_address() {
+            anyhow::bail!("MCP server unreachable and Wake-on-LAN not configured");
+        }
 
-        let request = ToolCallRequest {
+        // Quick health check — maybe only one endpoint was down
+        if self.quick_health_check().await {
+            tracing::info!("Health check passed — server is reachable, skipping WoL");
+            return Ok(());
+        }
+
+        tracing::info!("All endpoints unreachable for {action}, attempting Wake-on-LAN...");
+        self.wake_mac()
+            .context("Wake-on-LAN failed — check Mac address and wakeonlan command")?;
+
+        tracing::info!("Waiting {wait_secs}s for Mac to wake up...");
+        tokio::time::sleep(Duration::from_secs(wait_secs)).await;
+        Ok(())
+    }
+
+    /// Try to call a tool with retry and fallback across all endpoints.
+    async fn try_call_tool(&self, name: &str, input: &Value) -> Result<String> {
+        tracing::debug!("MCP: Calling tool {name}");
+
+        let request = serde_json::to_value(ToolCallRequest {
             name: name.to_string(),
             arguments: input.clone(),
-        };
+        })
+        .context("Failed to serialize tool call request")?;
 
         let response = self
-            .client
-            .post(format!("{}/tools/call", self.base_url))
-            .header("Authorization", format!("Bearer {}", self.auth_token))
-            .header("Content-Type", "application/json")
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| {
-                Self::format_connection_error(&e, &self.base_url, &format!("call tool '{name}'"))
-            })?;
+            .post_with_retry(
+                "/tools/call",
+                &request,
+                Duration::from_secs(10),
+                DEFAULT_MAX_RETRIES,
+            )
+            .await?;
 
         tracing::debug!("MCP: Received response with status {}", response.status());
 
@@ -770,86 +936,48 @@ impl McpClient {
         Ok(result.content)
     }
 
-    async fn try_call_tool_with_retry(
-        &self,
-        name: &str,
-        input: &Value,
-        max_retries: u32,
-    ) -> Result<String> {
-        let mut last_error = anyhow::anyhow!("All retries failed");
-
-        for attempt in 0..max_retries {
-            if attempt > 0 {
-                tokio::time::sleep(Duration::from_secs(5)).await;
-            }
-
-            match self.try_call_tool(name, input).await {
-                Ok(result) => return Ok(result),
-                Err(e) => {
-                    tracing::warn!("Attempt {} failed: {e}", attempt + 1);
-                    last_error = e;
-                }
-            }
-        }
-
-        Err(last_error)
-    }
-
     /// Format connection errors with helpful suggestions.
     fn format_connection_error(error: &reqwest::Error, url: &str, action: &str) -> anyhow::Error {
         let msg = if error.is_timeout() {
             format!(
-                "Unable to {action} via MCP server.\n\n\
-                Error: Request timed out connecting to {url}\n\n\
+                "Request timed out connecting to {url} ({action}).\n\n\
                 Try:\n\
                 • Check if Mac is awake and reachable\n\
                 • Verify network connectivity\n\
                 • Ensure MCP server is running on Mac\n\
-                • Check firewall settings\n\
                 • Wake Mac with /wake command if configured"
             )
         } else if error.is_connect() {
             format!(
-                "Unable to {action} via MCP server.\n\n\
-                Error: Cannot connect to MCP server at {url}\n\n\
+                "Cannot connect to MCP server at {url} ({action}).\n\n\
                 Try:\n\
                 • Check if MCP server is running on Mac\n\
                 • Verify URL in config is correct\n\
                 • Ensure Mac is on network and reachable\n\
-                • Check firewall is not blocking port\n\
-                • Try waking Mac with /wake command\n\
-                • Ping Mac to verify network connectivity"
+                • Try waking Mac with /wake command"
             )
         } else if error.is_status() {
             let status = error.status().map_or(String::new(), |s| format!(" ({s})"));
             format!(
-                "Unable to {action} via MCP server.\n\n\
-                Error: MCP server returned error{status}\n\n\
+                "MCP server returned error{status} at {url} ({action}).\n\n\
                 Try:\n\
                 • Check MCP server logs\n\
                 • Verify authentication token\n\
-                • Ensure server is running correctly\n\
                 • Restart MCP server if needed"
             )
         } else if error.is_body() || error.is_decode() {
             format!(
-                "Unable to {action} via MCP server.\n\n\
-                Error: Invalid response from MCP server\n\n\
+                "Invalid response from MCP server at {url} ({action}).\n\n\
                 Try:\n\
                 • Check MCP server version compatibility\n\
-                • Verify server is running correctly\n\
-                • Check server logs for errors\n\
-                • Update MCP server if outdated"
+                • Check server logs for errors"
             )
         } else {
             format!(
-                "Unable to {action} via MCP server.\n\n\
-                Error: {error}\n\n\
+                "MCP connection error at {url} ({action}): {error}\n\n\
                 Try:\n\
                 • Check network connectivity\n\
-                • Verify MCP server is accessible\n\
-                • Check server logs for details\n\
-                • Ensure all configuration is correct"
+                • Verify MCP server is accessible"
             )
         };
 
@@ -857,6 +985,8 @@ impl McpClient {
     }
 
     /// Send a message to the channel.
+    ///
+    /// Retries with exponential backoff and fallback on transient failures.
     ///
     /// # Arguments
     ///
@@ -873,8 +1003,6 @@ impl McpClient {
         content: &str,
         reply_to: Option<u64>,
     ) -> Result<()> {
-        let url = format!("{}/channel/send", self.base_url);
-
         let mut body = serde_json::json!({
             "from": from,
             "content": content,
@@ -885,15 +1013,13 @@ impl McpClient {
         }
 
         let response = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.auth_token))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| {
-                Self::format_connection_error(&e, &self.base_url, "send channel message")
-            })?;
+            .post_with_retry(
+                "/channel/send",
+                &body,
+                Duration::from_secs(10),
+                DEFAULT_MAX_RETRIES,
+            )
+            .await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -904,36 +1030,27 @@ impl McpClient {
         Ok(())
     }
 
-    /// Maximum retry attempts for transient errors.
-    const MAX_RETRIES: u32 = 3;
-
     /// Send a chat request to the MCP server's LLM proxy.
     ///
     /// Retries on transient errors (connection failures, timeouts, rate limits)
-    /// with exponential backoff (1s, 2s, 4s).
+    /// with exponential backoff (1s, 2s, 4s). Tries fallback URL on failure.
     pub async fn chat(&self, request: &ChatRequest) -> Result<ChatResponse> {
         let mut last_err = None;
 
-        for attempt in 0..Self::MAX_RETRIES {
+        for attempt in 0..DEFAULT_MAX_RETRIES {
             match self.chat_once(request).await {
                 Ok(resp) => return Ok(resp),
                 Err(e) => {
                     let msg = e.to_string();
-                    let is_transient = msg.contains("Connection")
-                        || msg.contains("timeout")
-                        || msg.contains("timed out")
-                        || msg.contains("Rate limited");
 
-                    if !is_transient || attempt + 1 == Self::MAX_RETRIES {
+                    if !is_transient_message(&msg) || attempt + 1 == DEFAULT_MAX_RETRIES {
                         return Err(e);
                     }
 
-                    let delay = Duration::from_secs(1 << attempt);
+                    let delay = RETRY_BASE_DELAY * (1 << attempt);
                     tracing::warn!(
-                        "Chat attempt {} failed (retrying in {:?}): {}",
+                        "Chat attempt {} failed (retrying in {delay:?}): {msg}",
                         attempt + 1,
-                        delay,
-                        msg
                     );
                     tokio::time::sleep(delay).await;
                     last_err = Some(e);
@@ -945,16 +1062,20 @@ impl McpClient {
     }
 
     /// Single attempt at sending a chat request.
+    ///
+    /// Uses the active URL (no automatic fallback here because chat responses
+    /// can be large and we want the caller's retry loop to handle switching).
     async fn chat_once(&self, request: &ChatRequest) -> Result<ChatResponse> {
+        let url = self.active_url();
         let response = self
             .client
-            .post(format!("{}/chat", self.base_url))
+            .post(format!("{url}/chat"))
             .header("Authorization", format!("Bearer {}", self.auth_token))
             .header("Content-Type", "application/json")
             .json(request)
             .send()
             .await
-            .map_err(|e| Self::format_connection_error(&e, &self.base_url, "chat"))?;
+            .map_err(|e| Self::format_connection_error(&e, &url, "chat"))?;
 
         let status = response.status();
 
@@ -1011,14 +1132,15 @@ impl McpClient {
     /// Check API key health on the MCP server.
     ///
     /// Returns information about whether the API key is valid and working.
+    /// Retries with fallback on transient failures.
     pub async fn check_api_health(&self) -> Result<ApiHealthStatus> {
         let response = self
-            .client
-            .get(format!("{}/admin/health", self.base_url))
-            .header("Authorization", format!("Bearer {}", self.auth_token))
-            .send()
-            .await
-            .map_err(|e| Self::format_connection_error(&e, &self.base_url, "check API health"))?;
+            .get_with_retry(
+                "/admin/health",
+                Duration::from_secs(10),
+                DEFAULT_MAX_RETRIES,
+            )
+            .await?;
 
         response
             .json()
@@ -1179,5 +1301,114 @@ mod tests {
 
         assert!(client_with.has_mac_address());
         assert!(!client_without.has_mac_address());
+    }
+
+    #[test]
+    fn active_url_defaults_to_base_url() {
+        let config = McpConfig {
+            url: "http://localhost:8200".to_string(),
+            fallback_url: Some("http://fallback:8200".to_string()),
+            auth_token: "test".to_string(),
+            mac_address: None,
+        };
+
+        let client = McpClient::from_config(&config);
+        assert_eq!(client.active_url(), "http://localhost:8200");
+    }
+
+    #[test]
+    fn set_active_url_switches_endpoint() {
+        let config = McpConfig {
+            url: "http://primary:8200".to_string(),
+            fallback_url: Some("http://fallback:8200".to_string()),
+            auth_token: "test".to_string(),
+            mac_address: None,
+        };
+
+        let client = McpClient::from_config(&config);
+        client.set_active_url("http://fallback:8200");
+        assert_eq!(client.active_url(), "http://fallback:8200");
+    }
+
+    #[test]
+    fn urls_to_try_starts_with_active_then_other() {
+        let config = McpConfig {
+            url: "http://primary:8200".to_string(),
+            fallback_url: Some("http://fallback:8200".to_string()),
+            auth_token: "test".to_string(),
+            mac_address: None,
+        };
+
+        let client = McpClient::from_config(&config);
+
+        // Default: active = primary
+        let urls = client.urls_to_try();
+        assert_eq!(urls, vec!["http://primary:8200", "http://fallback:8200"]);
+
+        // After switching: active = fallback, primary is second
+        client.set_active_url("http://fallback:8200");
+        let urls = client.urls_to_try();
+        assert_eq!(urls, vec!["http://fallback:8200", "http://primary:8200"]);
+    }
+
+    #[test]
+    fn urls_to_try_without_fallback_returns_single_url() {
+        let config = McpConfig {
+            url: "http://primary:8200".to_string(),
+            fallback_url: None,
+            auth_token: "test".to_string(),
+            mac_address: None,
+        };
+
+        let client = McpClient::from_config(&config);
+        let urls = client.urls_to_try();
+        assert_eq!(urls, vec!["http://primary:8200"]);
+    }
+
+    #[test]
+    fn is_transient_error_detects_timeout() {
+        assert!(is_transient_message("Connection timed out"));
+        assert!(is_transient_message("Request timeout after 10s"));
+        assert!(is_transient_message("Rate limited, try again"));
+        assert!(is_transient_message("Server temporarily unavailable"));
+        assert!(is_transient_message("host unreachable"));
+    }
+
+    #[test]
+    fn is_transient_error_rejects_permanent_errors() {
+        assert!(!is_transient_message("Authentication failed"));
+        assert!(!is_transient_message("Tool not found"));
+        assert!(!is_transient_message("Invalid API key"));
+    }
+
+    #[tokio::test]
+    async fn get_with_retry_returns_error_for_all_unreachable() {
+        let config = McpConfig {
+            url: "http://127.0.0.1:1".to_string(),
+            fallback_url: Some("http://127.0.0.1:2".to_string()),
+            auth_token: "test".to_string(),
+            mac_address: None,
+        };
+
+        let client = McpClient::from_config(&config);
+        let result = client
+            .get_with_retry("/health", Duration::from_secs(1), 1)
+            .await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn observations_returns_empty_for_unreachable() {
+        let config = McpConfig {
+            url: "http://127.0.0.1:1".to_string(),
+            fallback_url: None,
+            auth_token: "test".to_string(),
+            mac_address: None,
+        };
+
+        let client = McpClient::from_config(&config);
+        let observations = client.get_observations(123, 5).await;
+        assert!(observations.is_empty());
     }
 }
