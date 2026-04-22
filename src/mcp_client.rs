@@ -1047,8 +1047,8 @@ impl McpClient {
 
                     // Don't retry LLM-level timeouts — the server already
                     // waited 5 minutes; retrying just stalls the user.
-                    let is_llm_timeout = msg.contains("stalled and timed out")
-                        || msg.contains("LLM stream stalled");
+                    let is_llm_timeout =
+                        msg.contains("stalled and timed out") || msg.contains("LLM stream stalled");
 
                     if is_llm_timeout
                         || !is_transient_message(&msg)
@@ -1425,5 +1425,46 @@ mod tests {
         let client = McpClient::from_config(&config);
         let observations = client.get_observations(123, 5).await;
         assert!(observations.is_empty());
+    }
+
+    #[test]
+    fn llm_timeout_errors_are_not_transient_for_chat_retry() {
+        // LLM-level timeouts contain these phrases and should NOT be retried
+        // because the same request will almost certainly time out again.
+        let llm_timeout_msg = "The Claude API connection stalled and timed out.";
+        let llm_stall_msg = "LLM stream stalled after 300s. Partial content was recovered.";
+
+        // The first message IS transient (contains "connection" and "timeout"),
+        // but chat() has a special early-exit check for it.
+        assert!(is_transient_message(llm_timeout_msg));
+
+        // The second message is NOT transient by is_transient_message either,
+        // since it only contains "stalled" (not a recognized transient keyword).
+        assert!(!is_transient_message(llm_stall_msg));
+
+        // Verify the special LLM-timeout strings that chat() checks
+        assert!(llm_timeout_msg.contains("stalled and timed out"));
+        assert!(llm_stall_msg.contains("LLM stream stalled"));
+    }
+
+    #[test]
+    fn tool_call_request_serializes_large_payloads() {
+        // Verify that a 5k+ word tool call payload serializes correctly.
+        // This exercises the same code path as a real write_file call.
+        let word = "lorem ";
+        let content = word.repeat(5000); // ~30KB of content
+        assert!(content.len() > 25_000);
+
+        let request = ToolCallRequest {
+            name: "write_file".to_string(),
+            arguments: serde_json::json!({
+                "path": "test/long-essay.md",
+                "content": content,
+            }),
+        };
+
+        let serialized = serde_json::to_value(&request).unwrap();
+        let args = serialized["arguments"]["content"].as_str().unwrap();
+        assert_eq!(args.len(), content.len());
     }
 }

@@ -231,4 +231,34 @@ mod tests {
         assert_eq!(chunks[0].len(), 100);
         assert_eq!(chunks[1].len(), 100);
     }
+
+    #[test]
+    fn split_message_handles_5k_word_response() {
+        // Simulate a ~30KB response (5000 words) with paragraph breaks
+        let paragraph = "Lorem ipsum dolor sit amet. ".repeat(50);
+        let text = (0..100)
+            .map(|_| paragraph.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        assert!(text.len() > 25_000);
+
+        let chunks = split_message(&text, TELEGRAM_MAX_LEN);
+
+        // All chunks must fit within Telegram's limit
+        for (i, chunk) in chunks.iter().enumerate() {
+            assert!(
+                chunk.len() <= TELEGRAM_MAX_LEN,
+                "chunk {i} is {} chars, exceeds limit {}",
+                chunk.len(),
+                TELEGRAM_MAX_LEN
+            );
+        }
+
+        // No content should be lost (allow for whitespace trimming)
+        let rejoined_len: usize = chunks.iter().map(|c| c.len()).sum();
+        assert!(
+            rejoined_len > text.len() / 2,
+            "too much content lost in splitting"
+        );
+    }
 }

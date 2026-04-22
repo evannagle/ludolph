@@ -58,3 +58,50 @@ pub fn execute(input: &Value, vault_path: &Path) -> String {
         Err(e) => format!("Error creating file: {e}"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    #[test]
+    fn create_file_handles_5k_word_content() {
+        let vault = tempdir().unwrap();
+        // Create parent dir so safe_resolve can canonicalize it
+        std::fs::create_dir_all(vault.path().join("essays")).unwrap();
+
+        let word = "lorem ";
+        let content = word.repeat(5000); // ~30KB
+        assert!(content.len() > 25_000);
+
+        let input = json!({
+            "path": "essays/long-essay.md",
+            "content": content,
+        });
+
+        let result = execute(&input, vault.path());
+        assert!(
+            result.starts_with("Created essays/long-essay.md"),
+            "got: {result}"
+        );
+
+        // Verify file was written completely
+        let written = std::fs::read_to_string(vault.path().join("essays/long-essay.md")).unwrap();
+        assert_eq!(written.len(), content.len());
+    }
+
+    #[test]
+    fn create_file_handles_10k_word_content() {
+        let vault = tempdir().unwrap();
+        let content = "word ".repeat(10_000); // ~50KB
+
+        let input = json!({
+            "path": "big.md",
+            "content": content,
+        });
+
+        let result = execute(&input, vault.path());
+        assert!(result.contains("50000 bytes"), "got: {result}");
+    }
+}
