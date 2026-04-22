@@ -862,7 +862,7 @@ impl McpClient {
             .post_with_retry(
                 "/tools/call",
                 &request,
-                Duration::from_secs(10),
+                Duration::from_secs(30),
                 DEFAULT_MAX_RETRIES,
             )
             .await?;
@@ -1032,8 +1032,10 @@ impl McpClient {
 
     /// Send a chat request to the MCP server's LLM proxy.
     ///
-    /// Retries on transient errors (connection failures, timeouts, rate limits)
-    /// with exponential backoff (1s, 2s, 4s). Tries fallback URL on failure.
+    /// Retries on transient *connection* errors (refused, reset, DNS) with
+    /// exponential backoff.  LLM-level timeouts are NOT retried — the same
+    /// request will almost certainly time out again, and each retry wastes
+    /// another 5 minutes of the user's time.
     pub async fn chat(&self, request: &ChatRequest) -> Result<ChatResponse> {
         let mut last_err = None;
 
@@ -1043,7 +1045,15 @@ impl McpClient {
                 Err(e) => {
                     let msg = e.to_string();
 
-                    if !is_transient_message(&msg) || attempt + 1 == DEFAULT_MAX_RETRIES {
+                    // Don't retry LLM-level timeouts — the server already
+                    // waited 5 minutes; retrying just stalls the user.
+                    let is_llm_timeout = msg.contains("stalled and timed out")
+                        || msg.contains("LLM stream stalled");
+
+                    if is_llm_timeout
+                        || !is_transient_message(&msg)
+                        || attempt + 1 == DEFAULT_MAX_RETRIES
+                    {
                         return Err(e);
                     }
 
@@ -1065,6 +1075,10 @@ impl McpClient {
     ///
     /// Uses the active URL (no automatic fallback here because chat responses
     /// can be large and we want the caller's retry loop to handle switching).
+    ///
+    /// The 360s request timeout is intentionally longer than the MCP server's
+    /// internal LLM timeout (300s) so the server returns a structured error
+    /// before the client gives up.
     async fn chat_once(&self, request: &ChatRequest) -> Result<ChatResponse> {
         let url = self.active_url();
         let response = self
@@ -1073,6 +1087,7 @@ impl McpClient {
             .header("Authorization", format!("Bearer {}", self.auth_token))
             .header("Content-Type", "application/json")
             .json(request)
+            .timeout(Duration::from_secs(360))
             .send()
             .await
             .map_err(|e| Self::format_connection_error(&e, &url, "chat"))?;

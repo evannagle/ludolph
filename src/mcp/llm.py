@@ -19,14 +19,16 @@ from litellm import completion
 logger = logging.getLogger(__name__)
 
 # Maximum seconds to wait for a single LLM completion before giving up.
-# Anthropic text generation should rarely take more than 60-90s even for
-# long responses. 120s gives headroom without the 10-minute LiteLLM default.
-LLM_REQUEST_TIMEOUT = 120
+# Long tool-call responses (e.g. writing 2k+ words to a file) can take
+# 2-3 minutes of streaming.  300s avoids premature timeouts while still
+# catching truly dead connections.
+LLM_REQUEST_TIMEOUT = 300
 
 # Max seconds to wait between streaming chunks before treating the
-# connection as stalled. Anthropic typically emits tokens every few
-# hundred ms; 30s of silence means something is wrong.
-LLM_STREAM_STALL_TIMEOUT = 60
+# connection as stalled. Claude sometimes pauses 30-60s mid-generation
+# on complex or lengthy content; 120s catches genuinely dead streams
+# without false-firing on legitimate pauses.
+LLM_STREAM_STALL_TIMEOUT = 120
 
 # Number of automatic retries on transient failures (timeouts, connection errors).
 # Set to 1 so the user doesn't wait through multiple 120s timeouts on a dead line.
